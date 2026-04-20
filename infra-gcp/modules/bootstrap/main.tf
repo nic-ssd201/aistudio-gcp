@@ -52,6 +52,8 @@ resource "google_project_service" "shared_apis" {
     "sts.googleapis.com",
     "cloudresourcemanager.googleapis.com",
     "logging.googleapis.com",
+    "monitoring.googleapis.com",
+    "billingbudgets.googleapis.com",
   ])
 
   project            = data.google_project.shared.project_id
