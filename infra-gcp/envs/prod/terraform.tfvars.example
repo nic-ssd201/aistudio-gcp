@@ -1,0 +1,38 @@
+# Production environment — sample variable values
+# Copy to terraform.tfvars (gitignored) and fill in real values.
+# CRITICAL: Requires human review + manual approval gate before apply.
+# §6.1: env_project_id must be manually created before first apply.
+# §6.6: billing_account, org_id, host_project_id → moved to envs/bootstrap/prod.tfvars
+#        Apply envs/bootstrap first, then this root.
+
+env_project_id = "aistudio-prod"
+region         = "us-west1"
+environment    = "prod"
+
+# LB domain — production FQDN; ensure DNS propagation after first apply
+domain_name = "aistudio.sunnysideschools.org"
+
+# Container image — pin to a release tag; never use :latest in prod
+container_image = "us-west1-docker.pkg.dev/aistudio-shared/aistudio/aistudio-web:v1.0.0"
+
+# VPC-SC access policy
+vpc_sc_access_policy_name = "1234567890"
+
+# Google Workspace OIDC — use production OAuth client
+workspace_oidc_client_id     = "123456789-xxxx.apps.googleusercontent.com"
+workspace_oidc_client_secret = "GOCSPX-xxxx"  # retrieve from Secret Manager; never commit plaintext
+
+# Budget amount is used for the observability FERPA tripwire threshold.
+# The actual google_billing_budget resource is managed in envs/bootstrap.
+budget_amount_usd = 5000
+
+# Observability alert channels — must include PagerDuty for prod
+alert_channels = []
+
+# Cloud Run scaling — prod: min=2 (two-zone HA), CPU always-on
+cloud_run_min_instances = 2
+cloud_run_max_instances = 100
+
+# VPC-SC enforce — §6.4: KEEP FALSE on first apply.
+# Promote to true only after Vault review + 7 consecutive days of zero unexpected violations.
+enable_vpc_sc_enforce = false
