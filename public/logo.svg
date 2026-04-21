@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200" role="img" aria-label="Sunnyside School District">
+  <!-- Outer ring -->
+  <circle cx="100" cy="100" r="96" fill="#FAF2EC" stroke="#1B365D" stroke-width="4"/>
+  <!-- Inner ring -->
+  <circle cx="100" cy="100" r="84" fill="none" stroke="#A86A5A" stroke-width="2"/>
+  <!-- Curved top text path for "SUNNYSIDE" -->
+  <defs>
+    <path id="top-arc" d="M 20,100 A 80,80 0 0 1 180,100" fill="none"/>
+    <path id="bottom-arc" d="M 24,104 A 76,76 0 0 0 176,104" fill="none"/>
+  </defs>
+  <text font-family="Georgia, 'Times New Roman', serif" font-size="22" font-weight="700" fill="#1B365D" letter-spacing="3">
+    <textPath href="#top-arc" startOffset="50%" text-anchor="middle">SUNNYSIDE</textPath>
+  </text>
+  <!-- Sun rays -->
+  <g fill="#C2735C">
+    <path d="M100 70 L105 52 L95 52 Z"/>
+    <path d="M120 78 L132 64 L124 58 Z"/>
+    <path d="M80 78 L68 64 L76 58 Z"/>
+    <path d="M130 95 L148 90 L148 100 Z"/>
+    <path d="M70 95 L52 90 L52 100 Z"/>
+  </g>
+  <!-- Sun body -->
+  <circle cx="100" cy="98" r="18" fill="#E8A87C" stroke="#1B365D" stroke-width="2"/>
+  <!-- Hills -->
+  <path d="M26 130 Q 55 108 90 126 Q 125 144 158 120 Q 180 104 174 140 L 174 160 L 26 160 Z" fill="#6BA89F"/>
+  <path d="M26 150 Q 60 132 100 146 Q 140 160 174 142 L 174 164 L 26 164 Z" fill="#4B7BA7" opacity="0.85"/>
+  <!-- Ground -->
+  <rect x="20" y="160" width="160" height="18" fill="#A86A5A"/>
+  <!-- Bottom label -->
+  <text x="100" y="174" text-anchor="middle" font-family="Georgia, 'Times New Roman', serif" font-size="10" font-weight="700" fill="#FAF2EC" letter-spacing="2">SCHOOL DISTRICT</text>
+</svg>
