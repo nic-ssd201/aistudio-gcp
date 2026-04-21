@@ -5,6 +5,7 @@ import { ClaudeAdapter } from './claude-adapter';
 import { GeminiAdapter } from './gemini-adapter';
 import { AzureAdapter } from './azure-adapter';
 import { LatimerAdapter } from './latimer-adapter';
+import { VertexAdapter } from './vertex-adapter';
 
 const log = createLogger({ module: 'provider-adapters' });
 
@@ -13,6 +14,7 @@ const adapters = new Map<string, ProviderAdapter>([
   ['openai', new OpenAIAdapter()],
   ['amazon-bedrock', new ClaudeAdapter()],
   ['google', new GeminiAdapter()],
+  ['google-vertex', new VertexAdapter()],
   ['azure', new AzureAdapter()],
   ['latimer', new LatimerAdapter()]
 ]);
