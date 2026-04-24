@@ -1,25 +1,25 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getServerSession } from '@/lib/auth/server-session';
 import { createDocumentJob, confirmDocumentUpload } from '@/lib/services/document-job-service';
-import { uploadToS3 } from '@/lib/aws/document-upload';
 import { sendToProcessingQueue } from '@/lib/aws/lambda-trigger';
+import { getActiveStorageBucketName, uploadServerProxyDocument } from '@/lib/services/document-storage-service';
 import { createLogger, generateRequestId, startTimer, sanitizeForLogging } from '@/lib/logger';
 import { UploadRequestSchema } from '@/lib/validation/document-upload.validation';
 import { apiRateLimit } from '@/lib/rate-limit';
 import { UploadClassifiedError, type UploadErrorCode } from '@/lib/errors/upload-errors';
 
 /**
- * Server-side upload endpoint that proxies file uploads through the application server to S3.
+ * Server-side upload endpoint that proxies file uploads through the application server to object storage.
  *
- * This endpoint bypasses school network restrictions that block direct S3 presigned URL uploads.
- * The flow is: Client → aistudio.psd401.ai/api/upload → S3
+ * This endpoint bypasses school network restrictions that block direct presigned URL uploads.
+ * The flow is: Client → aistudio.psd401.ai/api/upload → storage provider
  *
  * ## Body Size Limits
  * - Validation allows up to 500MB (see UploadRequestSchema)
  * - IMPORTANT: Actual upload limit depends on infrastructure configuration:
  *   - ECS task memory allocation
  *   - ALB request timeout/size limits
- *   - Next.js formData() loads entire file into memory before streaming to S3
+ *   - Next.js formData() loads entire file into memory before streaming to the storage provider
  *
  * ## Memory Considerations
  * - req.formData() loads the file into memory (Next.js limitation)
@@ -216,16 +216,16 @@ async function uploadHandler(req: NextRequest) {
 
     log.info('Job created', { jobId });
 
-    // Step 2: Upload file to S3 using SDK with streaming (memory-efficient)
+    // Step 2: Upload file to the active storage provider using SDK-backed server proxying
     // Uses File.stream() to avoid loading entire file into memory
-    const s3Result = await uploadToS3({
+    const uploadResult = await uploadServerProxyDocument({
       jobId: job.id,
       fileName,
       fileStream: file.stream(),
       contentType: fileType,
     });
 
-    log.info('File uploaded to S3', { jobId: job.id, s3Key: s3Result.s3Key });
+    log.info('File uploaded to storage', { jobId: job.id, storageKey: uploadResult.key });
 
     // Step 3: Confirm upload
     // In the direct-upload flow there is no separate uploadId like in the presigned URL flow.
@@ -235,16 +235,18 @@ async function uploadHandler(req: NextRequest) {
     await confirmDocumentUpload(job.id, job.id);
 
     // Step 4: Send to processing queue (matching confirm-upload flow)
-    if (process.env.NODE_ENV !== 'test' && !process.env.DOCUMENTS_BUCKET_NAME) {
-      log.error('DOCUMENTS_BUCKET_NAME environment variable not configured');
+    const bucketName = getActiveStorageBucketName();
+
+    if (process.env.NODE_ENV !== 'test' && !bucketName) {
+      log.error('Storage bucket environment variable not configured');
       return NextResponse.json({ error: 'Service configuration error', code: 'CONFIG_ERROR', requestId }, { status: 500 });
     }
 
     await sendToProcessingQueue({
       jobId: job.id,
-      bucket: process.env.DOCUMENTS_BUCKET_NAME || 'test-documents-bucket',
-      key: s3Result.s3Key,
-      fileName: s3Result.sanitizedFileName,
+      bucket: bucketName || 'test-documents-bucket',
+      key: uploadResult.key,
+      fileName: uploadResult.sanitizedFileName,
       fileSize,
       fileType,
       userId: session.sub,
