@@ -71,6 +71,40 @@ export class VertexAdapter extends BaseProviderAdapter {
   }
 
   getCapabilities(modelId: string): ProviderCapabilities {
+    // Claude 4 on Vertex Anthropic publisher models
+    if (this.matchesPattern(modelId, ['claude-4*', 'anthropic.claude-4*', 'claude-sonnet-4*', 'publishers/anthropic/models/claude-*4*'])) {
+      return {
+        supportsReasoning: true,
+        supportsThinking: true,
+        maxThinkingTokens: 6553,
+        supportedResponseModes: ['standard'],
+        supportsBackgroundMode: false,
+        supportedTools: [],
+        typicalLatencyMs: 3000,
+        maxTimeoutMs: 120000,
+        costPerInputToken: 0.000015,
+        costPerOutputToken: 0.000075
+      };
+    }
+
+    // Claude 3.x / 3.5 on Vertex Anthropic publisher models
+    if (this.matchesPattern(modelId, ['claude-3*', 'claude-3-5*', 'anthropic.claude-3*', 'publishers/anthropic/models/claude-*'])) {
+      const isOpus = this.matchesPattern(modelId, ['*opus*']);
+      const isHaiku = this.matchesPattern(modelId, ['*haiku*']);
+
+      return {
+        supportsReasoning: false,
+        supportsThinking: false,
+        supportedResponseModes: ['standard'],
+        supportsBackgroundMode: false,
+        supportedTools: [],
+        typicalLatencyMs: isHaiku ? 1000 : isOpus ? 3000 : 2000,
+        maxTimeoutMs: 60000,
+        costPerInputToken: isOpus ? 0.000015 : isHaiku ? 0.00000025 : 0.000003,
+        costPerOutputToken: isOpus ? 0.000075 : isHaiku ? 0.00000125 : 0.000015
+      };
+    }
+
     // Gemini 2.5 via Vertex (reasoning-capable)
     if (this.matchesPattern(modelId, ['gemini-2.5*'])) {
       return {
@@ -144,7 +178,10 @@ export class VertexAdapter extends BaseProviderAdapter {
       'models/gemini-*',
       'gemini-1.5*',
       'gemini-2.0*',
-      'gemini-2.5*'
+      'gemini-2.5*',
+      'claude-*',
+      'anthropic.claude-*',
+      'publishers/anthropic/models/claude-*'
     ];
     return this.matchesPattern(modelId, supportedPatterns);
   }
