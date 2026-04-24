@@ -1,0 +1,36 @@
+# Development environment — sample variable values
+# Copy to terraform.tfvars (gitignored) and fill in real values.
+# §6.1: env_project_id must be manually created before first apply.
+# §6.6: billing_account, org_id, host_project_id → moved to envs/bootstrap/dev.tfvars
+#        Apply envs/bootstrap first, then this root.
+
+env_project_id = "aistudio-dev"
+region         = "us-west1"
+environment    = "dev"
+
+# LB domain — point your DNS A record at load_balancer_ip output after first apply
+domain_name = "dev-aistudio.sunnysideschools.org"
+
+# Container image — update after first CI build
+container_image = "us-west1-docker.pkg.dev/aistudio-shared/aistudio/aistudio-web:dev-latest"
+
+# VPC-SC — numeric policy ID from: gcloud access-context-manager policies list --organization=ORG_ID
+vpc_sc_access_policy_name = "1234567890"
+
+# Google Workspace OIDC — from Google Cloud Console > APIs > Credentials
+workspace_oidc_client_id     = "123456789-xxxx.apps.googleusercontent.com"
+workspace_oidc_client_secret = "GOCSPX-xxxx"   # use Secret Manager in prod; ok here for dev iteration
+
+# Budget amount is used for the observability FERPA tripwire threshold.
+# The actual google_billing_budget resource is managed in envs/bootstrap.
+budget_amount_usd = 500
+
+# Observability alert channels — populate when Telegram/PagerDuty tokens are available
+alert_channels = []
+
+# Cloud Run scaling — dev: scale to zero, no CPU always-on
+cloud_run_min_instances = 0
+cloud_run_max_instances = 5
+
+# VPC-SC enforce — keep false; dev uses dry-run to catch misconfigurations without blocking traffic
+enable_vpc_sc_enforce = false
