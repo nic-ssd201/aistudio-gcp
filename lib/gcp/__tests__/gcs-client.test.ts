@@ -60,6 +60,7 @@ import {
   clearGcsCache,
   ensureDocumentsBucket,
   uploadDocument,
+  uploadServerProxyDocument,
   getDocumentSignedUrl,
   deleteDocument,
   documentExists,
@@ -129,6 +130,38 @@ describe("uploadDocument", () => {
     })
     const metadataArg = (opts as { metadata: { metadata: Record<string, string> } }).metadata.metadata
     expect(metadataArg).toMatchObject({ userId: "u1", source: "test" })
+  })
+})
+
+describe("uploadServerProxyDocument", () => {
+  it("stores server-proxy uploads at the stable v2 job key", async () => {
+    bucketExistsMock.mockResolvedValue([true])
+    saveMock.mockResolvedValue()
+
+    const result = await uploadServerProxyDocument({
+      jobId: "job-123",
+      fileName: "district plan.pdf",
+      fileBuffer: Buffer.from("hello"),
+      contentType: "application/pdf",
+    })
+
+    expect(result).toEqual({
+      key: "v2/uploads/job-123/district_plan.pdf",
+      bucket: "aistudio-test",
+      sanitizedFileName: "district_plan.pdf",
+    })
+    expect(saveMock).toHaveBeenCalledTimes(1)
+    const [, opts] = saveMock.mock.calls[0]
+    expect(opts).toMatchObject({
+      contentType: "application/pdf",
+      resumable: false,
+      metadata: {
+        metadata: expect.objectContaining({
+          jobId: "job-123",
+          originalFileName: "district plan.pdf",
+        }),
+      },
+    })
   })
 })
 

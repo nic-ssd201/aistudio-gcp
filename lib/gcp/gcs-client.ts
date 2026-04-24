@@ -19,6 +19,7 @@ import { createError } from "@/lib/error-utils"
 
 let gcsConfigCache: { bucket: string; projectId: string | undefined } | null = null
 let gcsClientCache: Storage | null = null
+const DEFAULT_GCS_BUCKET = "aistudio-documents"
 
 /**
  * Resolve GCS config. For the E1 additive slice we read env vars directly.
@@ -29,9 +30,11 @@ function getGcsConfig() {
   if (gcsConfigCache) return gcsConfigCache
 
   const bucket =
+    // Temporary compatibility fallback for local/dev and older env wiring.
+    // Staging/prod Cloud Run should always set GCS_BUCKET explicitly.
     process.env.GCS_BUCKET ||
     process.env.DOCUMENTS_BUCKET_NAME ||
-    "aistudio-documents"
+    DEFAULT_GCS_BUCKET
   const projectId =
     process.env.GCP_PROJECT_ID ||
     process.env.GOOGLE_CLOUD_PROJECT ||
@@ -91,6 +94,20 @@ export interface ResumableUploadSession {
   url: string
   key: string
   fields: Record<string, string>
+}
+
+export interface ProxyUploadParams {
+  jobId: string
+  fileName: string
+  fileBuffer?: Buffer
+  fileStream?: ReadableStream<Uint8Array>
+  contentType: string
+}
+
+export interface ProxyUploadResult {
+  key: string
+  bucket: string
+  sanitizedFileName: string
 }
 
 // --------- bucket-level ---------
@@ -164,6 +181,51 @@ export async function uploadDocument({
 
     const url = await signedReadUrl(file, 3600)
     return { key, url }
+  } catch (error) {
+    throw createError("Failed to upload document to GCS", {
+      code: "GCS_UPLOAD_ERROR",
+      details: {
+        error: error instanceof Error ? error.message : String(error),
+        fileName,
+      },
+    })
+  }
+}
+
+export async function uploadServerProxyDocument({
+  jobId,
+  fileName,
+  fileBuffer,
+  fileStream,
+  contentType,
+}: ProxyUploadParams): Promise<ProxyUploadResult> {
+  await ensureDocumentsBucket()
+
+  const { bucket: bucketName } = getGcsConfig()
+  const sanitizedFileName = sanitizeProxyFileName(fileName)
+  const key = `v2/uploads/${jobId}/${sanitizedFileName}`
+
+  try {
+    const body = await toUploadBuffer({ fileBuffer, fileStream })
+
+    await getBucket().file(key).save(body, {
+      contentType,
+      metadata: {
+        contentType,
+        metadata: {
+          jobId,
+          originalFileName: fileName,
+          uploadTimestamp: Date.now().toString(),
+        },
+      },
+      resumable: false,
+    })
+
+    return {
+      key,
+      bucket: bucketName,
+      sanitizedFileName,
+    }
   } catch (error) {
     throw createError("Failed to upload document to GCS", {
       code: "GCS_UPLOAD_ERROR",
@@ -452,6 +514,86 @@ export async function extractKeyFromUrl(url: string): Promise<string | null> {
 }
 
 // --------- internal helpers ---------
+
+async function toUploadBuffer({
+  fileBuffer,
+  fileStream,
+}: Pick<ProxyUploadParams, "fileBuffer" | "fileStream">): Promise<Buffer> {
+  if (fileBuffer) {
+    return fileBuffer
+  }
+
+  if (!fileStream) {
+    throw new Error("Either fileBuffer or fileStream must be provided")
+  }
+
+  const reader = fileStream.getReader()
+  const chunks: Uint8Array[] = []
+
+  while (true) {
+    const { done, value } = await reader.read()
+    if (done) break
+    if (value) chunks.push(value)
+  }
+
+  return Buffer.concat(chunks.map((chunk) => Buffer.from(chunk)))
+}
+
+function sanitizeProxyFileName(fileName: string): string {
+  if (!fileName || typeof fileName !== "string") {
+    return "unnamed_file"
+  }
+
+  const lastDotIndex = fileName.lastIndexOf(".")
+  const name = lastDotIndex > 0 ? fileName.substring(0, lastDotIndex) : fileName
+  const extension = lastDotIndex > 0 ? fileName.substring(lastDotIndex + 1) : ""
+
+  let sanitizedName = name
+    .replace(/[^\w-]/g, "_")
+    .replace(/^\.+|\.+$/g, "")
+    .replace(/_{2,}/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .substring(0, 200)
+
+  const sanitizedExtension = extension.replace(/[^\dA-Za-z]/g, "").substring(0, 10)
+
+  if (!sanitizedName) {
+    sanitizedName = "file"
+  }
+
+  const reservedNames = [
+    "con",
+    "prn",
+    "aux",
+    "nul",
+    "com1",
+    "com2",
+    "com3",
+    "com4",
+    "com5",
+    "com6",
+    "com7",
+    "com8",
+    "com9",
+    "lpt1",
+    "lpt2",
+    "lpt3",
+    "lpt4",
+    "lpt5",
+    "lpt6",
+    "lpt7",
+    "lpt8",
+    "lpt9",
+  ]
+
+  if (reservedNames.includes(sanitizedName.toLowerCase())) {
+    sanitizedName = `file_${sanitizedName}`
+  }
+
+  const finalName = sanitizedExtension ? `${sanitizedName}.${sanitizedExtension}` : sanitizedName
+  return finalName.substring(0, 200) || "unnamed_file"
+}
+
 
 async function signedReadUrl(file: File, expiresInSeconds: number): Promise<string> {
   const [url] = await file.getSignedUrl({

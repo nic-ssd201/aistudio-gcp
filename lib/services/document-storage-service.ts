@@ -1,15 +1,37 @@
 export type StorageProvider = 'aws-s3' | 'gcs';
 
+const DEFAULT_DOCUMENTS_BUCKET = 'aistudio-documents';
+
 export function getStorageProvider(): StorageProvider {
   return process.env.STORAGE_PROVIDER === 'gcs' ? 'gcs' : 'aws-s3';
 }
 
 export function getActiveStorageBucketName(): string {
   if (getStorageProvider() === 'gcs') {
-    return process.env.GCS_BUCKET || process.env.DOCUMENTS_BUCKET_NAME || 'aistudio-documents';
+    // Temporary compatibility fallback for local/dev and pre-Terraform env wiring.
+    // Staging/prod Cloud Run should always set GCS_BUCKET explicitly.
+    return process.env.GCS_BUCKET || process.env.DOCUMENTS_BUCKET_NAME || DEFAULT_DOCUMENTS_BUCKET;
   }
 
-  return process.env.DOCUMENTS_BUCKET_NAME || 'aistudio-documents';
+  return process.env.DOCUMENTS_BUCKET_NAME || DEFAULT_DOCUMENTS_BUCKET;
+}
+
+export async function uploadServerProxyDocument(
+  params: import('@/lib/aws/document-upload').DirectUploadConfig,
+) {
+  if (getStorageProvider() === 'gcs') {
+    const { uploadServerProxyDocument } = await import('@/lib/gcp/gcs-client');
+    return uploadServerProxyDocument(params);
+  }
+
+  const { uploadToS3 } = await import('@/lib/aws/document-upload');
+  const result = await uploadToS3(params);
+
+  return {
+    key: result.s3Key,
+    bucket: result.bucket,
+    sanitizedFileName: result.sanitizedFileName,
+  };
 }
 
 export async function uploadDocument(params: import('@/lib/aws/s3-client').UploadDocumentParams) {

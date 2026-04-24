@@ -284,6 +284,10 @@ module "cloud_run_web" {
   env = {
     DATABASE_URL                = module.alloydb.connection_string
     IDP_TENANT_ID               = module.identity_platform.tenant_id
+    VERTEX_AI_ENABLED           = "true"
+    STORAGE_PROVIDER            = "gcs"
+    GOOGLE_CLOUD_PROJECT        = var.env_project_id
+    GCS_BUCKET                  = module.storage.buckets["attachments"].name
     VERTEX_MODEL_ARMOR_TEMPLATE = module.vertex.model_armor_template_names["aistudio-default"]
     NODE_ENV                    = "production"
   }
