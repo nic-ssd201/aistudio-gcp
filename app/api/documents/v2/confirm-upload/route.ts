@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getServerSession } from '@/lib/auth/server-session';
 import { confirmDocumentUpload, getJobStatus } from '@/lib/services/document-job-service';
 import { sendToProcessingQueue } from '@/lib/aws/lambda-trigger';
-import { sanitizeFileName } from '@/lib/aws/document-upload';
+import { getDocumentUploadBucketName, resolveUploadedDocumentKey } from '@/lib/services/document-upload-service';
 import { createLogger, generateRequestId, startTimer } from '@/lib/logger';
 import { z } from 'zod';
 
@@ -38,22 +38,20 @@ export async function POST(req: NextRequest) {
     // Confirm upload in job tracking
     await confirmDocumentUpload(jobId, uploadId);
     
-    // Generate S3 key using the same sanitization as upload - ensure consistency
-    const sanitizedFileName = sanitizeFileName(job.fileName);
-    const s3Key = `v2/uploads/${jobId}/${sanitizedFileName}`;
-    
-    // Environment validation (skip in test environment)
-    if (process.env.NODE_ENV !== 'test' && !process.env.DOCUMENTS_BUCKET_NAME) {
-      log.error('DOCUMENTS_BUCKET_NAME environment variable not configured');
+    const storageKey = resolveUploadedDocumentKey({ uploadId, jobId, fileName: job.fileName });
+    const bucketName = getDocumentUploadBucketName();
+
+    if (process.env.NODE_ENV !== 'test' && !bucketName) {
+      log.error('Storage bucket environment variable not configured');
       return NextResponse.json({ error: 'Service configuration error' }, { status: 500 });
     }
-    
+
     // Send processing job to NEW DocumentProcessingStack queue
     await sendToProcessingQueue({
       jobId,
-      bucket: process.env.DOCUMENTS_BUCKET_NAME || 'test-documents-bucket',
-      key: s3Key,
-      fileName: sanitizedFileName, // Use sanitized filename for consistency
+      bucket: bucketName,
+      key: storageKey,
+      fileName: job.fileName,
       fileSize: job.fileSize,
       fileType: job.fileType,
       userId: session.sub,

@@ -22,6 +22,7 @@ const deleteMock = jest.fn<Promise<void>, [unknown?]>()
 const getFilesMock = jest.fn<Promise<[Array<{ name: string; metadata: Record<string, unknown> }>]>, [unknown?]>()
 const getMetadataMock = jest.fn<Promise<[Record<string, unknown>]>, []>()
 const createReadStreamMock = jest.fn<Readable, []>()
+const createResumableUploadMock = jest.fn<Promise<[string]>, [Record<string, unknown>]>()
 const bucketExistsMock = jest.fn<Promise<[boolean]>, []>()
 
 jest.mock("@google-cloud/storage", () => {
@@ -32,6 +33,7 @@ jest.mock("@google-cloud/storage", () => {
         file: (_key: string) => ({
           save: (data: unknown, options: unknown) => saveMock(data, options),
           getSignedUrl: (opts: Record<string, unknown>) => getSignedUrlMock(opts),
+          createResumableUpload: (opts: Record<string, unknown>) => createResumableUploadMock(opts),
           exists: () => existsMock(),
           delete: (opts?: unknown) => deleteMock(opts),
           getMetadata: () => getMetadataMock(),
@@ -63,6 +65,7 @@ import {
   documentExists,
   listUserDocuments,
   generateUploadPresignedUrl,
+  resumableUpload,
   getObjectStream,
   extractKeyFromUrl,
 } from "../gcs-client"
@@ -80,6 +83,7 @@ beforeEach(() => {
   getFilesMock.mockReset()
   getMetadataMock.mockReset()
   createReadStreamMock.mockReset()
+  createResumableUploadMock.mockReset()
   bucketExistsMock.mockReset()
 })
 
@@ -219,6 +223,42 @@ describe("getObjectStream", () => {
     expect(res.contentLength).toBe(4096)
     expect(res.metadata).toEqual({ userId: "u1" })
     expect(res.stream).toBe(fakeStream)
+  })
+})
+
+describe("resumableUpload", () => {
+  it("creates a resumable session URI and preserves upload headers", async () => {
+    bucketExistsMock.mockResolvedValue([true])
+    createResumableUploadMock.mockResolvedValue(["https://example/resumable-session"])
+
+    const result = await resumableUpload({
+      userId: "v2/uploads/job-123",
+      fileName: "large file.pdf",
+      contentType: "application/pdf",
+      fileSize: 4096,
+      metadata: { department: "ops" },
+    })
+
+    expect(result).toEqual({
+      url: "https://example/resumable-session",
+      key: expect.stringMatching(/^v2\/uploads\/job-123\/\d+-large_file\.pdf$/),
+      fields: {
+        "Content-Type": "application/pdf",
+        "Content-Length": "4096",
+      },
+    })
+
+    const opts = createResumableUploadMock.mock.calls[0][0]
+    expect(opts).toMatchObject({
+      metadata: {
+        contentType: "application/pdf",
+        metadata: expect.objectContaining({
+          department: "ops",
+          userId: "v2/uploads/job-123",
+          originalName: "large file.pdf",
+        }),
+      },
+    })
   })
 })
 

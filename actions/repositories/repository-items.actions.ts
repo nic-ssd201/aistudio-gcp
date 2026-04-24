@@ -24,7 +24,7 @@ import {
   startTimer
 } from "@/lib/logger"
 import { revalidatePath } from "next/cache"
-import { uploadDocument, deleteDocument } from "@/lib/aws/s3-client"
+import { uploadDocument, deleteDocument } from "@/lib/services/document-storage-service"
 import { queueFileForProcessing, processUrl } from "@/lib/services/file-processing-service"
 import { canModifyRepository, getUserIdFromSession } from "./repository-permissions"
 

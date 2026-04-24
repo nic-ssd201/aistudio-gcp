@@ -311,7 +311,7 @@ export async function deleteRepository(
 
     // Delete all documents from S3 in parallel
     if (documents.length > 0) {
-      const { deleteDocument } = await import("@/lib/aws/s3-client")
+      const { deleteDocument } = await import("@/lib/services/document-storage-service")
 
       const deletePromises = documents.map(item =>
         deleteDocument(item.source).catch(error => {

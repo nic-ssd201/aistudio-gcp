@@ -87,6 +87,12 @@ export interface PresignedUploadUrlParams {
   expiresIn?: number
 }
 
+export interface ResumableUploadSession {
+  url: string
+  key: string
+  fields: Record<string, string>
+}
+
 // --------- bucket-level ---------
 
 /**
@@ -317,6 +323,60 @@ export async function generateUploadPresignedUrl({
 }
 
 /** Stream an object out of GCS for server-side processing. */
+/**
+ * Create a resumable upload session URI for large browser-direct uploads.
+ *
+ * The params/return shape intentionally mirrors generateUploadPresignedUrl so
+ * provider selection can stay thin at the call site.
+ */
+export async function resumableUpload({
+  userId,
+  fileName,
+  contentType,
+  fileSize,
+  metadata = {},
+}: PresignedUploadUrlParams): Promise<ResumableUploadSession> {
+  await ensureDocumentsBucket()
+
+  const timestamp = Date.now()
+  const sanitizedFileName = fileName.replace(/[^\w.-]/g, "_")
+  const key = `${userId}/${timestamp}-${sanitizedFileName}`
+
+  try {
+    const [url] = await getBucket()
+      .file(key)
+      .createResumableUpload({
+        origin: process.env.NEXT_PUBLIC_APP_URL,
+        metadata: {
+          contentType,
+          metadata: {
+            ...metadata,
+            userId,
+            uploadedAt: new Date().toISOString(),
+            originalName: fileName,
+          },
+        },
+      })
+
+    return {
+      url,
+      key,
+      fields: {
+        "Content-Type": contentType,
+        "Content-Length": fileSize.toString(),
+      },
+    }
+  } catch (error) {
+    throw createError("Failed to create resumable upload session", {
+      code: "GCS_RESUMABLE_UPLOAD_ERROR",
+      details: {
+        error: error instanceof Error ? error.message : String(error),
+        fileName,
+      },
+    })
+  }
+}
+
 export async function getObjectStream(key: string): Promise<{
   stream: Readable
   contentType?: string

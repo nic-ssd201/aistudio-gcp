@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
-import { getDocumentSignedUrl, deleteDocument } from '@/lib/aws/s3-client';
+import { getDocumentSignedUrl, deleteDocument } from '@/lib/services/document-storage-service';
 import {
   getDocumentsByConversationId,
   getDocumentById,
