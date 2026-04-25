@@ -14,7 +14,7 @@ import { aiModels } from "./ai-models";
 import { users } from "./users";
 
 export const modelReplacementAudit = pgTable("model_replacement_audit", {
-  id: bigint("id", { mode: "number" }).primaryKey(),
+  id: bigint("id", { mode: "number" }).generatedAlwaysAsIdentity().primaryKey(),
   originalModelId: integer("original_model_id")
     .references(() => aiModels.id)
     .notNull(),

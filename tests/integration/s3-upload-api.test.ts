@@ -8,7 +8,7 @@ import { POST as processHandler } from '@/app/api/documents/process/route'
 // Mock all dependencies
 jest.mock('@/lib/auth/server-session')
 jest.mock('@/actions/db/get-current-user-action')
-jest.mock('@/lib/aws/s3-client')
+jest.mock('@/lib/gcp/gcs-client')
 jest.mock('@/lib/db/queries/documents')
 jest.mock('@/lib/document-processing')
 jest.mock('@/lib/logger', () => ({
@@ -37,7 +37,7 @@ jest.mock('@/lib/file-validation', () => ({
 // Import mocked modules
 import { getServerSession } from '@/lib/auth/server-session'
 import { getCurrentUserAction } from '@/actions/db/get-current-user-action'
-import { generateUploadPresignedUrl, getObjectStream, documentExists } from '@/lib/aws/s3-client'
+import { generateUploadPresignedUrl, getObjectStream, documentExists } from '@/lib/gcp/gcs-client'
 import { saveDocument, batchInsertDocumentChunks } from '@/lib/db/queries/documents'
 import { extractTextFromDocument, chunkText } from '@/lib/document-processing'
 

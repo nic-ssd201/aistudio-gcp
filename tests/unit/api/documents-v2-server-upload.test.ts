@@ -5,7 +5,7 @@
 import { POST } from '@/app/api/documents/v2/upload/route';
 import { getServerSession } from '@/lib/auth/server-session';
 import { createDocumentJob, confirmDocumentUpload } from '@/lib/services/document-job-service';
-import { sendToProcessingQueue } from '@/lib/aws/lambda-trigger';
+import { sendToProcessingQueue } from '@/lib/gcp/processing-queue';
 import { getActiveStorageBucketName, uploadServerProxyDocument } from '@/lib/services/document-storage-service';
 
 jest.mock('@/lib/auth/server-session', () => ({
@@ -17,7 +17,7 @@ jest.mock('@/lib/services/document-job-service', () => ({
   confirmDocumentUpload: jest.fn(),
 }));
 
-jest.mock('@/lib/aws/lambda-trigger', () => ({
+jest.mock('@/lib/gcp/processing-queue', () => ({
   sendToProcessingQueue: jest.fn(),
 }));
 

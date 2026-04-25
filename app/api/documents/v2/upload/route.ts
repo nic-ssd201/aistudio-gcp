@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getServerSession } from '@/lib/auth/server-session';
 import { createDocumentJob, confirmDocumentUpload } from '@/lib/services/document-job-service';
-import { sendToProcessingQueue } from '@/lib/aws/lambda-trigger';
+import { sendToProcessingQueue } from '@/lib/gcp/processing-queue';
 import { getActiveStorageBucketName, uploadServerProxyDocument } from '@/lib/services/document-storage-service';
 import { createLogger, generateRequestId, startTimer, sanitizeForLogging } from '@/lib/logger';
 import { UploadRequestSchema } from '@/lib/validation/document-upload.validation';
