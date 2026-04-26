@@ -27,14 +27,16 @@ const customJestConfig = {
     '^@/components/ui/badge$': '<rootDir>/tests/mocks/radix-ui.js',
     '^@/components/ui/dropdown-menu$': '<rootDir>/tests/mocks/dropdown-menu.js',
     '^@/components/ui/scroll-area$': '<rootDir>/tests/mocks/scroll-area.js',
-    '^@/components/ui/table$': '<rootDir>/tests/mocks/radix-ui.js'
+    '^@/components/ui/table$': '<rootDir>/tests/mocks/radix-ui.js',
+       '@google-cloud/storage': '<rootDir>/tests/mocks/google-cloud-storage.js',
   },
   setupFiles: ['<rootDir>/.jest/setEnvVars.js'],
   transformIgnorePatterns: [
-    'node_modules/(?!(lucide-react|next-auth|@next-auth|nanoid)/)'
+    'node_modules/(?!(lucide-react|next-auth|@next-auth|nanoid|node-fetch|teeny-request)/)'
   ],
   testPathIgnorePatterns: [
     '/node_modules/',
+      '/tests/performance/', // Performance tests require 30+ min and running API server
     '/tests/e2e/',
     '/.next/',
     '/infra/', // Infra has its own Jest config
