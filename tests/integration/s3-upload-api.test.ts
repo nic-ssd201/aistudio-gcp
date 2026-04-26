@@ -26,6 +26,7 @@ jest.mock('@/lib/logger', () => ({
     error: jest.fn()
   })),
   generateRequestId: jest.fn(() => 'test-request-id'),
+  getLogContext: jest.fn(() => ({})),
   startTimer: jest.fn(() => jest.fn()),
   sanitizeForLogging: jest.fn((data) => data)
 }))

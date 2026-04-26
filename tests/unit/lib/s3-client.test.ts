@@ -64,6 +64,8 @@ describe('GCS Client', () => {
     // Reset return values for documentExists tests
     mockFile.exists.mockResolvedValue([true]);
     mockBucket.exists.mockResolvedValue([true]);
+    // Default save mock so inner beforeEachs don't need to re-set it
+    mockFile.save.mockResolvedValue(undefined);
   });
 
   describe('uploadDocument', () => {
@@ -243,6 +245,10 @@ describe('GCS Client', () => {
     });
 
   describe('Key Generation', () => {
+    beforeEach(() => {
+      mockFile.save.mockResolvedValue(undefined);
+    });
+
     it('should generate unique keys for same filename', async () => {
       const params = {
         userId: 'user-123',
@@ -263,6 +269,8 @@ describe('GCS Client', () => {
       });
 
     it('should preserve file extensions', async () => {
+      mockFile.save.mockResolvedValue(undefined);
+
       const testCases = [
         { fileName: 'test.pdf', expectedExt: '.pdf' },
         { fileName: 'report.docx', expectedExt: '.docx' },
