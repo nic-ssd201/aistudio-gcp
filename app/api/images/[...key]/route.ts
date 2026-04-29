@@ -1,21 +1,15 @@
-import { NextRequest } from 'next/server';
-import { S3Client, GetObjectCommand } from '@aws-sdk/client-s3';
-import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
+import { NextRequest, NextResponse } from 'next/server';
 import { getServerSession } from '@/lib/auth/server-session';
 import { getCurrentUserAction } from '@/actions/db/get-current-user-action';
 import { createLogger, generateRequestId, startTimer } from '@/lib/logger';
 import { getConversationById } from '@/lib/db/drizzle';
-
-// Initialize S3 client
-const s3Client = new S3Client({
-  region: process.env.NEXT_PUBLIC_AWS_REGION || process.env.AWS_REGION || 'us-east-1'
-});
+import { getObjectStream, getActiveStorageBucketName } from '@/lib/services/document-storage-service';
 
 /**
  * Secure Image Proxy API
- * GET /api/images/[...key] - Serve images from S3 with authentication
+ * GET /api/images/[...key] - Serve images from storage with authentication
  * 
- * This endpoint provides secure access to AI-generated images stored in S3
+ * This endpoint provides secure access to AI-generated images stored in the configured storage provider
  * by generating short-lived presigned URLs after authentication checks.
  */
 export async function GET(
@@ -80,21 +74,12 @@ export async function GET(
       return new Response('Not Found', { status: 404 });
     }
     
-    // 6. Generate presigned URL for the image (valid for 1 hour)
-    const bucketName = process.env.DOCUMENTS_BUCKET_NAME;
+    // 6. Generate provider-aware signed URL for the image (valid for 1 hour)
+    const bucketName = getActiveStorageBucketName();
     if (!bucketName) {
-      log.error('S3 bucket name not configured - missing DOCUMENTS_BUCKET_NAME');
+      log.error('Storage bucket name not configured');
       return new Response('Internal Server Error', { status: 500 });
     }
-    
-    const getObjectCommand = new GetObjectCommand({
-      Bucket: bucketName,
-      Key: s3Key
-    });
-    
-    const presignedUrl = await getSignedUrl(s3Client, getObjectCommand, {
-      expiresIn: 60 * 60 // 1 hour in seconds
-    });
     
     log.info('Image access granted, redirecting to presigned URL', {
       conversationId,

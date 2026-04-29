@@ -1,12 +1,5 @@
-import { SQSClient, SendMessageCommand } from '@aws-sdk/client-sqs';
-import { S3Client, PutObjectCommand, CreateMultipartUploadCommand, UploadPartCommand, CompleteMultipartUploadCommand } from '@aws-sdk/client-s3';
-import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
-import { LambdaClient, InvokeCommand } from '@aws-sdk/client-lambda';
+import { getActiveStorageBucketName, getStorageProvider, uploadDocument, generateUploadPresignedUrl } from '@/lib/services/document-storage-service';
 import { v4 as uuidv4 } from 'uuid';
-
-const s3Client = new S3Client({});
-const sqsClient = new SQSClient({});
-const lambdaClient = new LambdaClient({});
 
 interface FileProcessingJob {
   jobId: string;
