@@ -5,10 +5,16 @@ import { NextRequest } from 'next/server'
 import { POST as presignedUrlHandler } from '@/app/api/documents/presigned-url/route'
 import { POST as processHandler } from '@/app/api/documents/process/route'
 
-// Mock all dependencies
+// Mock all dependencies — mock at the document-storage-service layer
+// because that's what the process handler actually imports (dynamic import)
 jest.mock('@/lib/auth/server-session')
 jest.mock('@/actions/db/get-current-user-action')
-jest.mock('@/lib/gcp/gcs-client')
+jest.mock('@/lib/services/document-storage-service', () => ({
+  generateUploadPresignedUrl: jest.fn(),
+  getObjectStream: jest.fn(),
+  documentExists: jest.fn(),
+  uploadDocument: jest.fn(),
+}))
 jest.mock('@/lib/db/queries/documents')
 jest.mock('@/lib/document-processing')
 jest.mock('@/lib/logger', () => ({
@@ -35,10 +41,10 @@ jest.mock('@/lib/file-validation', () => ({
   getMaxFileSize: jest.fn().mockResolvedValue(10 * 1024 * 1024) // 10MB
 }))
 
-// Import mocked modules
+// Import mocked modules — from document-storage-service, not gcs-client
 import { getServerSession } from '@/lib/auth/server-session'
 import { getCurrentUserAction } from '@/actions/db/get-current-user-action'
-import { generateUploadPresignedUrl, getObjectStream, documentExists } from '@/lib/gcp/gcs-client'
+import { generateUploadPresignedUrl, getObjectStream, documentExists } from '@/lib/services/document-storage-service'
 import { saveDocument, batchInsertDocumentChunks } from '@/lib/db/queries/documents'
 import { extractTextFromDocument, chunkText } from '@/lib/document-processing'
 
@@ -76,11 +82,11 @@ describe('S3 Upload API Integration Tests', () => {
         }
       })
 
-      // Mock S3 presigned URL generation
+      // Mock presigned URL generation (via document-storage-service)
       mockGenerateUploadPresignedUrl.mockResolvedValue({
-        url: 'https://s3.amazonaws.com/test-bucket/123/test.pdf',
+        url: 'https://storage.googleapis.com/test-bucket/123/test.pdf',
         key: '123/test.pdf',
-        fields: { 'x-amz-signature': 'test-signature' }
+        fields: { 'Content-Type': 'application/pdf', 'Content-Length': '1024' }
       })
 
       // Create request
@@ -102,9 +108,9 @@ describe('S3 Upload API Integration Tests', () => {
         isSuccess: true,
         message: 'Presigned URL generated successfully',
         data: {
-          url: 'https://s3.amazonaws.com/test-bucket/123/test.pdf',
+          url: 'https://storage.googleapis.com/test-bucket/123/test.pdf',
           key: '123/test.pdf',
-          fields: { 'x-amz-signature': 'test-signature' },
+          fields: { 'Content-Type': 'application/pdf', 'Content-Length': '1024' },
           expiresAt: expect.any(String)
         }
       })
@@ -170,7 +176,7 @@ describe('S3 Upload API Integration Tests', () => {
         }
       })
 
-      // Mock S3 operations
+      // Mock document-storage-service functions (the actual import layer)
       mockDocumentExists.mockResolvedValue(true)
       mockGetObjectStream.mockResolvedValue({
         stream: {
@@ -299,7 +305,7 @@ describe('S3 Upload API Integration Tests', () => {
       })
 
       mockGenerateUploadPresignedUrl.mockResolvedValue({
-        url: 'https://s3.amazonaws.com/test-bucket/123/test.pdf',
+        url: 'https://storage.googleapis.com/test-bucket/123/test.pdf',
         key: '123/test.pdf',
         fields: {}
       })
@@ -317,7 +323,7 @@ describe('S3 Upload API Integration Tests', () => {
       const data = await response.json()
 
       // Client code expects to access data.data.url or data.url
-      expect(data.data?.url || data.url).toBe('https://s3.amazonaws.com/test-bucket/123/test.pdf')
+      expect(data.data?.url || data.url).toBe('https://storage.googleapis.com/test-bucket/123/test.pdf')
       expect(data.data?.key || data.key).toBe('123/test.pdf')
     })
   })
