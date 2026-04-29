@@ -3,7 +3,7 @@ import { getServerSession } from '@/lib/auth/server-session';
 import { getCurrentUserAction } from '@/actions/db/get-current-user-action';
 import { createLogger, generateRequestId, startTimer } from '@/lib/logger';
 import { getConversationById } from '@/lib/db/drizzle';
-import { getObjectStream, getActiveStorageBucketName } from '@/lib/services/document-storage-service';
+import { getObjectStream, getActiveStorageBucketName, getDocumentSignedUrl } from '@/lib/services/document-storage-service';
 
 /**
  * Secure Image Proxy API
@@ -89,7 +89,8 @@ export async function GET(
     
     timer({ status: 'success' });
     
-    // 7. Redirect to the presigned URL
+    // 7. Generate and redirect to the presigned URL
+    const presignedUrl = await getDocumentSignedUrl({ key: s3Key, expiresIn: 3600 });
     return Response.redirect(presignedUrl, 302);
     
   } catch (error) {
