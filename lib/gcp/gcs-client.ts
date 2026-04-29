@@ -84,49 +84,30 @@ export async function ensureDocumentsBucket(): Promise<void> {
   const gcsClient = await getGCSClient()
   const config = await getGCSConfig()
   const bucketName = config.bucket!
-  
+
   try {
-    const [buckets] = await gcsClient.getBuckets()
-    const exists = buckets.some(b => b.name === bucketName)
-    
+    const bucket = gcsClient.bucket(bucketName)
+    const [exists] = await bucket.exists()
+
     if (!exists) {
-       // Create bucket if it doesn't exist
-      try {
-        await gcsClient.createBucket(bucketName, {
-          location: config.region || "US",
+      throw createError("GCS documents bucket does not exist", {
+        code: "GCS_BUCKET_MISSING",
+        details: { bucket: bucketName }
          })
-        
-         // Set CORS configuration for browser uploads
-        const bucket = gcsClient.bucket(bucketName)
-        await bucket.setMetadata({
-          cors: [
-             {
-              responseHeader: ["ETag"],
-              method: ["GET", "PUT", "POST", "DELETE", "HEAD"],
-              origin: [process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000"],
-              maxAgeSeconds: 3000,
-             },
-           ],
-         })
-       } catch (createErr) {
-        throw createError("Failed to create GCS bucket", {
-          code: "GCS_BUCKET_CREATE_ERROR",
-          details: {
-            error: createErr instanceof Error ? createErr.message : String(createErr),
-            bucket: bucketName,
-           }
-         })
-       }
-     }
-   } catch (error) {
+        }
+       } catch (error) {
+        // Re-throw our own errors
+    if (error instanceof Error && error.code === "GCS_BUCKET_MISSING") {
+      throw error
+        }
     throw createError("Failed to check GCS bucket", {
       code: "GCS_BUCKET_CHECK_ERROR",
       details: {
         error: error instanceof Error ? error.message : String(error),
         bucket: bucketName,
-       }
-     })
-   }
+           }
+         })
+        }
 }
 
 // Upload a document to GCS
@@ -152,16 +133,20 @@ export async function uploadDocument({
     
     await file.save(fileContent, {
       contentType: contentType,
+      resumable: false,
       metadata: {
-         ...metadata,
-        userId,
-        uploadedAt: new Date().toISOString(),
-       },
-     })
+        metadata: {
+           ...metadata,
+          userId,
+          uploadedAt: new Date().toISOString(),
+            },
+          },
+        })
 
-      // Generate a signed URL for immediate access
+         // Generate a signed URL for immediate access
     const [url] = await file.getSignedUrl({
       action: "read",
+      version: "v4",
       expires: Date.now() + 3600 * 1000, // 1 hour
      })
 
@@ -192,6 +177,7 @@ export async function getDocumentSignedUrl({
     
     const [url] = await file.getSignedUrl({
       action: "read",
+      version: "v4",
       expires: Date.now() + expiresIn * 1000,
      })
     return url
@@ -215,7 +201,7 @@ export async function deleteDocument(key: string): Promise<void> {
   try {
     const bucket = gcsClient.bucket(bucketName)
     const file = bucket.file(key)
-    await file.delete()
+    await file.delete({ ignoreNotFound: true })
    } catch (error) {
     throw createError("Failed to delete document from GCS", {
       code: "GCS_DELETE_ERROR",
@@ -267,7 +253,9 @@ export async function listUserDocuments(
     
     return files.map((file) => ({
       key: file.name,
-      size: parseInt(file.metadata.contentLength || '0', 10),
+      size: typeof file.metadata.contentLength === 'number'
+        ? file.metadata.contentLength
+        : parseInt(String(file.metadata.contentLength || file.metadata.size || '0'), 10),
       lastModified: file.metadata.updated ? new Date(file.metadata.updated) : new Date(),
      }))
    } catch (error) {
@@ -280,7 +268,6 @@ export async function listUserDocuments(
      })
    }
 }
-
 // Generate a presigned URL for uploading a document
 export async function generateUploadPresignedUrl({
   userId,
@@ -291,7 +278,7 @@ export async function generateUploadPresignedUrl({
   expiresIn = 3600,
 }: PresignedUploadUrlParams): Promise<{ url: string; key: string; fields: Record<string, string> }> {
   await ensureDocumentsBucket()
-  
+
   const gcsClient = await getGCSClient()
   const config = await getGCSConfig()
   const bucketName = config.bucket!
@@ -303,29 +290,38 @@ export async function generateUploadPresignedUrl({
   try {
     const bucket = gcsClient.bucket(bucketName)
     const file = bucket.file(key)
-    
-    const [url] = await file.getSignedUrl({
-      action: "write",
-      expires: Date.now() + expiresIn * 1000,
-      contentType,
-    })
 
-      // Return additional fields that might be needed for the upload
-    const fields = {
-       "Content-Type": contentType,
-       "Content-Length": fileSize.toString(),
+     // Build extension headers for GCS metadata
+    const extensionHeaders: Record<string, string> = {}
+    extensionHeaders["x-goog-meta-userid"] = userId
+    for (const [k, v] of Object.entries(metadata)) {
+      extensionHeaders[`x-goog-meta-${k}`] = v
      }
 
+    const [url] = await file.getSignedUrl({
+      action: "write",
+      version: "v4",
+      expires: Date.now() + expiresIn * 1000,
+      contentType,
+      extensionHeaders,
+       })
+
+       // Return additional fields that might be needed for the upload
+    const fields = {
+        "Content-Type": contentType,
+        "Content-Length": fileSize.toString(),
+      }
+
     return { url, key, fields }
-   } catch (error) {
+     } catch (error) {
     throw createError("Failed to generate presigned upload URL", {
       code: "GCS_PRESIGNED_URL_ERROR",
       details: {
         error: error instanceof Error ? error.message : String(error),
         fileName,
+          }
+        })
        }
-     })
-   }
 }
 
 // Get object as a stream for efficient processing
@@ -338,51 +334,156 @@ export async function getObjectStream(key: string): Promise<{
   const gcsClient = await getGCSClient()
   const config = await getGCSConfig()
   const bucketName = config.bucket!
-  
+
   try {
     const bucket = gcsClient.bucket(bucketName)
     const file = bucket.file(key)
-    
+
     const stream = file.createReadStream()
-    
+
     if (!stream) {
       throw new Error("No stream returned from GCS")
-     }
+       }
+
+    const [meta] = await file.getMetadata()
 
     return {
       stream,
-      contentType: file.metadata.contentType || undefined,
-      contentLength: file.metadata.contentLength ? parseInt(file.metadata.contentLength, 10) : undefined,
-      metadata: file.metadata.metadata as Record<string, string> || {},
-     }
-   } catch (error) {
+      contentType: meta.contentType || undefined,
+      contentLength: typeof meta.size === 'number' ? meta.size : parseInt(String(meta.size || '0'), 10),
+      metadata: (meta.metadata as Record<string, string>) || {},
+       }
+        } catch (error) {
     throw createError("Failed to get object stream from GCS", {
       code: "GCS_GET_STREAM_ERROR",
       details: {
         error: error instanceof Error ? error.message : String(error),
         key,
+          }
+        })
        }
-     })
-   }
 }
 
-// Helper to extract file key from GCS URL
+// Helper to extract file key from GCS URL (replaces the broken one above)
 export async function extractKeyFromUrl(url: string): Promise<string | null> {
   try {
     const config = await getGCSConfig();
     const bucketName = config.bucket!;
+
+     // Handle gs:// URIs
+    if (url.startsWith('gs://')) {
+      const withoutScheme = url.slice(5)
+      const slashIdx = withoutScheme.indexOf('/')
+      if (slashIdx === -1) return null
+      const uriBucket = withoutScheme.slice(0, slashIdx)
+      if (uriBucket !== bucketName) return null
+      return decodeURIComponent(withoutScheme.slice(slashIdx + 1))
+    }
+
     const urlObj = new URL(url)
-      // Handle GCS signed URLs - extract the object path from the URL
+       // Handle GCS signed URLs - extract the object path from the URL
     const pathMatch = urlObj.pathname.match(/^\/([^/]+)\/(.+)$/)
     if (pathMatch && pathMatch[1] === bucketName) {
       return decodeURIComponent(pathMatch[2])
-     }
-      // For direct GCS URLs
-    if (urlObj.hostname.startsWith(`${bucketName}.`)) {
-      return decodeURIComponent(urlObj.pathname.substring(1))
-     }
+    }
+       // For virtual-host-style URLs (bucket.storage.googleapis.com or bucket.storage.cloud.google.com)
+    if (urlObj.hostname.endsWith('.storage.googleapis.com') || urlObj.hostname.endsWith('.storage.cloud.google.com')) {
+      const hostBucket = urlObj.hostname.split('.')[0]
+      if (hostBucket === bucketName) {
+        return decodeURIComponent(urlObj.pathname.substring(1))
+      }
+    }
     return null
-   } catch {
+  } catch {
     return null
-   }
+  }
 }
+
+// Upload a document for server-proxy (stable key based on jobId)
+export async function uploadServerProxyDocument({
+  jobId,
+  fileName,
+  fileBuffer,
+  contentType,
+}: {
+  jobId: string
+  fileName: string
+  fileBuffer: Buffer | Uint8Array | string
+  contentType: string
+}): Promise<{ key: string; bucket: string; sanitizedFileName: string }> {
+  const config = await getGCSConfig()
+  const bucketName = config.bucket!
+
+  // Sanitize filename (replace spaces with underscores)
+  const sanitizedFileName = fileName.replace(/[^a-zA-Z0-9._-]/g, '_')
+  const key = `v2/uploads/${jobId}/${sanitizedFileName}`
+
+  await ensureDocumentsBucket()
+
+  const gcsClient = await getGCSClient()
+  const bucket = gcsClient.bucket(bucketName)
+  const file = bucket.file(key)
+
+  await file.save(fileBuffer, {
+    contentType: contentType,
+      resumable: false,
+    resumable: false,
+    metadata: {
+      metadata: {
+        jobId,
+        originalFileName: fileName,
+      },
+    },
+  })
+
+  return { key, bucket: bucketName, sanitizedFileName }
+}
+
+// Resumable upload session for large files
+export async function resumableUpload({
+  userId,
+  fileName,
+  contentType,
+  fileSize,
+  metadata = {},
+}: {
+  userId: string
+  fileName: string
+  contentType: string
+  fileSize: number
+  metadata?: Record<string, string>
+}): Promise<{ url: string; key: string; fields: Record<string, string> }> {
+  await ensureDocumentsBucket()
+
+  const gcsClient = await getGCSClient()
+  const config = await getGCSConfig()
+  const bucketName = config.bucket!
+
+  const timestamp = Date.now()
+  const sanitizedFileName = fileName.replace(/[^a-zA-Z0-9._-]/g, '_')
+  const key = `${userId}/${timestamp}-${sanitizedFileName}`
+
+  const bucket = gcsClient.bucket(bucketName)
+  const file = bucket.file(key)
+
+  const [uri] = await file.createResumableUpload({
+    metadata: {
+      contentType,
+      metadata: {
+        ...metadata,
+        userId,
+        originalName: fileName,
+      },
+    },
+  })
+
+  return {
+    url: uri,
+    key,
+    fields: {
+      "Content-Type": contentType,
+      "Content-Length": fileSize.toString(),
+    },
+  }
+}
+export { clearGCSCache as clearGcsCache };

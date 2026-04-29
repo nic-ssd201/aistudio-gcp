@@ -700,9 +700,17 @@ export function resetBedrockGuardrailsService(): void {
 // These stubs allow the file to compile while AWS services are replaced with GCP equivalents.
 // TODO: Replace actual implementations with Vertex AI Content Safety and Cloud Pub/Sub.
 
+// Global mock override for testing — set via setBedrockMockResponse()
+let _bedrockMockResponse: any = null;
+export function setBedrockMockResponse(response: any) { _bedrockMockResponse = response; }
+export function clearBedrockMockResponse() { _bedrockMockResponse = null; }
+
 class BedrockRuntimeClientStub {
   constructor(_opts?: any) {}
-  async send(_cmd: any): Promise<any> { return { Assessments: [] }; }
+  async send(_cmd: any): Promise<any> {
+    if (_bedrockMockResponse !== null) return _bedrockMockResponse;
+    return { Assessments: [] };
+  }
 }
 
 class SNSClientStub {

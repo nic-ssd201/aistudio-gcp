@@ -50,7 +50,7 @@ export class PIITokenizationService {
         region: '',
         guardrailId: '',
         guardrailVersion: 'DRAFT',
-        piiTokenTableName: undefined,
+        piiTokenTableName: config?.piiTokenTableName || process.env.PII_TOKEN_TABLE_NAME,
         tokenTtlSeconds: 3600,
         enablePiiTokenization: config?.enablePiiTokenization ?? true, // Enabled with in-memory storage
           };

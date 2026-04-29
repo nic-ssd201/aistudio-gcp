@@ -1,3 +1,8 @@
+// Polyfill setImmediate for google-gax compatibility in Jest jsdom environment
+if (typeof global.setImmediate === 'undefined') {
+  global.setImmediate = (fn, ...args) => setTimeout(fn, 0, ...args);
+}
+
 // Set required environment variables for Drizzle DB client initialization
 // These must be set BEFORE any imports to prevent initialization errors
 process.env.RDS_SECRET_ARN = 'test-secret-arn';

@@ -39,11 +39,11 @@ describe('document-upload-service', () => {
     process.env = originalEnv;
   });
 
-  it('uses S3 presigned uploads by default for small files', async () => {
-    generateS3PresignedUrl.mockResolvedValue({
-      uploadId: 'job-123',
-      url: 'https://s3.example/upload',
-      method: 'single',
+  it('uses GCS presigned uploads by default for small files', async () => {
+    generateGcsUploadPresignedUrl.mockResolvedValue({
+      key: 'job-123/notes.pdf',
+      url: 'https://gcs.example/upload',
+      fields: {},
     });
 
     await expect(createDocumentUploadConfig({
@@ -52,13 +52,18 @@ describe('document-upload-service', () => {
       fileSize: 1024,
       fileType: 'application/pdf',
     })).resolves.toEqual({
-      uploadId: 'job-123',
-      url: 'https://s3.example/upload',
+      uploadId: 'job-123/notes.pdf',
+      url: 'https://gcs.example/upload',
       method: 'single',
     });
 
-    expect(generateS3PresignedUrl).toHaveBeenCalledWith('job-123', 'notes.pdf');
-    expect(generateMultipartUrls).not.toHaveBeenCalled();
+    expect(generateGcsUploadPresignedUrl).toHaveBeenCalledWith(expect.objectContaining({
+      userId: 'v2/uploads/job-123',
+      fileName: 'notes.pdf',
+      contentType: 'application/pdf',
+      fileSize: 1024,
+    }));
+    expect(resumableUpload).not.toHaveBeenCalled();
   });
 
   it('uses a GCS resumable session for large files when STORAGE_PROVIDER=gcs', async () => {
@@ -97,20 +102,14 @@ describe('document-upload-service', () => {
   });
 
   it('resolves keys and bucket names from the active provider', () => {
+    // GCS is the default — returns uploadId as-is
     expect(resolveUploadedDocumentKey({
-      uploadId: 'multipart-123',
+      uploadId: 'v2/uploads/job-123/notes.pdf',
       jobId: 'job-123',
       fileName: 'notes.pdf',
     })).toBe('v2/uploads/job-123/notes.pdf');
 
-    process.env.STORAGE_PROVIDER = 'gcs';
     process.env.GCS_BUCKET = 'gcs-documents';
-
-    expect(resolveUploadedDocumentKey({
-      uploadId: 'v2/uploads/job-999/1700000000000-notes.pdf',
-      jobId: 'job-999',
-      fileName: 'notes.pdf',
-    })).toBe('v2/uploads/job-999/1700000000000-notes.pdf');
     expect(getDocumentUploadBucketName()).toBe('gcs-documents');
   });
 });

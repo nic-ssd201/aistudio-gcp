@@ -24,7 +24,7 @@ import {
 // Mock GCS SDK and config
 jest.mock('@/lib/settings-manager', () => ({
   Settings: {
-    getS3: jest.fn().mockResolvedValue({
+    getGCS: jest.fn().mockResolvedValue({
       bucket: 'test-bucket',
       region: 'us-east-1'
        })
@@ -249,8 +249,8 @@ describe('GCS Client', () => {
     it('should list user documents', async () => {
       mockBucket.getFiles.mockResolvedValue([
          [
-            { name: 'documents/user-123/file1.pdf', metadata: { size: '1000', updated: new Date().toISOString() } },
-            { name: 'documents/user-123/file2.pdf', metadata: { size: '2000', updated: new Date().toISOString() } },
+            { name: 'documents/user-123/file1.pdf', metadata: { contentLength: '1000', updated: new Date().toISOString() } },
+            { name: 'documents/user-123/file2.pdf', metadata: { contentLength: '2000', updated: new Date().toISOString() } },
            ]
          ]);
 

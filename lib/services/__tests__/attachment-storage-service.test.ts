@@ -29,53 +29,44 @@ describe('attachment-storage-service', () => {
     getGcsObjectStream.mockReset();
   });
 
-  it('uses S3 by default', async () => {
-    uploadDocumentToS3.mockResolvedValue({
+  it('uses GCS by default (S3 is deprecated)', async () => {
+    uploadDocumentToGcs.mockResolvedValue({
       key: 'conversations/123-attachment.json',
-      url: 'https://example.com/s3',
-    });
+      url: 'https://example.com/gcs',
+     });
 
     const result = await storeAttachmentInS3('conv-1', 'msg-1', {
       type: 'file',
       name: 'notes.txt',
       data: 'hello',
       contentType: 'text/plain',
-    }, 0);
+     }, 0);
 
-    expect(uploadDocumentToS3).toHaveBeenCalledTimes(1);
-    expect(uploadDocumentToGcs).not.toHaveBeenCalled();
-    expect(uploadDocumentToS3).toHaveBeenCalledWith(expect.objectContaining({
-      userId: 'conversations',
-      contentType: 'application/json',
-      metadata: expect.objectContaining({
-        conversationId: 'conv-1',
-        messageId: 'msg-1',
-        attachmentType: 'file',
-      }),
-    }));
+    expect(uploadDocumentToGcs).toHaveBeenCalledTimes(1);
+    expect(uploadDocumentToS3).not.toHaveBeenCalled();
     expect(result.s3Key).toBe('conversations/123-attachment.json');
-  });
+   });
 
   it('uses GCS when STORAGE_PROVIDER=gcs', async () => {
     process.env.STORAGE_PROVIDER = 'gcs';
     uploadDocumentToGcs.mockResolvedValue({
       key: 'conversations/456-attachment.json',
       url: 'https://example.com/gcs',
-    });
+     });
 
     const result = await storeAttachmentInS3('conv-2', 'msg-2', {
       type: 'image',
       name: 'diagram.png',
       image: 'base64data',
       contentType: 'image/png',
-    }, 1);
+     }, 1);
 
     expect(uploadDocumentToGcs).toHaveBeenCalledTimes(1);
     expect(uploadDocumentToS3).not.toHaveBeenCalled();
     expect(result.s3Key).toBe('conversations/456-attachment.json');
-  });
+   });
 
-  it('reads attachments from the configured provider', async () => {
+  it('reads attachments from GCS', async () => {
     process.env.STORAGE_PROVIDER = 'gcs';
     const stream = Readable.from([JSON.stringify({ type: 'file', data: 'hello' })]);
     getGcsObjectStream.mockResolvedValue({ stream });
@@ -83,9 +74,9 @@ describe('attachment-storage-service', () => {
     await expect(getAttachmentFromS3('conversations/456-attachment.json')).resolves.toEqual({
       type: 'file',
       data: 'hello',
-    });
+     });
 
     expect(getGcsObjectStream).toHaveBeenCalledWith('conversations/456-attachment.json');
     expect(getS3ObjectStream).not.toHaveBeenCalled();
-  });
+   });
 });

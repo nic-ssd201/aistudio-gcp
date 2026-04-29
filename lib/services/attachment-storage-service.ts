@@ -286,3 +286,17 @@ export async function reconstructMessagesWithAttachments(
 function sanitizeFileName(name: string): string {
   return name.replace(/[^\d.A-Za-z-]/g, '_').substring(0, 255);
 }
+
+// S3 aliases for backward compatibility — delegate to GCS functions
+// These wrap the GCS functions and expose s3Key as an alias for gcsKey
+export async function storeAttachmentInS3(
+  conversationId: string,
+  messageId: string,
+  attachment: import('./attachment-storage-service').AttachmentContent,
+  attachmentIndex: number
+): Promise<{ s3Key: string; originalName: string; contentType: string; size: number; attachmentId: string }> {
+  const result = await storeAttachmentInGCS(conversationId, messageId, attachment, attachmentIndex);
+  return { s3Key: result.gcsKey, originalName: result.originalName, contentType: result.contentType, size: result.size, attachmentId: result.attachmentId };
+}
+
+export const getAttachmentFromS3 = getAttachmentFromGCS;
