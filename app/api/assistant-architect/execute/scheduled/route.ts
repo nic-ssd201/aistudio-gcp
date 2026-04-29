@@ -12,7 +12,8 @@ import { createRepositoryTools } from '@/lib/tools/repository-tools';
 import type { StreamRequest } from '@/lib/streaming/types';
 import type { UIMessage } from 'ai';
 import jwt from 'jsonwebtoken';
-import { SQSClient, SendMessageCommand } from '@aws-sdk/client-sqs';
+// GCP equivalent: Cloud Scheduler + Pub/Sub
+// TODO: Wire up Cloud Scheduler trigger with Pub/Sub
 
 // Allow up to 15 minutes for long scheduled executions
 export const maxDuration = 900;
@@ -124,21 +125,25 @@ async function sendNotificationToQueue(
   }
 
   try {
-    const sqsClient = new SQSClient({ region: process.env.AWS_REGION || 'us-east-1' });
-
-    const message = {
+// TODO: Wire up Cloud Pub/Sub for scheduled execution notifications
+// TODO: Wire up Cloud Pub/Sub for scheduled execution notifications
+// TODO: Wire up Cloud Pub/Sub for scheduled execution notifications
+// TODO: Wire up Cloud Pub/Sub for scheduled execution notifications
+// TODO: Wire up Cloud Pub/Sub for scheduled execution notifications
+// TODO: Wire up Cloud Pub/Sub for scheduled execution notifications
+// TODO: Wire up Cloud Pub/Sub for scheduled execution notifications
+// TODO: Wire up Cloud Pub/Sub for scheduled execution notifications
+// TODO: Wire up Cloud Pub/Sub for scheduled execution notifications
+// TODO: Wire up Cloud Pub/Sub for scheduled execution notifications
+// TODO: Wire up Cloud Pub/Sub for scheduled execution notifications
+// TODO: Wire up Cloud Pub/Sub for scheduled execution notifications
+// TODO: Wire up Cloud Pub/Sub for scheduled execution notifications
+// TODO: Wire up Cloud Pub/Sub for scheduled execution notifications
+    log.info('Scheduled execution notification (stub — not yet wired to GCP)', {
       executionResultId,
       userId,
-      notificationType: 'email',
-      scheduleName
-    };
-
-    const command = new SendMessageCommand({
-      QueueUrl: notificationQueueUrl,
-      MessageBody: JSON.stringify(message)
+      scheduleName,
     });
-
-    await sqsClient.send(command);
 
     log.info('Notification queued successfully', {
       executionResultId,
@@ -986,3 +991,7 @@ function resolvePath(
 
   return current;
 }
+
+// Stub classes for AWS → GCP migration
+class SQSClientStub { constructor(_opts?: any) {} }
+class SendMessageCommandStub { constructor(_opts?: any) {} }

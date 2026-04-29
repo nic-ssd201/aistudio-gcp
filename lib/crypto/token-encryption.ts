@@ -5,7 +5,7 @@
  * connector credentials before database storage. Aurora at-rest encryption alone
  * is insufficient for token-level data protection.
  *
- * - Data Encryption Key (DEK) fetched from AWS Secrets Manager
+ * - Data Encryption Key (DEK) fetched from Google Cloud Secret Manager
  * - Key derived via HKDF-SHA-256 (NIST SP 800-56C) with domain separation
  * - In-process DEK cache with 5-minute TTL, concurrency-safe (single in-flight fetch)
  * - Store format: base64 JSON string containing { ver, iv, tag, data }
@@ -13,20 +13,17 @@
  *
  * KEY ROTATION: The encrypted payload includes a `ver` field for forward
  * compatibility with future key versioning. Currently all payloads use ver=1.
- * Rotating the Secrets Manager secret without a re-encryption migration will
+ * Rotating the Secret Manager secret without a re-encryption migration will
  * make existing ciphertext unreadable. A future version can add a `kid` field
  * to support multi-key decryption during rotation windows. Do NOT enable
- * automatic rotation on the Secrets Manager secret until key versioning is
+ * automatic rotation on the Secret Manager secret until key versioning is
  * implemented.
  *
  * @see Issue #777 — Part of Epic #774 (Nexus MCP Connectors)
  */
 
 import { createCipheriv, createDecipheriv, hkdfSync, randomBytes } from "node:crypto"
-import {
-  SecretsManagerClient,
-  GetSecretValueCommand,
-} from "@aws-sdk/client-secrets-manager"
+import { SecretManagerServiceClient } from "@google-cloud/secret-manager"
 import { createLogger } from "@/lib/logger"
 
 const log = createLogger({ action: "token-encryption" })
@@ -55,14 +52,14 @@ interface CachedDEK {
 let dekCache: CachedDEK | null = null
 let dekFetchPromise: Promise<Buffer> | null = null
 let cacheGeneration = 0
-let smClient: SecretsManagerClient | null = null
+let smClient: SecretManagerServiceClient | null = null
 
-function getSecretsManagerClient(): SecretsManagerClient {
+function getSecretManagerServiceClient(): SecretManagerServiceClient {
   if (!smClient) {
     if (!process.env.AWS_REGION) {
       log.warn("AWS_REGION not set — Secrets Manager client may target wrong region")
     }
-    smClient = new SecretsManagerClient({
+    smClient = new SecretManagerServiceClient({
       region: process.env.AWS_REGION,
       maxAttempts: 3,
     })
@@ -90,45 +87,47 @@ function getSecretName(): string {
  */
 async function fetchAndCacheDEK(fetchGeneration: number): Promise<Buffer> {
   const secretName = getSecretName()
-  log.info("Fetching token encryption DEK from Secrets Manager")
+  log.info("Fetching token encryption DEK from Secret Manager")
 
-  const client = getSecretsManagerClient()
-  const response = await client.send(
-    new GetSecretValueCommand({ SecretId: secretName })
-  )
+  const client = getSecretManagerServiceClient()
+    // GCP Secret Manager uses project/secret/versions format
+  const [version] = await client.accessSecretVersion({
+    name: `projects/${process.env.GCP_PROJECT_ID || 'your-project'}/secrets/${secretName.replace('/', '-')}/versions/latest`,
+       })
 
-  if (!response.SecretString) {
+  if (!version?.payload?.data) {
     log.warn("Token encryption DEK secret is empty", { secretName })
     throw new Error("Token encryption DEK is unavailable: secret is empty")
-  }
+     }
 
-  // Derive a 32-byte key via HKDF-SHA-256 (NIST SP 800-56C Rev 2).
-  // HKDF provides:
-  // - Domain separation via salt and info labels
-  // - Proper key stretching beyond a raw hash
-  // - Compatibility with any secret string format from Secrets Manager
+   // Derive a 32-byte key via HKDF-SHA-256 (NIST SP 800-56C Rev 2).
+   // HKDF provides:
+   // - Domain separation via salt and info labels
+   // - Proper key stretching beyond a raw hash
+   // - Compatibility with any secret string format from Secret Manager
   const key = Buffer.from(
     hkdfSync(
-      "sha256",
-      Buffer.from(response.SecretString, "utf8"),
+       "sha256",
+      version.payload.data.toString("utf8"),
       HKDF_SALT,
       HKDF_INFO,
-      32
-    )
-  )
+       32
+     )
+   )
 
-  // Only populate cache if the generation hasn't been bumped since we started.
-  // If invalidateDEKCache() was called during the fetch, cacheGeneration will
-  // have incremented and we discard this stale result.
+   // Only populate cache if the generation hasn't been bumped since we started.
+   // If invalidateDEKCache() was called during the fetch, cacheGeneration will
+   // have incremented and we discard this stale result.
   if (fetchGeneration === cacheGeneration) {
     dekCache = { key, fetchedAt: Date.now() }
     log.info("Token encryption DEK cached successfully")
-  } else {
+     } else {
     log.info("Discarding stale DEK fetch (cache was invalidated during fetch)")
-  }
+     }
 
   return key
 }
+
 
 /**
  * Derives a DEK from a local env var (MCP_TOKEN_ENCRYPTION_KEY) using the same
@@ -176,7 +175,7 @@ async function getDEK(): Promise<Buffer> {
     if (environment && environment !== "dev") {
       throw new Error(
         `MCP_TOKEN_ENCRYPTION_KEY is not allowed in environment '${environment}'. ` +
-          "Use AWS Secrets Manager for token encryption in non-dev environments."
+          "Use Google Cloud Secret Manager for token encryption in non-dev environments."
       )
     }
     log.warn("Using MCP_TOKEN_ENCRYPTION_KEY env var for DEK — local dev only")

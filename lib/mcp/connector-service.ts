@@ -22,10 +22,7 @@ import {
   nexusMcpAuditLogs,
 } from "@/lib/db/schema"
 import { encryptToken, decryptToken } from "@/lib/crypto/token-encryption"
-import {
-  SecretsManagerClient,
-  GetSecretValueCommand,
-} from "@aws-sdk/client-secrets-manager"
+import { SecretManagerServiceClient } from "@google-cloud/secret-manager"
 import type {
   McpConnector,
   McpAuthType,
@@ -650,7 +647,7 @@ async function exchangeRefreshToken(
   server: ServerRow,
   refreshToken: string
 ): Promise<OAuthTokenResponse | TokenRefreshFailure> {
-  // Load client credentials: inline DB credentials > Secrets Manager > none
+  // Load client credentials: inline DB credentials > GCP Secret Manager > none
   const credentials = await getOAuthCredentials(server)
 
   // Resolve token endpoint: credentials secret > fallback to root-relative /oauth/token.
@@ -725,7 +722,7 @@ async function exchangeRefreshToken(
 
 /**
  * Resolves OAuth client credentials for a server.
- * Priority: inline oauthCredentials (DB) > credentialsKey (Secrets Manager)
+ * Priority: inline oauthCredentials (DB) > credentialsKey (GCP Secret Manager)
  * Returns null if no credentials are configured (MCP-native OAuth).
  */
 export async function getOAuthCredentials(
@@ -759,11 +756,11 @@ export interface OAuthClientCredentials {
   scopes?: string
 }
 
-let secretsClient: SecretsManagerClient | null = null
+let secretsClient: SecretManagerServiceClient | null = null
 
-function getSecretsClient(): SecretsManagerClient {
+function getSecretsClient(): SecretManagerServiceClient {
   if (!secretsClient) {
-    secretsClient = new SecretsManagerClient({
+    secretsClient = new SecretManagerServiceClient({
       region: process.env.AWS_REGION ?? process.env.AWS_DEFAULT_REGION ?? "us-west-2",
     })
   }
@@ -776,7 +773,7 @@ const CREDENTIALS_CACHE_TTL = 5 * 60 * 1000 // 5 minutes
 const CREDENTIALS_CACHE_MAX = 100
 
 /**
- * Fetches OAuth client credentials from AWS Secrets Manager with 5-minute TTL cache.
+ * Fetches OAuth client credentials from Google Cloud Secret Manager with 5-minute TTL cache.
  * The secret is expected to be a JSON string with
  * { clientId, clientSecret, tokenEndpointUrl?, authorizationEndpointUrl?, scopes? }.
  */
@@ -788,13 +785,12 @@ export async function loadOAuthCredentials(
     return cached.value
   }
 
-  const result = await getSecretsClient().send(
-    new GetSecretValueCommand({ SecretId: credentialsKey })
-  )
-  if (!result.SecretString) {
-    throw new Error(`OAuth credentials secret is empty: ${credentialsKey}`)
+  // GCP Secret Manager: convert DB key path to GCP secret name format
+  const gcpSecretName = `projects/${process.env.GCP_PROJECT_ID || 'your-project'}/secrets/${credentialsKey.replace("/", "-")}/versions/latest`
+  const [version] = await getSecretsClient().accessSecretVersion({ name: gcpSecretName })
+  if (!version?.payload?.data) {
   }
-  const parsed: unknown = JSON.parse(result.SecretString)
+  const parsed: unknown = JSON.parse((version.payload?.data?.toString() ?? ""))
   if (
     typeof parsed !== "object" ||
     parsed === null ||

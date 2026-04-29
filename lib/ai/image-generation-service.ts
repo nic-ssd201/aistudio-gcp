@@ -56,7 +56,7 @@ export interface ReferenceImage {
   /** GCS signed URL for the image */
   url?: string;
   /** GCS object key for retrieving the image */
-  s3Key?: string;
+  gcsKey?: string;
   /** MIME type of the image */
   mimeType?: string;
   /** Role of this image: reference for style/content, mask for editing regions */
@@ -78,7 +78,7 @@ export interface ImageGenerationRequest {
 
 export interface ImageGenerationResult {
   imageUrl: string;
-  s3Key: string;
+  gcsKey: string;
   provider: string;
   model: string;
   altText?: string;
@@ -139,7 +139,7 @@ export async function generateImageForNexus(
     log.info('Image generation completed', {
       requestId,
       provider: request.provider,
-      s3Key: result.s3Key
+      gcsKey: result.gcsKey
     });
 
     return result;
@@ -283,7 +283,7 @@ async function generateWithOpenAI(
       throw createImageError('NO_IMAGE', 'No image data in OpenAI response');
     }
 
-    // Store in S3
+    // Store in GCS
     const gcsResult = await storeImageInGCS({
       imageBuffer,
       conversationId: request.conversationId,
@@ -298,7 +298,7 @@ async function generateWithOpenAI(
 
     return {
       imageUrl: gcsResult.presignedUrl,
-      s3Key: gcsResult.gcsKey,
+      gcsKey: gcsResult.gcsKey,
       provider: 'openai',
       model: request.modelId,
       dimensions: parseDimensions(request.size || '1024x1024'),
@@ -480,7 +480,7 @@ async function generateWithGemini(
 
     const imageBuffer = Buffer.from(imageData);
 
-    // Store in S3
+    // Store in GCS
     const gcsResult = await storeImageInGCS({
       imageBuffer,
       conversationId: request.conversationId,
@@ -492,7 +492,7 @@ async function generateWithGemini(
 
     return {
       imageUrl: gcsResult.presignedUrl,
-      s3Key: gcsResult.gcsKey,
+      gcsKey: gcsResult.gcsKey,
       provider: 'google',
       model: request.modelId,
       altText: result.text, // Gemini always returns text description

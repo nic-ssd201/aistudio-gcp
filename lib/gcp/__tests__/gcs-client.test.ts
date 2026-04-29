@@ -57,7 +57,7 @@ jest.mock("@/lib/error-utils", () => ({
 }))
 
 import {
-  clearGcsCache,
+  clearGCSCache,
   ensureDocumentsBucket,
   uploadDocument,
   uploadServerProxyDocument,
@@ -74,7 +74,7 @@ import {
 const OLD_ENV = { ...process.env }
 
 beforeEach(() => {
-  clearGcsCache()
+  clearGCSCache()
   process.env.GCS_BUCKET = "aistudio-test"
   process.env.GCP_PROJECT_ID = "test-project"
   saveMock.mockReset()
@@ -298,7 +298,7 @@ describe("resumableUpload", () => {
 describe("extractKeyFromUrl", () => {
   beforeEach(() => {
     process.env.GCS_BUCKET = "aistudio-test"
-    clearGcsCache()
+    clearGCSCache()
   })
 
   it("parses path-style URLs", async () => {

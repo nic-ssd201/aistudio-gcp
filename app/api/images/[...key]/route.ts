@@ -21,15 +21,15 @@ export async function GET(
   const log = createLogger({ requestId, route: 'api.images.get' });
   
   const { key: keyParts } = await params;
-  const s3Key = keyParts.join('/');
+  const gcsKey = keyParts.join('/');
   
-  log.info('Image request received', { s3Key });
+  log.info('Image request received', { gcsKey });
   
   try {
     // 1. Authenticate user
     const session = await getServerSession();
     if (!session) {
-      log.warn('Unauthorized request - no session', { s3Key });
+      log.warn('Unauthorized request - no session', { gcsKey });
       timer({ status: 'error', reason: 'unauthorized' });
       return new Response('Unauthorized', { status: 401 });
     }
@@ -37,21 +37,21 @@ export async function GET(
     // 2. Get current user
     const currentUser = await getCurrentUserAction();
     if (!currentUser.isSuccess) {
-      log.error('Failed to get current user', { s3Key });
+      log.error('Failed to get current user', { gcsKey });
       return new Response('Unauthorized', { status: 401 });
     }
     
     // 3. Validate that this is an AI-generated image path
-    if (!s3Key.startsWith('v2/generated-images/')) {
-      log.warn('Invalid image path - not AI generated', { s3Key, userId: currentUser.data.user.id });
+    if (!gcsKey.startsWith('v2/generated-images/')) {
+      log.warn('Invalid image path - not AI generated', { gcsKey, userId: currentUser.data.user.id });
       return new Response('Not Found', { status: 404 });
     }
 
     // 4. Extract conversation ID from path for ownership validation
     // Path format: v2/generated-images/{conversationId}/{filename}
-    const pathParts = s3Key.split('/');
+    const pathParts = gcsKey.split('/');
     if (pathParts.length < 4) {
-      log.warn('Invalid image path format', { s3Key, pathParts });
+      log.warn('Invalid image path format', { gcsKey, pathParts });
       return new Response('Not Found', { status: 404 });
     }
 
@@ -60,7 +60,7 @@ export async function GET(
     // Validate UUID format before database query
     const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
     if (!uuidRegex.test(conversationId)) {
-      log.warn('Invalid conversation ID format in path', { conversationId, s3Key });
+      log.warn('Invalid conversation ID format in path', { conversationId, gcsKey });
       return new Response('Not Found', { status: 404 });
     }
 
@@ -70,7 +70,7 @@ export async function GET(
     const conversation = await getConversationById(conversationId, userId);
 
     if (!conversation) {
-      log.warn('Conversation not found for image access', { conversationId, s3Key, userId });
+      log.warn('Conversation not found for image access', { conversationId, gcsKey, userId });
       return new Response('Not Found', { status: 404 });
     }
     
@@ -83,19 +83,19 @@ export async function GET(
     
     log.info('Image access granted, redirecting to presigned URL', {
       conversationId,
-      s3Key,
+      gcsKey,
       userId
     });
     
     timer({ status: 'success' });
     
     // 7. Generate and redirect to the presigned URL
-    const presignedUrl = await getDocumentSignedUrl({ key: s3Key, expiresIn: 3600 });
+    const presignedUrl = await getDocumentSignedUrl({ key: gcsKey, expiresIn: 3600 });
     return Response.redirect(presignedUrl, 302);
     
   } catch (error) {
     log.error('Image proxy error', { 
-      s3Key,
+      gcsKey,
       error: error instanceof Error ? {
         message: error.message,
         name: error.name,

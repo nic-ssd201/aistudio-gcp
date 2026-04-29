@@ -143,8 +143,8 @@ export async function revalidateSettingsCache(key?: string): Promise<void> {
   }
   
   // Also clear S3 cache when settings are updated
-  const { clearS3Cache } = await import("@/lib/aws/s3-client")
-  clearS3Cache()
+  const { clearGCSCache } = await import("@/lib/gcp/gcs-client")
+  clearGCSCache()
 }
 
 // Helper to get required setting (throws if not found)
@@ -199,10 +199,10 @@ export const Settings = {
   },
 
   // Storage
-  async getS3() {
+  async getGCS() {
     const [bucket, region] = await Promise.all([
-      getSetting('S3_BUCKET') || getSetting('DOCUMENTS_BUCKET_NAME'),
-      getSetting('AWS_REGION') || getSetting('NEXT_PUBLIC_AWS_REGION')
+      getSetting('GCS_BUCKET') || getSetting('DOCUMENTS_BUCKET_NAME'),
+      getSetting('GCP_REGION') || getSetting('GOOGLE_CLOUD_REGION')
     ])
     return { bucket, region }
   },

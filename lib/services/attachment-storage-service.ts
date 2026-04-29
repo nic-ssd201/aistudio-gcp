@@ -2,20 +2,16 @@ import { createLogger } from '@/lib/logger';
 import type { UIMessage } from 'ai';
 import { generateUUID } from '@/lib/utils/uuid';
 import {
-  uploadDocument as uploadDocumentToS3,
-  getObjectStream as getS3ObjectStream,
-} from '@/lib/aws/s3-client';
-import {
   uploadDocument as uploadDocumentToGcs,
   getObjectStream as getGcsObjectStream,
 } from '@/lib/gcp/gcs-client';
 
 const log = createLogger({ service: 'attachment-storage' });
 
-type StorageProvider = 'aws-s3' | 'gcs';
+type StorageProvider = 'gcs';
 
 function getStorageProvider(): StorageProvider {
-  return process.env.STORAGE_PROVIDER === 'gcs' ? 'gcs' : 'aws-s3';
+  return 'gcs';
 }
 
 async function uploadAttachmentObject(params: {
@@ -23,9 +19,7 @@ async function uploadAttachmentObject(params: {
   body: string;
   metadata: Record<string, string>;
 }): Promise<string> {
-  const provider = getStorageProvider();
-  const uploadDocument = provider === 'gcs' ? uploadDocumentToGcs : uploadDocumentToS3;
-  const result = await uploadDocument({
+  const result = await uploadDocumentToGcs({
     userId: 'conversations',
     fileName: params.keyPrefix.replace(/^conversations\//, ''),
     fileContent: params.body,
@@ -37,9 +31,7 @@ async function uploadAttachmentObject(params: {
 }
 
 async function readAttachmentObject(key: string): Promise<string> {
-  const provider = getStorageProvider();
-  const getObjectStream = provider === 'gcs' ? getGcsObjectStream : getS3ObjectStream;
-  const response = await getObjectStream(key);
+  const response = await getGcsObjectStream(key);
 
   const chunks: Buffer[] = [];
   for await (const chunk of response.stream) {
@@ -50,7 +42,7 @@ async function readAttachmentObject(key: string): Promise<string> {
 }
 
 export interface AttachmentMetadata {
-  s3Key: string;
+  gcsKey: string;
   originalName: string;
   contentType: string;
   size: number;
@@ -69,23 +61,21 @@ export interface AttachmentContent {
 
 export interface StoredAttachment {
   type: 'image' | 'document' | 'file';
-  s3Key: string;
+  gcsKey: string;
   originalContent: AttachmentContent;
   metadata: AttachmentMetadata;
 }
 
 /**
- * Store attachment content in the configured object store with conversation-scoped keys.
- * `s3Key` remains the external field name for backward compatibility.
+ * Store attachment content in GCS with conversation-scoped keys.
  */
-export async function storeAttachmentInS3(
+export async function storeAttachmentInGCS(
   conversationId: string,
   messageId: string,
   attachment: AttachmentContent,
   attachmentIndex: number
 ): Promise<AttachmentMetadata> {
   try {
-    const provider = getStorageProvider();
     const attachmentId = attachment.id || generateUUID();
     const sanitizedName = sanitizeFileName(attachment.name || 'attachment');
 
@@ -107,7 +97,7 @@ export async function storeAttachmentInS3(
         name: attachment.name,
         contentType: attachment.contentType
       };
-    } else {
+     } else {
       throw new Error(`Unsupported attachment type: ${attachment.type}`);
     }
 
@@ -123,66 +113,65 @@ export async function storeAttachmentInS3(
         originalName: sanitizedName,
         attachmentType: attachment.type,
       },
-    });
+     });
 
-    log.info('Attachment stored in object storage', {
-      provider,
+    log.info('Attachment stored in GCS', {
+      provider: 'gcs',
       conversationId,
       messageId,
       attachmentId,
-      s3Key: objectKey,
+      gcsKey: objectKey,
       size: serializedContent.length
-    });
+     });
 
     return {
-      s3Key: objectKey,
+      gcsKey: objectKey,
       originalName: attachment.name || 'attachment',
       contentType: attachment.contentType || 'application/octet-stream',
       size: serializedContent.length,
       attachmentId
-    };
+     };
 
   } catch (error) {
-    log.error('Failed to store attachment in object storage', {
-      provider: getStorageProvider(),
+    log.error('Failed to store attachment in GCS', {
+      provider: 'gcs',
       conversationId,
       messageId,
       error: error instanceof Error ? error.message : String(error)
-    });
+     });
     throw new Error(`Failed to store attachment: ${error instanceof Error ? error.message : 'Unknown error'}`);
   }
 }
 
 /**
- * Retrieve attachment content from the configured object store.
+ * Retrieve attachment content from GCS.
  */
-export async function getAttachmentFromS3(s3Key: string): Promise<AttachmentContent> {
+export async function getAttachmentFromGCS(gcsKey: string): Promise<AttachmentContent> {
   try {
-    const provider = getStorageProvider();
-    const bodyText = await readAttachmentObject(s3Key);
+    const bodyText = await readAttachmentObject(gcsKey);
     const attachmentData = JSON.parse(bodyText) as AttachmentContent;
 
-    log.info('Attachment retrieved from object storage', {
-      provider,
-      s3Key,
+    log.info('Attachment retrieved from GCS', {
+      provider: 'gcs',
+      gcsKey,
       type: attachmentData.type,
       size: bodyText.length
-    });
+     });
 
     return attachmentData;
 
   } catch (error) {
-    log.error('Failed to retrieve attachment from object storage', {
-      provider: getStorageProvider(),
-      s3Key,
+    log.error('Failed to retrieve attachment from GCS', {
+      provider: 'gcs',
+      gcsKey,
       error: error instanceof Error ? error.message : String(error)
-    });
+     });
     throw new Error(`Failed to retrieve attachment: ${error instanceof Error ? error.message : 'Unknown error'}`);
   }
 }
 
 /**
- * Process messages to extract and store attachments in object storage.
+ * Process messages to extract and store attachments in GCS.
  * Returns lightweight messages with object-key references.
  */
 export async function processMessagesWithAttachments(
@@ -202,58 +191,58 @@ export async function processMessagesWithAttachments(
       for (const part of message.parts) {
         const partData = part as { type: string; image?: string; data?: string; content?: string; name?: string; mediaType?: string; [key: string]: unknown };
         if (partData.type === 'image' && partData.image) {
-          const metadata = await storeAttachmentInS3(
+          const metadata = await storeAttachmentInGCS(
             conversationId,
             messageId,
             partData as AttachmentContent,
             attachmentIndex++
-          );
+           );
 
           attachmentReferences.push(metadata);
 
           lightweightParts.push({
             type: 'image' as const,
-            image: `s3://${metadata.s3Key}`,
-            s3Key: metadata.s3Key,
+            image: `gs://${metadata.gcsKey}`,
+            gcsKey: metadata.gcsKey,
             attachmentId: metadata.attachmentId
-          } as any); // eslint-disable-line @typescript-eslint/no-explicit-any
-        } else if ((partData.type === 'document' || partData.type === 'file') && (partData.data || partData.content)) {
-          const metadata = await storeAttachmentInS3(
+           } as any); // eslint-disable-line @typescript-eslint/no-explicit-any
+         } else if ((partData.type === 'document' || partData.type === 'file') && (partData.data || partData.content)) {
+          const metadata = await storeAttachmentInGCS(
             conversationId,
             messageId,
             partData as AttachmentContent,
             attachmentIndex++
-          );
+           );
 
           attachmentReferences.push(metadata);
 
           lightweightParts.push({
             type: 'file' as const,
-            url: `s3://${metadata.s3Key}`,
+            url: `gs://${metadata.gcsKey}`,
             mediaType: partData.mediaType || 'application/octet-stream',
             filename: partData.name,
-            s3Key: metadata.s3Key,
+            gcsKey: metadata.gcsKey,
             attachmentId: metadata.attachmentId
-          } as any); // eslint-disable-line @typescript-eslint/no-explicit-any
-        } else {
+           } as any); // eslint-disable-line @typescript-eslint/no-explicit-any
+         } else {
           lightweightParts.push(part);
-        }
-      }
+         }
+       }
 
       lightweightMessages.push({
-        ...message,
+         ...message,
         parts: lightweightParts
-      });
-    } else {
+       });
+     } else {
       lightweightMessages.push(message);
-    }
-  }
+     }
+   }
 
   return { lightweightMessages, attachmentReferences };
 }
 
 /**
- * Reconstruct full messages with attachment data from object storage.
+ * Reconstruct full messages with attachment data from GCS.
  */
 export async function reconstructMessagesWithAttachments(
   lightweightMessages: UIMessage[],
@@ -269,27 +258,27 @@ export async function reconstructMessagesWithAttachments(
         if (part.type === 'text' && typeof part.text === 'string' && part.text.startsWith('[Image:') && part.text.includes('conversation context')) {
           const matchingAttachment = attachmentReferences.find(ref =>
             part.text && part.text.includes(ref.originalName)
-          );
+           );
 
           if (matchingAttachment) {
-            const attachmentData = await getAttachmentFromS3(matchingAttachment.s3Key);
+            const attachmentData = await getAttachmentFromGCS(matchingAttachment.gcsKey);
             fullParts.push(attachmentData);
-          } else {
+           } else {
             fullParts.push(part);
-          }
-        } else {
+           }
+         } else {
           fullParts.push(part);
-        }
-      }
+         }
+       }
 
       fullMessages.push({
-        ...message,
+         ...message,
         parts: fullParts as UIMessage['parts']
-      });
-    } else {
+       });
+     } else {
       fullMessages.push(message);
-    }
-  }
+     }
+   }
 
   return fullMessages;
 }
