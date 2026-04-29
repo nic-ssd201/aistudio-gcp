@@ -269,6 +269,7 @@ describe('GCS Client', () => {
     beforeEach(() => {
       mockFile.save.mockResolvedValue(undefined);
       mockBucket.exists.mockResolvedValue([true]);
+      mockFile.getSignedUrl.mockResolvedValue(['https://storage.googleapis.com/test-bucket/key?sig=test']);
      });
 
     it('should generate unique keys for same filename', async () => {
