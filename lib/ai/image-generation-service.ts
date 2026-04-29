@@ -3,7 +3,7 @@
  *
  * Handles image generation for both OpenAI and Google providers with:
  * - Provider-specific API handling (generateImage vs generateText)
- * - S3 storage for generated images
+ * - GCS storage for generated images
  * - Proper error handling for rate limits, content policy, etc.
  *
  * @see Issue #614 - Implement image generation API integration in Nexus chat
@@ -12,12 +12,10 @@
 import { experimental_generateImage as generateImage, generateText, type LanguageModel } from 'ai';
 import { createOpenAI } from '@ai-sdk/openai';
 import { createGoogleGenerativeAI } from '@ai-sdk/google';
-import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
-import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
-import { GetObjectCommand } from '@aws-sdk/client-s3';
 import { createLogger, generateRequestId } from '@/lib/logger';
 import { Settings } from '@/lib/settings-manager';
 import { ErrorFactories } from '@/lib/error-utils';
+import { getGcsClient } from '@/lib/gcp/gcs-client';
 
 // Type for OpenAI image size
 type OpenAIImageSize = '256x256' | '512x512' | '1024x1024' | '1792x1024' | '1024x1792';
@@ -34,26 +32,18 @@ interface GeminiGenerateTextResult {
 
 const log = createLogger({ module: 'image-generation-service' });
 
-// Cache S3 client to avoid repeated async calls
-let s3ClientCache: S3Client | null = null;
-let s3RegionCache: string | null = null;
 
-// Get or create S3 client (reads region from Settings)
-async function getS3Client(): Promise<S3Client> {
-  if (s3ClientCache) {
-    return s3ClientCache;
-  }
+// Cache GCS client to avoid repeated async calls
+let gcsClientCache: ReturnType<typeof getGcsClient> | null = null;
 
-  // Get region from Settings (reads AWS_REGION from database)
-  const s3Config = await Settings.getS3();
-  s3RegionCache = s3Config.region || 'us-west-2';
-
-  s3ClientCache = new S3Client({
-    region: s3RegionCache,
-  });
-
-  log.debug('S3 client initialized', { region: s3RegionCache });
-  return s3ClientCache;
+// Get or create GCS Storage client
+async function getStorageClient(): Promise<ReturnType<typeof getGcsClient>> {
+  if (gcsClientCache) {
+    return gcsClientCache;
+   }
+  gcsClientCache = getGcsClient();
+  log.debug('GCS Storage client initialized');
+  return gcsClientCache;
 }
 
 /**
@@ -63,9 +53,9 @@ async function getS3Client(): Promise<S3Client> {
 export interface ReferenceImage {
   /** Base64 encoded image data (data URL format: data:image/png;base64,...) */
   base64?: string;
-  /** S3 presigned URL for the image */
+  /** GCS signed URL for the image */
   url?: string;
-  /** S3 key for retrieving the image */
+  /** GCS object key for retrieving the image */
   s3Key?: string;
   /** MIME type of the image */
   mimeType?: string;
@@ -294,7 +284,7 @@ async function generateWithOpenAI(
     }
 
     // Store in S3
-    const s3Result = await storeImageInS3({
+    const gcsResult = await storeImageInGCS({
       imageBuffer,
       conversationId: request.conversationId,
       userId: request.userId,
@@ -307,8 +297,8 @@ async function generateWithOpenAI(
     const estimatedCost = getOpenAICost(request.modelId, request.size, request.quality);
 
     return {
-      imageUrl: s3Result.presignedUrl,
-      s3Key: s3Result.s3Key,
+      imageUrl: gcsResult.presignedUrl,
+      s3Key: gcsResult.gcsKey,
       provider: 'openai',
       model: request.modelId,
       dimensions: parseDimensions(request.size || '1024x1024'),
@@ -491,7 +481,7 @@ async function generateWithGemini(
     const imageBuffer = Buffer.from(imageData);
 
     // Store in S3
-    const s3Result = await storeImageInS3({
+    const gcsResult = await storeImageInGCS({
       imageBuffer,
       conversationId: request.conversationId,
       userId: request.userId,
@@ -501,8 +491,8 @@ async function generateWithGemini(
     });
 
     return {
-      imageUrl: s3Result.presignedUrl,
-      s3Key: s3Result.s3Key,
+      imageUrl: gcsResult.presignedUrl,
+      s3Key: gcsResult.gcsKey,
       provider: 'google',
       model: request.modelId,
       altText: result.text, // Gemini always returns text description
@@ -534,66 +524,61 @@ async function generateWithGemini(
 }
 
 /**
- * Store generated image in S3 and return presigned URL
+ * Store generated image in GCS and return presigned URL
  */
-async function storeImageInS3(params: {
+async function storeImageInGCS(params: {
   imageBuffer: Buffer;
   conversationId: string;
   userId: string;
   provider: string;
   modelId: string;
   contentType: string;
-}): Promise<{ s3Key: string; presignedUrl: string }> {
+}): Promise<{ gcsKey: string; presignedUrl: string }> {
   const bucket = getDocumentsBucket();
   const timestamp = Date.now();
   const sanitizedModelId = params.modelId.replace(/[^\dA-Za-z-]/g, '-');
 
-  // Create S3 key with proper path structure
-  const s3Key = `v2/generated-images/${params.conversationId}/${timestamp}-${sanitizedModelId}.png`;
 
-  // Get S3 client (reads region from Settings)
-  const s3Client = await getS3Client();
+   // Create GCS object key with proper path structure
+  const gcsKey = `v2/generated-images/${params.conversationId}/${timestamp}-${sanitizedModelId}.png`;
+
+   // Get GCS client (uses ADC on Cloud Run, GOOGLE_APPLICATION_CREDENTIALS locally)
+  const storage = await getStorageClient();
+  const file = storage.bucket(bucket).file(gcsKey);
 
   try {
-    // Upload to S3
-    await s3Client.send(new PutObjectCommand({
-      Bucket: bucket,
-      Key: s3Key,
-      Body: params.imageBuffer,
-      ContentType: params.contentType,
-      Metadata: {
+     // Upload to GCS
+    await file.save(params.imageBuffer, {
+      contentType: params.contentType,
+      metadata: {
         conversationId: params.conversationId,
         userId: params.userId,
         provider: params.provider,
         modelId: params.modelId,
         generatedAt: new Date().toISOString()
-      }
-    }));
+         }
+        });
 
-    log.debug('Image stored in S3', { s3Key, size: params.imageBuffer.length });
+    log.debug('Image stored in GCS', { gcsKey, size: params.imageBuffer.length });
 
-    // Generate presigned URL (valid for 1 hour — only needs to survive the streaming response;
-    // subsequent loads refresh via the messages API)
-    const presignedUrl = await getSignedUrl(
-      s3Client,
-      new GetObjectCommand({
-        Bucket: bucket,
-        Key: s3Key
-      }),
-      { expiresIn: 60 * 60 } // 1 hour
-    );
+     // Generate signed URL (valid for 1 hour — only needs to survive the streaming response;
+     // subsequent loads refresh via the messages API)
+    const [presignedUrl] = await file.getSignedUrl({
+      version: 'v4',
+      action: 'read',
+      expires: Date.now() + 60 * 60 * 1000
+        });
 
-    return { s3Key, presignedUrl };
+    return { gcsKey, presignedUrl };
 
-  } catch (error) {
-    log.error('Failed to store image in S3', {
-      s3Key,
+   } catch (error) {
+    log.error('Failed to store image in GCS', {
+      gcsKey,
       error: error instanceof Error ? error.message : String(error)
-    });
+        });
     throw createImageError('STORAGE_ERROR', 'Failed to store generated image');
-  }
+   }
 }
-
 /**
  * Create a typed image generation error
  */

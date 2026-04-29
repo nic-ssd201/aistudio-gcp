@@ -44,7 +44,7 @@ function getGcsConfig() {
   return gcsConfigCache
 }
 
-function getGcsClient(): Storage {
+export function getGcsClient(): Storage {
   if (gcsClientCache) return gcsClientCache
   const { projectId } = getGcsConfig()
   // In Cloud Run this uses the runtime service account via ADC.
