@@ -209,7 +209,10 @@ export function ConnectorFormSheet({ server, onSuccess }: Props) {
             <SelectItem value="oauth">OAuth</SelectItem>
             <SelectItem value="api_key">API Key</SelectItem>
             <SelectItem value="jwt">JWT</SelectItem>
-            <SelectItem value="cognito_passthrough">Cognito Passthrough</SelectItem>
+            {/* Label updated to "Session Passthrough" — the DB enum value
+                "cognito_passthrough" is a historical misnomer; full rename
+                tracked in nic-ssd201/aistudio-gcp#8. */}
+            <SelectItem value="cognito_passthrough">Session Passthrough</SelectItem>
           </SelectContent>
         </Select>
       </div>

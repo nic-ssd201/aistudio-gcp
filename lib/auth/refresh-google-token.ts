@@ -127,7 +127,9 @@ async function doRefresh(token: JWT, log: ReturnType<typeof createLogger>): Prom
       idToken: tokens.id_token,
       // Google may rotate the refresh token on security events — preserve the
       // new one when present; fall back to the existing token otherwise.
-      refreshToken: tokens.refresh_token ?? token.refreshToken,
+      // Using `||` (not `??`) so an empty-string rotation result is also treated
+      // as absent — Google shouldn't return `""`, but `||` is free defense-in-depth.
+      refreshToken: tokens.refresh_token || token.refreshToken,
       // `?? 3600` handles a missing expires_in (default 1 hour).
       // `Math.max(..., 60)` is a floor guard — 60 s is not the default, just
       // the minimum allowed so a zero/malformed value doesn't cause an

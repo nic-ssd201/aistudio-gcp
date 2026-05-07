@@ -173,6 +173,9 @@ export function validateJobOwnership(
  * If strict immediate propagation is required in the future, call this from
  * the role-change server action (e.g. `updateUserRoles`) with the affected
  * user's `sub` value.
+ *
+ * @deprecated Currently unwired — the 5-min TTL staleness is accepted. Wire
+ * this up (or delete it) if strict immediate revocation becomes a requirement.
  */
 export function invalidateUserSessions(userSub: string): void {
   const cacheKey = `session:${userSub}`;

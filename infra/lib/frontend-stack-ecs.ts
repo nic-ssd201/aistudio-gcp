@@ -141,7 +141,7 @@ export class FrontendStackEcs extends cdk.Stack {
       // rdsResourceArn, and rdsSecretArn are AWS/Cognito artefacts that have
       // no effect in the GCP deployment. This AWS CDK stack is not used by the
       // fork; do not trust it for the active Cloud Run deployment.
-      // See nic-ssd201/aistudio-gcp#6.
+      // See nic-ssd201/aistudio-gcp#8.
       cognitoClientId: cdk.Fn.importValue(`${environment}-CognitoUserPoolClientId`),
       cognitoIssuer: `https://cognito-idp.${this.region}.amazonaws.com/${cdk.Fn.importValue(`${environment}-CognitoUserPoolId`)}`,
       rdsResourceArn: ssm.StringParameter.valueForStringParameter(this, `/aistudio/${environment}/db-cluster-arn`),

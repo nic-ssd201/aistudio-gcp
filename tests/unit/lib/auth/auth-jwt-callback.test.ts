@@ -337,6 +337,110 @@ describe("signIn() callback — email-verification gate", () => {
   })
 })
 
+// ── session() callback ────────────────────────────────────────────────────────
+
+/** Minimal NextAuth Session shape expected by the session callback. */
+function makeSession() {
+  return {
+    user: { id: "", email: "", name: "", givenName: null as string | null, familyName: null as string | null },
+    accessToken: "",
+    idToken: "",
+    expires: new Date(Date.now() + 3600 * 1000).toISOString(),
+  }
+}
+
+describe("session() callback", () => {
+  it("returns the populated session when token is valid", async () => {
+    const token: JWT = {
+      sub: "google-sub-789",
+      email: "user@example.com",
+      given_name: "Alice",
+      family_name: "Smith",
+      name: "Alice Smith",
+      accessToken: "at-xyz",
+      idToken: "it-xyz",
+      expiresAt: Date.now() + 3600 * 1000,
+      provider: "google",
+    }
+
+    const result = (await callbacks.session!({
+      session: makeSession() as AnyAccount,
+      token,
+      user: { id: "", email: "", emailVerified: null },
+      newSession: undefined,
+      trigger: "update",
+    })) as AnyAccount
+
+    expect(result.user.id).toBe("google-sub-789")
+    expect(result.user.email).toBe("user@example.com")
+    expect(result.user.name).toBe("Alice") // givenName takes precedence
+    expect(result.accessToken).toBe("at-xyz")
+    expect(result.idToken).toBe("it-xyz")
+  })
+
+  it("falls back through name chain: fullName when givenName absent", async () => {
+    const token: JWT = {
+      sub: "s",
+      email: "u@example.com",
+      name: "Full Name",
+      // given_name intentionally absent
+      expiresAt: Date.now() + 3600 * 1000,
+      provider: "google",
+    }
+    const result = (await callbacks.session!({
+      session: makeSession() as AnyAccount,
+      token,
+      user: { id: "", email: "", emailVerified: null },
+      newSession: undefined,
+      trigger: "update",
+    })) as AnyAccount
+    expect(result.user.name).toBe("Full Name")
+  })
+
+  it("falls back to email when all name fields are absent", async () => {
+    const token: JWT = {
+      sub: "s",
+      email: "fallback@example.com",
+      // given_name, name, preferred_username, family_name all absent
+      expiresAt: Date.now() + 3600 * 1000,
+      provider: "google",
+    }
+    const result = (await callbacks.session!({
+      session: makeSession() as AnyAccount,
+      token,
+      user: { id: "", email: "", emailVerified: null },
+      newSession: undefined,
+      trigger: "update",
+    })) as AnyAccount
+    expect(result.user.name).toBe("fallback@example.com")
+  })
+
+  it("returns an empty-user sentinel when the token is expired", async () => {
+    // The jwt() callback refreshes tokens before session() is called, so an
+    // expired token here is unusual — but the session callback handles it
+    // defensively by returning a sentinel object with empty strings so
+    // downstream `if (session?.user?.id)` checks correctly evaluate to false.
+    const token: JWT = {
+      sub: "s",
+      email: "user@example.com",
+      expiresAt: Date.now() - 60 * 1000, // 1 minute ago
+      provider: "google",
+    }
+    const result = (await callbacks.session!({
+      session: makeSession() as AnyAccount,
+      token,
+      user: { id: "", email: "", emailVerified: null },
+      newSession: undefined,
+      trigger: "update",
+    })) as AnyAccount
+    // Sentinel: all identity fields are empty strings so auth guards fail closed.
+    expect(result.user.id).toBe("")
+    expect(result.user.email).toBe("")
+    expect(result.accessToken).toBe("")
+    expect(result.idToken).toBe("")
+  })
+})
+
 // ── redirect() callback — malformed URL hardening ────────────────────────────
 
 describe("redirect() callback — URL handling", () => {

@@ -490,7 +490,7 @@ export class EcsServiceConstruct extends Construct {
         // AUTH_COGNITO_*, RDS_RESOURCE_ARN, RDS_SECRET_ARN) are AWS/Cognito
         // artefacts that have no effect in the GCP deployment. This entire AWS
         // CDK infrastructure layer is unused by the fork; do not trust these
-        // stack files for the active deployment. See nic-ssd201/aistudio-gcp#6.
+        // stack files for the active deployment. See nic-ssd201/aistudio-gcp#8.
         RDS_DATABASE_NAME: 'aistudio',
         AUTH_URL: props.authUrl,
         AUTH_COGNITO_CLIENT_ID: props.cognitoClientId,
@@ -524,7 +524,7 @@ export class EcsServiceConstruct extends Construct {
         SQL_LOGGING: 'false',
         // DEAD CODE — SSD201 GCP fork: NEXT_PUBLIC_COGNITO_* and COGNITO_*
         // variables below are AWS Cognito artefacts unused in the GCP deployment.
-        // See nic-ssd201/aistudio-gcp#6.
+        // See nic-ssd201/aistudio-gcp#8.
         NEXT_PUBLIC_COGNITO_CLIENT_ID: props.cognitoClientId,
         NEXT_PUBLIC_COGNITO_USER_POOL_ID: cdk.Fn.importValue(`${environment}-CognitoUserPoolId`),
         NEXT_PUBLIC_COGNITO_DOMAIN: `aistudio-${environment}.auth.${cdk.Stack.of(this).region}.amazoncognito.com`,
