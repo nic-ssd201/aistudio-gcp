@@ -4,6 +4,7 @@ import type { NextAuthConfig } from "next-auth"
 import type { JWT } from "next-auth/jwt"
 import { createLogger } from "@/lib/auth/edge-logger"
 import { refreshGoogleToken } from "@/lib/auth/refresh-google-token"
+import { hasVerifiedGoogleEmail } from "@/lib/auth/google-email-guard"
 
 export const authConfig: NextAuthConfig = {
   providers: [
@@ -124,10 +125,15 @@ export const authConfig: NextAuthConfig = {
           const expiresAt = account.expires_at ? account.expires_at * 1000 : now + (12 * 60 * 60 * 1000) // 12 hours fallback
           const tokenLifetimeMs = 12 * 60 * 60 * 1000 // 12 hours
 
+          // Carry given_name / family_name from `user` or `profile` so the
+          // session-callback name chain (token.given_name || token.name || …)
+          // has the same fields available on the fallback path as on the happy path.
           const fallbackToken: JWT = {
             sub: account.providerAccountId,
             email: user?.email || profile?.email || undefined,
             name: user?.name || profile?.name || undefined,
+            given_name: (profile as { given_name?: string } | undefined)?.given_name || undefined,
+            family_name: (profile as { family_name?: string } | undefined)?.family_name || undefined,
             accessToken: account.access_token,
             refreshToken: account.refresh_token,
             idToken: account.id_token,
@@ -289,14 +295,17 @@ export const authConfig: NextAuthConfig = {
     },
     async signIn({ account, profile }) {
       // Reject sign-ins from Google accounts with unverified emails.
-      // Using `!== true` (not `=== false`) so a missing/malformed claim is
-      // also rejected — defense-in-depth against a future provider that omits
-      // the field. Without this check, an unverified account could collide with
-      // an existing user record via resolveUserId's email-fallback path.
-      if (account?.provider === 'google' && profile?.email_verified !== true) {
+      // hasVerifiedGoogleEmail uses `=== true` so absent/stringified/"false"
+      // claims all fail — defense-in-depth against resolveUserId's email-fallback
+      // path potentially fusing an unverified account into an existing user record.
+      if (account?.provider === 'google' && !hasVerifiedGoogleEmail(profile)) {
         const log = createLogger({ context: "auth-signin-callback" })
+        // Mask most of the local-part before logging — email is PII even in warn logs.
+        const maskedEmail = profile?.email
+          ? profile.email.replace(/^(.{3}).*(@.*)$/, '$1***$2')
+          : undefined
         log.warn("Sign-in rejected: Google email not verified", {
-          email: profile?.email,
+          email: maskedEmail,
           emailVerified: profile?.email_verified,
         })
         return false;

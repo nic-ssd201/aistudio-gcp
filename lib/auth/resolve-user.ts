@@ -53,7 +53,8 @@ export async function resolveUserId(
 
   // Slow path: provision the user
   log.info("User not found by OIDC sub — provisioning", {
-    // Note: the DB column is still named cognito_sub; rename tracked in follow-up
+    // Note: the DB column is still named cognito_sub; rename tracked in
+    // nic-ssd201/aistudio-gcp#8 (col rename cognito_sub → auth_sub).
     sub: sanitizeForLogging(session.sub),
     hasEmail: !!session.email,
   })
@@ -69,7 +70,7 @@ export async function resolveUserId(
         })
         // MUST explicitly update cognitoSub column — createUser UPSERT conflicts on
         // that column, not email. Without this call a duplicate row is inserted.
-        // Column rename to oidc_sub / auth_sub is tracked as a follow-up migration.
+        // Column rename to auth_sub tracked in nic-ssd201/aistudio-gcp#8.
         // Mirrors getCurrentUserAction.ts:100
         await updateUser(byEmail.id, { cognitoSub: session.sub })
         return byEmail.id
