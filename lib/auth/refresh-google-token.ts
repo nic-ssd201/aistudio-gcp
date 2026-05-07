@@ -17,6 +17,7 @@
 
 import type { JWT } from "next-auth/jwt"
 import { createLogger } from "@/lib/auth/edge-logger"
+import { getRefreshThresholdMs } from "@/lib/auth/token-refresh-config"
 
 /**
  * In-process deduplication map: sub → in-flight refresh Promise.
@@ -193,23 +194,17 @@ async function doRefresh(token: JWT, log: ReturnType<typeof createLogger>): Prom
     // another refresh on the very next jwt() callback — a misbehaving upstream
     // returning a tiny expires_in causes a hot-loop against Google's token endpoint.
     //
-    // MIN_EXPIRES_IN is derived from TOKEN_REFRESH_THRESHOLD_MS (the same value
-    // auth.ts uses for the proactive-refresh look-ahead) so that an operator who
-    // raises the threshold above the default 300 s doesn't inadvertently re-introduce
-    // the hot-loop for tokens whose expires_in falls between 300 s and their custom
-    // threshold.  Math.max(300, …) preserves the absolute lower bound: Google's
-    // documented access-token lifetime is 3600 s and < 300 s is structurally abnormal
-    // regardless of any threshold setting.
+    // MIN_EXPIRES_IN is set to max(300, thresholdSeconds) where thresholdSeconds
+    // is derived from the configured TOKEN_REFRESH_THRESHOLD_MS (via the shared
+    // getRefreshThresholdMs() helper in lib/auth/token-refresh-config.ts).
     //
-    // Parsing rules mirror auth.ts: parseInt + isFinite guard + 60 000 ms floor.
-    // If the env var is absent, malformed, or below the 60 s floor, we fall back
-    // to the 300 s default (same behaviour as auth.ts).
-    const thresholdRaw = process.env.TOKEN_REFRESH_THRESHOLD_MS
-    const thresholdMs = Number.parseInt(thresholdRaw ?? '300000', 10)
-    const thresholdS = Number.isFinite(thresholdMs) && thresholdMs >= 60_000
-      ? Math.round(thresholdMs / 1000)
-      : 300 // default 5 min
-    const MIN_EXPIRES_IN = Math.max(300, thresholdS) // seconds
+    // The Math.max(300, …) floor is an absolute lower bound independent of any
+    // operator configuration: Google's documented access-token lifetime is 3600 s
+    // and < 300 s is structurally abnormal regardless of the threshold setting.
+    // An operator who raises the threshold above the default 300 s still gets
+    // the higher value enforced, preventing the hot-loop for tokens whose
+    // expires_in falls between 300 s and their custom threshold.
+    const MIN_EXPIRES_IN = Math.max(300, Math.round(getRefreshThresholdMs() / 1000)) // seconds
     const expiresIn = tokens.expires_in ?? 0
     if (expiresIn < MIN_EXPIRES_IN) {
       log.warn("Google token refresh returned unexpectedly short expires_in — treating as failure", {

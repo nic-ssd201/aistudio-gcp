@@ -117,7 +117,9 @@ export function validateEnv(): { isValid: boolean; missing: string[]; warnings: 
   }
 
   // TOKEN_REFRESH_THRESHOLD_MS: warn at startup when the value is set but rejected
-  // by the 60 s floor so operators discover misconfiguration at deploy time.
+  // by the 60 000 ms floor so operators discover misconfiguration at deploy time.
+  // Parsing rules are centralised in lib/auth/token-refresh-config.ts (getRefreshThresholdMs);
+  // this block only needs to detect the "value was provided but invalid" case for the warning.
   const thresholdRaw = process.env.TOKEN_REFRESH_THRESHOLD_MS;
   if (thresholdRaw !== undefined && thresholdRaw !== '') {
     const thresholdMs = Number.parseInt(thresholdRaw, 10);

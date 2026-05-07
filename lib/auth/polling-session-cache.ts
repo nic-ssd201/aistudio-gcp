@@ -40,7 +40,11 @@ export class PollingSessionCache {
   }
 
   /**
-   * Get cached session for a user, bypassing auth checks if valid
+   * Get cached session for a user, bypassing auth checks if valid.
+   *
+   * **Side effect**: increments `entry.requestCount` on every cache hit for
+   * metrics purposes.  The returned object is the live cache entry (not a copy),
+   * so callers must not mutate it.
    */
   getCachedSession(sessionId: string): CachedSession | null {
     const cached = this.cache.get(sessionId);

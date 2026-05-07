@@ -5,6 +5,7 @@ import type { JWT } from "next-auth/jwt"
 import { createLogger } from "@/lib/auth/edge-logger"
 import { refreshGoogleToken } from "@/lib/auth/refresh-google-token"
 import { hasVerifiedGoogleEmail } from "@/lib/auth/google-email-guard"
+import { getRefreshThresholdMs } from "@/lib/auth/token-refresh-config"
 
 // Log the effective Google prompt mode at module load so operators can confirm
 // what they actually got (consent vs select_account) without reading source code.
@@ -219,10 +220,8 @@ export const authConfig: NextAuthConfig = {
       // TOKEN_REFRESH_THRESHOLD_MS (milliseconds) if long-running streaming or
       // scheduled-execution paths take >5 min between JWT-callback invocations.
       // Floor: 60 s — prevents accidentally disabling proactive refresh.
-      const envThreshold = Number.parseInt(process.env.TOKEN_REFRESH_THRESHOLD_MS ?? '', 10)
-      const REFRESH_THRESHOLD_MS = Number.isFinite(envThreshold) && envThreshold >= 60_000
-        ? envThreshold
-        : 5 * 60 * 1000
+      // Parsing is centralised in lib/auth/token-refresh-config.ts.
+      const REFRESH_THRESHOLD_MS = getRefreshThresholdMs()
       const shouldRefresh = (expiresAt - now) < REFRESH_THRESHOLD_MS
 
       log.debug("Token status check", {
@@ -289,12 +288,15 @@ export const authConfig: NextAuthConfig = {
         return session; // Return empty session instead of null
       }
 
-      // Send properties to the client
-      const givenName = token.given_name as string;
-      const familyName = token.family_name as string;
-      const fullName = token.name as string;
-      const preferredUsername = token.preferred_username as string;
-      const email = token.email as string;
+      // Send properties to the client.
+      // token fields are string | undefined per next-auth.d.ts; cast to
+      // `string | undefined` so downstream code that uses `|| fallback` works
+      // correctly without accidentally treating `undefined` as a string.
+      const givenName = token.given_name as string | undefined;
+      const familyName = token.family_name as string | undefined;
+      const fullName = token.name as string | undefined;
+      const preferredUsername = token.preferred_username as string | undefined;
+      const email = token.email as string | undefined;
 
       // Use given_name as display name, with multiple fallbacks
       const displayName = givenName || fullName || preferredUsername || familyName || email;
@@ -302,7 +304,11 @@ export const authConfig: NextAuthConfig = {
       session.user = {
         ...session.user,
         id: token.sub as string,
-        email: email,
+        // `email` is string | undefined after the cast fix; NextAuth's User type
+        // requires string here.  Use ?? '' as a safe fallback — a missing email
+        // is already rejected by hasVerifiedGoogleEmail() in signIn(), so reaching
+        // the session callback with no email is theoretically unreachable.
+        email: email ?? '',
         name: displayName,
         givenName: givenName || null,
         familyName: familyName || null,
@@ -435,7 +441,12 @@ export const authConfig: NextAuthConfig = {
   // set from a non-HTTPS origin, closing the sibling-subdomain-XSS cookie-
   // overwrite vector. A custom `cookies` block would need to replicate this
   // prefix logic manually; removing it gets the protection for free.
-  debug: false, // Disabled to suppress CHUNKING_SESSION_COOKIE warnings (#361)
+  // debug: false suppresses NextAuth's CHUNKING_SESSION_COOKIE warnings (#361).
+  // To enable verbose NextAuth debug output during local development without
+  // touching this file, set AUTH_DEBUG=true in .env.local:
+  //   debug: process.env.NODE_ENV === 'development' && process.env.AUTH_DEBUG === 'true',
+  // Keeping it unconditionally false in source prevents accidental production enablement.
+  debug: false,
 }
 
 // Factory function - creates new instance per request

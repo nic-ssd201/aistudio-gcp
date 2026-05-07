@@ -23,6 +23,18 @@ import { test, expect } from '@playwright/test'
 
 test.describe('Sign-out page — unauthenticated context', () => {
   test('renders the signing-out message and makes the CSRF-protected POST to /api/auth/signout', async ({ page }) => {
+    // Mock the NextAuth CSRF endpoint so signOut() can obtain a csrfToken without
+    // a live auth server.  NextAuth's signOut() fetches /api/auth/csrf first (GET)
+    // to retrieve the token for the double-submit CSRF check, then POSTs to
+    // /api/auth/signout with that token in the body.
+    await page.route('/api/auth/csrf', (route) => {
+      route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ csrfToken: 'test-csrf-token' }),
+      })
+    })
+
     // Mock the NextAuth signout endpoint so we don't need a live auth server.
     // NextAuth's POST /api/auth/signout returns a redirect to callbackUrl.
     await page.route('/api/auth/signout', (route) => {
@@ -64,6 +76,18 @@ test.describe('Sign-out page — unauthenticated context', () => {
     const noscriptForms = page.locator('noscript form')
     await expect(noscriptForms).toHaveCount(0)
   })
+
+  // NOTE — secondary auth cookies (PKCE code_verifier, OAuth state, OIDC nonce)
+  // are set by NextAuth during the authorization request and are scoped to the
+  // /api/auth/ path.  NextAuth v5 sets them as HttpOnly, SameSite=Lax cookies
+  // that expire after the authorization code exchange completes (typically within
+  // seconds).  They are NOT cleared by signOut() because they are transient
+  // per-authorization-request cookies, not long-lived session cookies.  In
+  // practice they will already be expired (or cleared by the browser after the
+  // tab closes) long before a user clicks sign-out.  If explicit clearing of
+  // PKCE/state/nonce cookies ever becomes a hard requirement, add a signout
+  // route handler that calls response.cookies.delete() on each before delegating
+  // to NextAuth's signOut().
 })
 
 test.describe('Sign-out — authenticated golden path', () => {
