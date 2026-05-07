@@ -55,7 +55,7 @@ export async function getServerSession(): Promise<UserSession | null> {
       givenName: session.user.givenName || undefined,
       familyName: session.user.familyName || undefined,
       idToken: session.idToken || undefined,
-      iat: session.iat || undefined,
+      iat: typeof session.iat === 'number' ? session.iat : undefined,
     };
   } catch (error) {
     logger.error("Session retrieval failed:", {

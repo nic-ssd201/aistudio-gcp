@@ -30,6 +30,13 @@ export interface FrontendStackEcsProps extends cdk.StackProps {
    * Useful for CI/CD validation where hosted zones don't exist.
    */
   setupDns?: boolean;
+  /**
+   * When true, include AWS/Cognito Fn::ImportValue references (legacy AWS deploy).
+   * When false (default), substitute placeholder strings so cdk synth / cdk deploy
+   * succeed without requiring the AuthStack exports to exist in CloudFormation.
+   * Mirrors the --context legacy=true gate in infra/bin/infra.ts.
+   */
+  isLegacyAwsDeploy?: boolean;
 }
 
 /**
@@ -142,12 +149,25 @@ export class FrontendStackEcs extends cdk.Stack {
       // no effect in the GCP deployment. This AWS CDK stack is not used by the
       // fork; do not trust it for the active Cloud Run deployment.
       // See nic-ssd201/aistudio-gcp#8.
-      cognitoClientId: cdk.Fn.importValue(`${environment}-CognitoUserPoolClientId`),
-      cognitoIssuer: `https://cognito-idp.${this.region}.amazonaws.com/${cdk.Fn.importValue(`${environment}-CognitoUserPoolId`)}`,
+      //
+      // Fn::ImportValue references are gated on isLegacyAwsDeploy so that
+      // `cdk synth` and `cdk deploy` succeed without requiring the AuthStack
+      // exports (CognitoUserPoolClientId, CognitoUserPoolId, AuthSecretArn) to
+      // exist in CloudFormation. Without the gate, deploying without
+      // --context legacy=true would fail at CloudFormation time with
+      // "No export named …".
+      cognitoClientId: props.isLegacyAwsDeploy
+        ? cdk.Fn.importValue(`${environment}-CognitoUserPoolClientId`)
+        : 'unused-gcp-migration',
+      cognitoIssuer: props.isLegacyAwsDeploy
+        ? `https://cognito-idp.${this.region}.amazonaws.com/${cdk.Fn.importValue(`${environment}-CognitoUserPoolId`)}`
+        : 'unused-gcp-migration',
       rdsResourceArn: ssm.StringParameter.valueForStringParameter(this, `/aistudio/${environment}/db-cluster-arn`),
       rdsSecretArn: ssm.StringParameter.valueForStringParameter(this, `/aistudio/${environment}/db-secret-arn`),
       // Auth secret from Secrets Manager
-      authSecretArn: cdk.Fn.importValue(`${environment}-AuthSecretArn`),
+      authSecretArn: props.isLegacyAwsDeploy
+        ? cdk.Fn.importValue(`${environment}-AuthSecretArn`)
+        : 'unused-gcp-migration',
       // Internal API secret (created above)
       internalApiSecretArn: internalApiSecret.secretArn,
       // K-12 Content Safety: Guardrails resources from GuardrailsStack

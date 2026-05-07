@@ -587,7 +587,7 @@ export async function updateUser(
     // Redis invalidation) would eliminate the window but is out of scope here.
     if (subForCacheInvalidation) {
       pollingSessionCache.invalidateUser(subForCacheInvalidation)
-      log.info("Polling cache flushed after role update", { userId, sub: subForCacheInvalidation })
+      log.info("Polling cache flushed after role update", { userId })
     }
 
     timer({ status: "success" })
@@ -639,8 +639,13 @@ export async function deleteUser(userId: number): Promise<ActionState<void>> {
       )
     }
 
-    // Delete user and role assignments in a transaction
-    // Admin check inside transaction prevents TOCTOU race condition
+    // Delete user and role assignments in a transaction.
+    // Admin check inside transaction prevents TOCTOU race condition.
+    // cognitoSub is captured via .returning() inside the transaction so that
+    // the post-commit cache flush does not need a second round-trip and cannot
+    // mask a successful delete as a failure if the extra query were to throw.
+    let subForCacheInvalidation: string | null = null;
+
     await executeTransaction(
       async (tx) => {
         // Check if user being deleted is an admin (inside transaction to prevent race)
@@ -672,15 +677,30 @@ export async function deleteUser(userId: number): Promise<ActionState<void>> {
         // Delete user role assignments first (foreign key constraint)
         await tx.delete(userRoles).where(eq(userRoles.userId, userId))
 
-        // Delete the user and check if it existed
-        const result = await tx.delete(users).where(eq(users.id, userId)).returning()
+        // Delete the user and capture cognitoSub for post-commit cache flush.
+        // .returning() includes cognitoSub so no extra round-trip is needed.
+        const result = await tx
+          .delete(users)
+          .where(eq(users.id, userId))
+          .returning({ id: users.id, cognitoSub: users.cognitoSub })
 
         if (result.length === 0) {
           throw ErrorFactories.dbRecordNotFound("users", userId)
         }
+
+        subForCacheInvalidation = result[0].cognitoSub ?? null;
       },
       "deleteUser-transaction"
     )
+
+    // Flush the polling cache so the deleted user's cached session cannot be
+    // used by polling endpoints until the 5-minute TTL expires naturally.
+    // Symmetric with updateUser — only the current instance is flushed; see
+    // pollingSessionCache.invalidateUser JSDoc for multi-instance trade-off.
+    if (subForCacheInvalidation) {
+      pollingSessionCache.invalidateUser(subForCacheInvalidation)
+      log.info("Polling cache flushed after user deletion", { userId })
+    }
 
     timer({ status: "success" })
     log.info("User deleted successfully", { userId })

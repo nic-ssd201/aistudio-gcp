@@ -348,6 +348,7 @@ if (baseDomain) {
     documentsBucketName: devStorageStack.documentsBucketName,
     useExistingVpc: setupDns, // Use VPC sharing in real deployments, create new VPC for CI validation
     setupDns, // Enable DNS/certificate setup (false for CI validation with example.com)
+    isLegacyAwsDeploy, // Gates Fn::ImportValue for Cognito exports (AuthStack required when true)
     env: { account: process.env.CDK_DEFAULT_ACCOUNT, region: process.env.CDK_DEFAULT_REGION },
   });
   devFrontendStack.addDependency(devDbStack); // Need VPC from DB stack
@@ -368,6 +369,7 @@ if (baseDomain) {
     documentsBucketName: prodStorageStack.documentsBucketName,
     useExistingVpc: setupDns, // Use VPC sharing in real deployments, create new VPC for CI validation
     setupDns, // Enable DNS/certificate setup (false for CI validation with example.com)
+    isLegacyAwsDeploy, // Gates Fn::ImportValue for Cognito exports (AuthStack required when true)
     env: { account: process.env.CDK_DEFAULT_ACCOUNT, region: process.env.CDK_DEFAULT_REGION },
   });
   prodFrontendStack.addDependency(prodDbStack); // Need VPC from DB stack
