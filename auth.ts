@@ -1,89 +1,42 @@
 import NextAuth from "next-auth"
-import Cognito from "next-auth/providers/cognito"
 import Google from "next-auth/providers/google"
 import type { NextAuthConfig } from "next-auth"
 import type { JWT } from "next-auth/jwt"
-import { refreshAccessToken, shouldRefreshToken } from "@/lib/auth/token-refresh-client"
 import { createLogger } from "@/lib/auth/edge-logger"
 import { refreshGoogleToken } from "@/lib/auth/refresh-google-token"
 
 export const authConfig: NextAuthConfig = {
   providers: [
-    Cognito({
-      name: "AI Studio",
-      clientId: process.env.AUTH_COGNITO_CLIENT_ID!,
-      clientSecret: process.env.AUTH_COGNITO_CLIENT_SECRET || "",
-      issuer: process.env.AUTH_COGNITO_ISSUER!,
-      wellKnown: `${process.env.AUTH_COGNITO_ISSUER}/.well-known/openid-configuration`,
+    // Google OIDC — sole auth provider for SSD201 GCP deployment.
+    // access_type: "offline" gets a refresh_token so sessions outlive the
+    // initial 1-hour access token. prompt: "consent" ensures Google always
+    // returns a refresh_token (even on repeat sign-ins).
+    //
+    // No hd (hosted-domain) restriction: access control is enforced downstream
+    // by the role/permission system (hasToolAccess). Add hd here if you need
+    // to gate sign-in to a specific Workspace domain.
+    Google({
+      clientId: process.env.AUTH_GOOGLE_ID!,
+      clientSecret: process.env.AUTH_GOOGLE_SECRET!,
       authorization: {
         params: {
           scope: "openid email profile",
-          response_type: "code",
-          prompt: "login", // Force Cognito to show login screen and create new session
-          redirect_uri: process.env.AUTH_URL ? `${process.env.AUTH_URL}/api/auth/callback/cognito` : undefined,
+          access_type: "offline",
+          prompt: "consent", // Required to receive refresh_token on every sign-in
         },
       },
-      client: {
-        token_endpoint_auth_method: "none",
-      },
-      checks: ["pkce", "state", "nonce"], // Enable PKCE, state and nonce checks (CSRF protection)
+      checks: ["pkce", "state", "nonce"],
       profile(profile) {
         return {
           id: profile.sub,
           name: profile.name || profile.given_name || profile.family_name,
           email: profile.email,
           image: profile.picture,
+          given_name: profile.given_name,
+          family_name: profile.family_name,
         }
       },
     }),
-    // GCP migration: Google OIDC provider (SSD201)
-    // Enabled when AUTH_GOOGLE_ID / AUTH_GOOGLE_SECRET are both set.
-    // Partial config (ID without secret) is caught by validateEnv() at startup.
-    //
-    // INTENTIONAL: No `hd` (hosted-domain) restriction is applied here.
-    // SSD201 is deployed on GCP with an org-level Google Workspace account;
-    // access control is enforced downstream by the existing role/permission
-    // system (hasToolAccess checks in the application layer). If a future
-    // deployment needs to restrict sign-in to a specific domain, add:
-    //   authorization: { params: { hd: "yourdomain.com" } }
-    // and verify `profile.hd` in the profile() callback.
-    //
-    // NOTE on sub-namespace collision: Cognito and Google each issue their own
-    // `sub` values. The current migration plan is Cognito → Google cutover
-    // (not concurrent dual-provider). During cutover the DB user record
-    // `cognito_sub` will be mapped to a `google_sub` via a one-time migration
-    // script (tracked in the GCP migration design doc). Until that script runs,
-    // `session.user.id = token.sub` is provider-scoped, so no collision occurs
-    // in practice. If concurrent dual-provider support is added, namespace with
-    // `${provider}:${sub}` or add a stable internal user ID column.
-    ...(process.env.AUTH_GOOGLE_ID && process.env.AUTH_GOOGLE_SECRET
-      ? [
-          Google({
-            clientId: process.env.AUTH_GOOGLE_ID,
-            clientSecret: process.env.AUTH_GOOGLE_SECRET,
-            authorization: {
-              params: {
-                scope: "openid email profile",
-                access_type: "offline",
-                prompt: "consent", // Required to receive refresh_token on every sign-in
-              },
-            },
-            // Match Cognito's explicit security checks — PKCE + state + nonce.
-            checks: ["pkce", "state", "nonce"],
-            profile(profile) {
-              return {
-                id: profile.sub,
-                name: profile.name || profile.given_name || profile.family_name,
-                email: profile.email,
-                image: profile.picture,
-                // Preserve given/family name for session-callback display-name chain
-                given_name: profile.given_name,
-                family_name: profile.family_name,
-              }
-            },
-          }),
-        ]
-      : []),
   ],
   callbacks: {
     async jwt({ token, account, profile, user, trigger }) {
@@ -111,7 +64,7 @@ export const authConfig: NextAuthConfig = {
 
         try {
           // SECURITY NOTE: This JWT parsing is safe here because the id_token comes directly
-          // from the OAuth provider (Cognito or Google) during the callback flow and has already
+          // from the OAuth provider (Google) during the callback flow and has already
           // been validated by NextAuth — signature verified via JWKS before reaching this callback.
           // DO NOT use this pattern for parsing JWTs from untrusted sources or user input.
           // For untrusted JWTs, always use proper JWT verification libraries like 'jose'.
@@ -129,7 +82,7 @@ export const authConfig: NextAuthConfig = {
           issuedAt: new Date(issuedAt).toISOString(),
           expiresAt: new Date(expiresAt).toISOString(),
           tokenLifetimeHours: Math.round(tokenLifetimeMs / (1000 * 60 * 60)),
-          cognitoProvidedExpiry: !!account.expires_at
+          googleProvidedExpiry: !!account.expires_at
         })
 
         const newToken: JWT = {
@@ -146,7 +99,7 @@ export const authConfig: NextAuthConfig = {
           iat: decoded.iat,
           tokenLifetimeMs: tokenLifetimeMs, // Store calculated lifetime for accurate refresh timing
           roleVersion: 0, // Initialize role version
-          provider: account.provider as 'cognito' | 'google', // Narrowed from NextAuth's string
+          provider: 'google', // Always Google for SSD201
         };
 
           log.info("Successfully created initial token", {
@@ -177,7 +130,7 @@ export const authConfig: NextAuthConfig = {
             expiresAt: expiresAt,
             tokenLifetimeMs: tokenLifetimeMs,
             roleVersion: 0,
-            provider: account.provider as 'cognito' | 'google', // Narrowed from NextAuth's string
+            provider: 'google', // Always Google for SSD201
           };
 
           log.info("Created fallback token", {
@@ -199,17 +152,10 @@ export const authConfig: NextAuthConfig = {
       const now = Date.now()
       const isExpired = now > expiresAt
 
-      // Check if this is a long-running operation by examining request context
-      // TODO: Replace with AsyncLocalStorage for better request-scoped context
-      const isLongRunningOperation = (typeof global !== 'undefined' && (global as { __POLLING_CONTEXT__?: boolean }).__POLLING_CONTEXT__)
+      // Proactively refresh when less than 5 minutes remain (avoids mid-request expiry)
+      const fiveMinutes = 5 * 60 * 1000
+      const shouldRefresh = (expiresAt - now) < fiveMinutes
 
-      const shouldRefresh = shouldRefreshToken(token, {
-        isLongRunningOperation,
-        operationType: isLongRunningOperation ? 'polling' : 'normal',
-        estimatedDurationMs: isLongRunningOperation ? 30 * 60 * 1000 : undefined // 30 minutes
-      })
-
-      // Log token status for debugging
       log.debug("Token status check", {
         isExpired,
         shouldRefresh,
@@ -217,13 +163,10 @@ export const authConfig: NextAuthConfig = {
         expiresAt: new Date(expiresAt).toISOString()
       })
 
-      // Attempt token refresh if expired or should be refreshed proactively
       if (isExpired || shouldRefresh) {
-        const provider = token.provider
-        log.info("Attempting token refresh", {
+        log.info("Attempting Google token refresh", {
           reason: isExpired ? 'expired' : 'proactive',
           hasRefreshToken: !!token.refreshToken,
-          provider: provider ?? 'unknown',
         })
 
         if (!token.refreshToken) {
@@ -232,25 +175,7 @@ export const authConfig: NextAuthConfig = {
         }
 
         try {
-          // Dispatch to provider-specific refresh handler
-          let refreshed: JWT | null = null
-          if (provider === 'google') {
-            refreshed = await refreshGoogleToken(token)
-          } else {
-            // Default: Cognito refresh via server action
-            const refreshedTokens = await refreshAccessToken(token)
-            if (refreshedTokens) {
-              const tokenWithLifetime = token as JWT & { tokenLifetimeMs?: number }
-              refreshed = {
-                ...token,
-                accessToken: refreshedTokens.accessToken,
-                idToken: refreshedTokens.idToken,
-                refreshToken: refreshedTokens.refreshToken,
-                expiresAt: refreshedTokens.expiresAt,
-                tokenLifetimeMs: tokenWithLifetime.tokenLifetimeMs,
-              }
-            }
-          }
+          const refreshed = await refreshGoogleToken(token)
 
           if (refreshed) {
             log.info("Token refresh successful", {

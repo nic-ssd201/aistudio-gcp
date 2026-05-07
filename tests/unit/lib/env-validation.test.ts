@@ -1,12 +1,11 @@
 /**
  * Unit tests for validateEnv() in lib/env-validation.ts
  *
- * Covers the branching logic added for the GCP migration:
- * - Auth provider: Cognito-only, Google-only, both, neither (should fail),
- *   partial Google config (ID without secret)
+ * Covers the branching logic for the GCP deployment:
+ * - Auth: Google OIDC required (both ID + secret), partial config (ID without secret)
  * - Database: DATABASE_URL, TCP (DB_HOST+USER+PASS), socket (CLOUD_SQL+USER+PASS),
  *   none configured (should fail)
- * - AWS region warning only on AWS deployments
+ * - Required vars: AUTH_URL, AUTH_SECRET, GCS_BUCKET_NAME
  */
 
 import { validateEnv } from "@/lib/env-validation"
@@ -16,7 +15,7 @@ const BASE_ENV: NodeJS.ProcessEnv = {
   NODE_ENV: "test",
   AUTH_URL: "https://aistudio.example.com",
   AUTH_SECRET: "test-secret-32chars-padding-here",
-  // Auth provider — Google only (GCP deployment)
+  // Auth provider — Google OIDC (required)
   AUTH_GOOGLE_ID: "google-client-id",
   AUTH_GOOGLE_SECRET: "google-client-secret",
   // Database — DATABASE_URL (local dev)
@@ -40,41 +39,19 @@ describe("validateEnv()", () => {
 
   // ── Auth provider ─────────────────────────────────────────────────────────
 
-  it("passes with Google-only auth provider", () => {
+  it("passes with Google OIDC configured", () => {
     const { isValid, missing } = validateEnv()
     expect(isValid).toBe(true)
     expect(missing).toHaveLength(0)
   })
 
-  it("passes with Cognito-only auth provider", () => {
-    delete process.env.AUTH_GOOGLE_ID
-    delete process.env.AUTH_GOOGLE_SECRET
-    process.env.AUTH_COGNITO_CLIENT_ID = "cognito-client-id"
-    process.env.AUTH_COGNITO_CLIENT_SECRET = "cognito-client-secret"
-    process.env.AUTH_COGNITO_ISSUER = "https://cognito-idp.us-east-1.amazonaws.com/pool"
-
-    const { isValid, missing } = validateEnv()
-    expect(isValid).toBe(true)
-    expect(missing).toHaveLength(0)
-  })
-
-  it("passes with both Cognito and Google configured", () => {
-    process.env.AUTH_COGNITO_CLIENT_ID = "cognito-client-id"
-    process.env.AUTH_COGNITO_CLIENT_SECRET = "cognito-client-secret"
-    process.env.AUTH_COGNITO_ISSUER = "https://cognito-idp.us-east-1.amazonaws.com/pool"
-
-    const { isValid, missing } = validateEnv()
-    expect(isValid).toBe(true)
-    expect(missing).toHaveLength(0)
-  })
-
-  it("fails when neither Cognito nor Google is configured", () => {
+  it("fails when neither AUTH_GOOGLE_ID nor AUTH_GOOGLE_SECRET is set", () => {
     delete process.env.AUTH_GOOGLE_ID
     delete process.env.AUTH_GOOGLE_SECRET
 
     const { isValid, missing } = validateEnv()
     expect(isValid).toBe(false)
-    expect(missing.some((m) => m.includes("auth provider required"))).toBe(true)
+    expect(missing.some((m) => m.includes("AUTH_GOOGLE_ID and AUTH_GOOGLE_SECRET are required"))).toBe(true)
   })
 
   it("fails when AUTH_GOOGLE_ID is set without AUTH_GOOGLE_SECRET", () => {
@@ -85,15 +62,12 @@ describe("validateEnv()", () => {
     expect(missing.some((m) => m.includes("AUTH_GOOGLE_SECRET"))).toBe(true)
   })
 
-  it("fails when Cognito CLIENT_ID is set but ISSUER is missing (incomplete Cognito)", () => {
+  it("fails when AUTH_GOOGLE_SECRET is set without AUTH_GOOGLE_ID", () => {
     delete process.env.AUTH_GOOGLE_ID
-    delete process.env.AUTH_GOOGLE_SECRET
-    process.env.AUTH_COGNITO_CLIENT_ID = "cognito-client-id"
-    // No AUTH_COGNITO_ISSUER → incomplete Cognito, falls through to "no provider" error
 
     const { isValid, missing } = validateEnv()
     expect(isValid).toBe(false)
-    expect(missing.some((m) => m.includes("auth provider required"))).toBe(true)
+    expect(missing.some((m) => m.includes("AUTH_GOOGLE_ID"))).toBe(true)
   })
 
   // ── Database connection mode ──────────────────────────────────────────────
@@ -105,7 +79,7 @@ describe("validateEnv()", () => {
 
   it("passes with TCP config (DB_HOST + DB_USER + DB_PASSWORD)", () => {
     delete process.env.DATABASE_URL
-    process.env.DB_HOST = "aurora-cluster.us-east-1.rds.amazonaws.com"
+    process.env.DB_HOST = "db.example.com"
     process.env.DB_USER = "aistudio"
     process.env.DB_PASSWORD = "secret"
 
@@ -133,7 +107,7 @@ describe("validateEnv()", () => {
 
   it("fails with partial TCP config (DB_HOST without credentials)", () => {
     delete process.env.DATABASE_URL
-    process.env.DB_HOST = "aurora-cluster.us-east-1.rds.amazonaws.com"
+    process.env.DB_HOST = "db.example.com"
     // No DB_USER or DB_PASSWORD
 
     const { isValid, missing } = validateEnv()
@@ -177,25 +151,21 @@ describe("validateEnv()", () => {
     expect(missing).toContain("GCS_BUCKET_NAME")
   })
 
-  // ── AWS region warning ────────────────────────────────────────────────────
+  // ── AI API keys warning ───────────────────────────────────────────────────
 
-  it("warns about missing AWS region on AWS (Cognito) deployments", () => {
-    process.env.AUTH_COGNITO_CLIENT_ID = "cognito-client-id"
-    process.env.AUTH_COGNITO_CLIENT_SECRET = "cognito-client-secret"
-    process.env.AUTH_COGNITO_ISSUER = "https://cognito-idp.us-east-1.amazonaws.com/pool"
-    delete process.env.AWS_REGION
-    delete process.env.AWS_DEFAULT_REGION
-    delete process.env.NEXT_PUBLIC_AWS_REGION
+  it("warns when no AI API keys are configured", () => {
+    delete process.env.ANTHROPIC_API_KEY
+    delete process.env.OPENAI_API_KEY
 
     const { warnings } = validateEnv()
-    expect(warnings.some((w) => w.includes("AWS deployment detected"))).toBe(true)
+    expect(warnings.some((w) => w.includes("No AI API keys configured"))).toBe(true)
   })
 
-  it("does not warn about missing AWS region on GCP-only (Google) deployments", () => {
-    // No Cognito, no DB_HOST, no AWS_REGION → not detected as AWS deployment.
-    // The "AWS deployment detected" warning must NOT appear; the generic optional-
-    // var notice for NEXT_PUBLIC_AWS_REGION may still appear and is acceptable.
+  it("does not warn about AI keys when ANTHROPIC_API_KEY is set", () => {
+    process.env.ANTHROPIC_API_KEY = "sk-ant-test"
+    delete process.env.OPENAI_API_KEY
+
     const { warnings } = validateEnv()
-    expect(warnings.some((w) => w.includes("AWS deployment detected"))).toBe(false)
+    expect(warnings.some((w) => w.includes("No AI API keys configured"))).toBe(false)
   })
 })

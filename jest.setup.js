@@ -3,12 +3,6 @@ if (typeof global.setImmediate === 'undefined') {
   global.setImmediate = (fn, ...args) => setTimeout(fn, 0, ...args);
 }
 
-// Set required environment variables for Drizzle DB client initialization
-// These must be set BEFORE any imports to prevent initialization errors
-process.env.RDS_SECRET_ARN = 'test-secret-arn';
-process.env.RDS_RESOURCE_ARN = 'test-resource-arn';
-process.env.RDS_DATABASE_NAME = 'test-database';
-
 import '@testing-library/jest-dom';
 
 // Mock auth factory

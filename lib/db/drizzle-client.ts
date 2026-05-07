@@ -32,43 +32,28 @@ import * as schema from "./schema";
 // ============================================
 
 /**
- * Build DATABASE_URL from environment variables
+ * Build DATABASE_URL from environment variables.
  *
- * Supports two configuration modes:
- * 1. DATABASE_URL: Full connection string (preferred for local dev)
- * 2. Individual vars: DB_HOST, DB_PORT, DB_USER, DB_PASSWORD, DB_NAME
+ * Supported modes:
+ * 1. DATABASE_URL — full connection string (local dev)
+ * 2. DB_HOST + DB_USER + DB_PASSWORD — TCP connection (Cloud SQL via IP)
  *
- * For production on ECS, credentials are injected from Secrets Manager
- * at container startup via the getDatabaseUrl() function.
+ * Cloud SQL Unix socket (CLOUD_SQL_SOCKET_PATH) is handled directly in
+ * getPgClient() and bypasses this function.
  */
 function getDatabaseUrl(): string {
-  // Option 1: Direct DATABASE_URL (local dev or pre-constructed URL)
   if (process.env.DATABASE_URL) {
     return process.env.DATABASE_URL;
   }
 
-  // Option 2: Cloud SQL Unix socket (Cloud Run / GCE)
-  // Handled directly in getPgClient() — not a URL-based connection.
-  // If CLOUD_SQL_SOCKET_PATH is set, getPgClient() bypasses getDatabaseUrl().
-
-  // Option 3: Construct from individual components (ECS / TCP host)
   const host = process.env.DB_HOST;
   const port = process.env.DB_PORT || "5432";
   const user = process.env.DB_USER;
   const password = process.env.DB_PASSWORD;
-  const database = process.env.DB_NAME || process.env.RDS_DATABASE_NAME || "aistudio";
+  const database = process.env.DB_NAME || "aistudio";
 
   if (host && user && password) {
     return `postgresql://${encodeURIComponent(user)}:${encodeURIComponent(password)}@${host}:${port}/${database}?sslmode=require`;
-  }
-
-  // Fallback: Check for legacy RDS Data API config (error with migration guidance)
-  if (process.env.RDS_SECRET_ARN && process.env.RDS_RESOURCE_ARN) {
-    throw new Error(
-      "RDS Data API configuration detected but no DATABASE_URL found. " +
-      "Issue #603 migrated to postgres.js driver. " +
-      "Set DATABASE_URL or DB_HOST/DB_USER/DB_PASSWORD environment variables."
-    );
   }
 
   throw new Error(
@@ -135,8 +120,7 @@ function getPgClient(): ReturnType<typeof postgres> {
 
       const user = process.env.DB_USER;
       const password = process.env.DB_PASSWORD;
-      // Mirror TCP path: DB_NAME || RDS_DATABASE_NAME || "aistudio"
-      const database = process.env.DB_NAME || process.env.RDS_DATABASE_NAME || "aistudio";
+      const database = process.env.DB_NAME || "aistudio";
 
       if (!user || !password) {
         throw new Error(
@@ -666,7 +650,7 @@ export async function validateDatabaseConnection(): Promise<{
     hasDatabaseUrl: !!process.env.DATABASE_URL,
     hasDbHost: !!process.env.DB_HOST,
     maxConnections: process.env.DB_MAX_CONNECTIONS || "20",
-    database: process.env.DB_NAME || process.env.RDS_DATABASE_NAME || "aistudio",
+    database: process.env.DB_NAME || "aistudio",
   };
 
   try {

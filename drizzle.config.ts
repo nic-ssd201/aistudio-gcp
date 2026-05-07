@@ -34,7 +34,7 @@ function getDatabaseUrl(): string {
   const port = process.env.DB_PORT || "5432";
   const user = process.env.DB_USER;
   const password = process.env.DB_PASSWORD;
-  const database = process.env.DB_NAME || process.env.RDS_DATABASE_NAME || "aistudio";
+  const database = process.env.DB_NAME || "aistudio";
 
   if (host && user && password) {
     return `postgresql://${encodeURIComponent(user)}:${encodeURIComponent(password)}@${host}:${port}/${database}`;
