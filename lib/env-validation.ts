@@ -46,6 +46,10 @@ const ENV_VARS: EnvVar[] = [
   { name: 'ANTHROPIC_API_KEY', required: false, description: 'Anthropic API key for Claude' },
   { name: 'OPENAI_API_KEY', required: false, description: 'OpenAI API key' },
 
+  // Session / Token behaviour (optional overrides)
+  { name: 'SESSION_MAX_AGE', required: false, description: 'Session lifetime in seconds (default: 86400 / 24 h)' },
+  { name: 'TOKEN_REFRESH_THRESHOLD_MS', required: false, description: 'Access-token refresh look-ahead in ms (default: 300 000 / 5 min; floor: 60 000)' },
+
   // Application
   { name: 'NODE_ENV', required: false, description: 'Node environment (development/production)' },
 ];

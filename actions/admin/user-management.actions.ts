@@ -490,12 +490,10 @@ export async function updateUser(
 
     // Update user and role assignments in a transaction.
     // All validation happens inside the transaction to prevent race conditions.
-    // cognitoSub (the Google OIDC sub) is read from .returning() here so that
-    // the post-commit cache invalidation does not need a second round-trip — and
-    // cannot mask a successful commit as a failure if the extra query were to throw.
-    let subForCacheInvalidation: string | null = null;
-
-    await executeTransaction(
+    // cognitoSub is returned from the transaction body (not closed over) so the
+    // binding is a const and there is no mutable outer variable that could be
+    // silently clobbered by a concurrent call on the same event-loop tick.
+    const cognitoSubFromTx = await executeTransaction(
       async (tx) => {
         // Update user basic info - verify user exists.
         // Include cognitoSub in .returning() so it is available post-commit for
@@ -514,7 +512,7 @@ export async function updateUser(
           throw ErrorFactories.dbRecordNotFound("users", userId)
         }
 
-        subForCacheInvalidation = result[0].cognitoSub ?? null;
+        const capturedSub = result[0].cognitoSub ?? null;
 
         // Get role IDs from role names (inside transaction to prevent race condition)
         const roleList = await tx
@@ -571,26 +569,31 @@ export async function updateUser(
             roleId: role.id,
           }))
         )
+
+        // Return cognitoSub so it is available as a const post-commit, avoiding
+        // a closed-over mutable variable that could be clobbered if two requests
+        // for the same user overlap on the same event-loop tick.
+        return capturedSub
       },
       "updateUser-transaction"
     )
 
     // Flush polling cache for this user so role changes propagate immediately
     // to polling endpoints rather than waiting up to 5 minutes for TTL expiry.
-    // subForCacheInvalidation was captured inside the transaction via .returning()
-    // so no extra DB query is needed here and a post-commit query failure cannot
-    // mask a successful commit as an error.
+    // cognitoSubFromTx was returned from inside the transaction via .returning()
+    // so no extra DB query is needed and a post-commit query failure cannot mask
+    // a successful commit as an error.
     // NOTE: only the current process's in-process cache is flushed. On Cloud Run
     // (or any multi-instance deployment), the other N-1 instances continue serving
     // stale roles for up to 5 minutes (the TTL).  This is the accepted trade-off
     // for the polling-auth perf improvement; a cross-instance signal (Pub/Sub,
     // Redis invalidation) would eliminate the window but is out of scope here.
-    if (subForCacheInvalidation) {
+    if (cognitoSubFromTx) {
       // Wrap in try/catch: cache invalidation is best-effort. If invalidateUser
       // throws (e.g. a bug in the cache module), we log a warning rather than
       // turning a successful committed role change into an apparent failure.
       try {
-        pollingSessionCache.invalidateUser(subForCacheInvalidation)
+        pollingSessionCache.invalidateUser(cognitoSubFromTx)
         log.info("Polling cache flushed after role update", { userId })
       } catch (cacheErr) {
         log.warn("Polling cache flush failed after role update (non-fatal)", {
@@ -651,12 +654,10 @@ export async function deleteUser(userId: number): Promise<ActionState<void>> {
 
     // Delete user and role assignments in a transaction.
     // Admin check inside transaction prevents TOCTOU race condition.
-    // cognitoSub is captured via .returning() inside the transaction so that
-    // the post-commit cache flush does not need a second round-trip and cannot
-    // mask a successful delete as a failure if the extra query were to throw.
-    let subForCacheInvalidation: string | null = null;
-
-    await executeTransaction(
+    // cognitoSub is returned from the transaction body (not closed over) so the
+    // binding is a const and there is no mutable outer variable that could be
+    // silently clobbered by a concurrent call on the same event-loop tick.
+    const cognitoSubFromTx = await executeTransaction(
       async (tx) => {
         // Check if user being deleted is an admin (inside transaction to prevent race)
         const userToDelete = await tx
@@ -698,7 +699,8 @@ export async function deleteUser(userId: number): Promise<ActionState<void>> {
           throw ErrorFactories.dbRecordNotFound("users", userId)
         }
 
-        subForCacheInvalidation = result[0].cognitoSub ?? null;
+        // Return cognitoSub so it is available as a const post-commit (see updateUser).
+        return result[0].cognitoSub ?? null
       },
       "deleteUser-transaction"
     )
@@ -707,11 +709,11 @@ export async function deleteUser(userId: number): Promise<ActionState<void>> {
     // used by polling endpoints until the 5-minute TTL expires naturally.
     // Symmetric with updateUser — only the current instance is flushed; see
     // pollingSessionCache.invalidateUser JSDoc for multi-instance trade-off.
-    if (subForCacheInvalidation) {
+    if (cognitoSubFromTx) {
       // Best-effort: wrap in try/catch so a cache-module exception does not
       // surface as "Failed to delete user" for a commit that already succeeded.
       try {
-        pollingSessionCache.invalidateUser(subForCacheInvalidation)
+        pollingSessionCache.invalidateUser(cognitoSubFromTx)
         log.info("Polling cache flushed after user deletion", { userId })
       } catch (cacheErr) {
         log.warn("Polling cache flush failed after user deletion (non-fatal)", {

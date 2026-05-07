@@ -191,7 +191,9 @@ export class PollingSessionCache {
       }
     }
 
-    if (oldestKey) {
+    // Use !== null rather than truthiness so an empty-string key (unlikely but
+    // theoretically possible) is not skipped.
+    if (oldestKey !== null) {
       this.cache.delete(oldestKey);
       log.debug('Evicted oldest cache entry', { sessionId: oldestKey });
     }

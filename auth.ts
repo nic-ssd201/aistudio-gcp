@@ -250,33 +250,6 @@ export const authConfig: NextAuthConfig = {
         return session; // Return empty session instead of null
       }
 
-      // Defensive guard: return an empty session when the token reports itself as expired.
-      // In normal flow this branch is unreachable — jwt() returns null for expired
-      // tokens that cannot be refreshed, which causes NextAuth to clear the session
-      // cookie before session() ever runs.  The check is kept as a belt-and-braces
-      // sentinel so that any downstream `if (session?.user?.id)` guard fails closed
-      // rather than receiving a stale token, in case a future NextAuth upgrade or
-      // a test harness bypasses the normal null-return path in jwt().
-      if (token.expiresAt && Date.now() > (token.expiresAt as number)) {
-        log.warn("Session callback received expired token - returning empty session", {
-          expiresAt: new Date(token.expiresAt as number).toISOString(),
-          now: new Date().toISOString()
-        })
-        // Return an empty session to force re-authentication
-        return {
-          ...session,
-          user: {
-            id: '',
-            email: '',
-            name: '',
-            givenName: null,
-            familyName: null
-          },
-          accessToken: '',
-          idToken: '',
-        }
-      }
-
       // Send properties to the client
       const givenName = token.given_name as string;
       const familyName = token.family_name as string;
@@ -374,8 +347,6 @@ export const authConfig: NextAuthConfig = {
     },
   },
   pages: {
-    // We'll use the default NextAuth pages for now
-    // Can customize later if needed
     error: "/auth/error",
   },
   session: {
@@ -393,13 +364,6 @@ export const authConfig: NextAuthConfig = {
   // overwrite vector. A custom `cookies` block would need to replicate this
   // prefix logic manually; removing it gets the protection for free.
   debug: false, // Disabled to suppress CHUNKING_SESSION_COOKIE warnings (#361)
-  events: {
-    async signOut() {
-      // This event fires after NextAuth's signOut
-      // We can use this for any cleanup needed
-      // User signed out
-    },
-  },
 }
 
 // Factory function - creates new instance per request
