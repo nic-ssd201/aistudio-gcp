@@ -9,7 +9,6 @@ import { ProcessingStack } from '../lib/processing-stack';
 import { DocumentProcessingStack } from '../lib/document-processing-stack';
 import { MonitoringStack } from '../lib/monitoring-stack';
 import { SchedulerStack } from '../lib/scheduler-stack';
-import { EmailNotificationStack } from '../lib/email-notification-stack';
 import { PowerTuningStack } from '../lib/power-tuning-stack';
 import { SecretsManagerStack } from '../lib/secrets-manager-stack';
 import { GuardrailsStack } from '../lib/guardrails-stack';
@@ -203,39 +202,8 @@ devSchedulerStack.addDependency(devDbStack);
 cdk.Tags.of(devSchedulerStack).add('Environment', 'Dev');
 Object.entries(standardTags).forEach(([key, value]) => cdk.Tags.of(devSchedulerStack).add(key, value));
 
-// Get email configuration from context (environment-specific with fallback)
-const devEmailDomain = app.node.tryGetContext('devEmailDomain') || app.node.tryGetContext('emailDomain');
-const devSesIdentityExists = app.node.tryGetContext('devSesIdentityExists') === 'true' ||
-                             app.node.tryGetContext('sesIdentityExists') === 'true';
-
-// Only create dev email notification stack if emailDomain is provided
-if (devEmailDomain && !baseDomain) {
-  throw new Error(
-    'CDK context: baseDomain is required when emailDomain is set (used for appBaseUrl). ' +
-    'Deploy with: --context baseDomain=<your-domain> --context devEmailDomain=<email-domain>'
-  );
-}
-let devEmailNotificationStack: EmailNotificationStack | undefined;
-if (devEmailDomain) {
-  devEmailNotificationStack = new EmailNotificationStack(app, 'AIStudio-EmailNotificationStack-Dev', {
-    environment: 'dev',
-    databaseResourceArn: devDbStack.databaseResourceArn,
-    databaseSecretArn: devDbStack.databaseSecretArn,
-    // SES configuration from context
-    createSesIdentity: !devSesIdentityExists,
-    emailDomain: devEmailDomain,
-    fromEmail: `noreply@${devEmailDomain}`,
-    appBaseUrl: `https://dev.${baseDomain}`, // baseDomain is guaranteed non-null by guard above
-    useDomainIdentity: false, // Dev uses email identity by default
-    // Branding for email templates (passed as Lambda env vars)
-    brandingOrgName,
-    brandingAppName,
-    env: { account: process.env.CDK_DEFAULT_ACCOUNT, region: process.env.CDK_DEFAULT_REGION },
-  });
-  devEmailNotificationStack.addDependency(devDbStack);
-  cdk.Tags.of(devEmailNotificationStack).add('Environment', 'Dev');
-  Object.entries(standardTags).forEach(([key, value]) => cdk.Tags.of(devEmailNotificationStack!).add(key, value));
-}
+// EmailNotificationStack (AWS SES + Lambda) removed — SSD201 fork uses GCP;
+// AWS email notification infrastructure is not deployed. See PR #6.
 
 // Prod environment
 // Permission Boundary Stack - must be deployed first before other stacks
@@ -344,40 +312,8 @@ prodSchedulerStack.addDependency(prodDbStack);
 cdk.Tags.of(prodSchedulerStack).add('Environment', 'Prod');
 Object.entries(standardTags).forEach(([key, value]) => cdk.Tags.of(prodSchedulerStack).add(key, value));
 
-// Get prod email configuration from context (environment-specific with fallback)
-const prodEmailDomain = app.node.tryGetContext('prodEmailDomain') || app.node.tryGetContext('emailDomain');
-const prodSesIdentityExists = app.node.tryGetContext('prodSesIdentityExists') === 'true' ||
-                              app.node.tryGetContext('sesIdentityExists') === 'true';
-const prodUseDomainIdentity = app.node.tryGetContext('prodUseDomainIdentity') !== 'false';
+// EmailNotificationStack (AWS SES + Lambda) removed — SSD201 fork uses GCP. See PR #6.
 
-// Only create prod email notification stack if emailDomain is provided
-if (prodEmailDomain && !baseDomain) {
-  throw new Error(
-    'CDK context: baseDomain is required when emailDomain is set (used for appBaseUrl). ' +
-    'Deploy with: --context baseDomain=<your-domain> --context prodEmailDomain=<email-domain>'
-  );
-}
-let prodEmailNotificationStack: EmailNotificationStack | undefined;
-if (prodEmailDomain) {
-  prodEmailNotificationStack = new EmailNotificationStack(app, 'AIStudio-EmailNotificationStack-Prod', {
-    environment: 'prod',
-    databaseResourceArn: prodDbStack.databaseResourceArn,
-    databaseSecretArn: prodDbStack.databaseSecretArn,
-    // Production SES configuration from context
-    createSesIdentity: !prodSesIdentityExists,
-    emailDomain: prodEmailDomain,
-    fromEmail: `noreply@${prodEmailDomain}`,
-    appBaseUrl: `https://${baseDomain}`, // baseDomain is guaranteed non-null by guard above
-    useDomainIdentity: prodUseDomainIdentity, // Defaults to true for production
-    // Branding for email templates (passed as Lambda env vars)
-    brandingOrgName,
-    brandingAppName,
-    env: { account: process.env.CDK_DEFAULT_ACCOUNT, region: process.env.CDK_DEFAULT_REGION },
-  });
-  prodEmailNotificationStack.addDependency(prodDbStack);
-  cdk.Tags.of(prodEmailNotificationStack).add('Environment', 'Prod');
-  Object.entries(standardTags).forEach(([key, value]) => cdk.Tags.of(prodEmailNotificationStack!).add(key, value));
-}
 // Frontend stacks - ECS Fargate with ALB for streaming support
 if (baseDomain) {
   // Skip DNS/certificate setup in CI (when baseDomain is a dummy value like example.com)

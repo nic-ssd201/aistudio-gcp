@@ -53,7 +53,10 @@ function getDatabaseUrl(): string {
   const database = process.env.DB_NAME || "aistudio";
 
   if (host && user && password) {
-    return `postgresql://${encodeURIComponent(user)}:${encodeURIComponent(password)}@${host}:${port}/${database}?sslmode=require`;
+    // Omit ?sslmode from the URL — SSL is controlled by the `ssl` option passed
+    // to postgres.js in getPgClient(), which respects DB_SSL=false for local dev.
+    // Duplicating it in the URL would conflict when DB_SSL=false is set.
+    return `postgresql://${encodeURIComponent(user)}:${encodeURIComponent(password)}@${host}:${port}/${database}`;
   }
 
   throw new Error(

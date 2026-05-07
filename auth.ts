@@ -77,35 +77,35 @@ export const authConfig: NextAuthConfig = {
           const payload = Buffer.from(base64Payload, 'base64').toString('utf-8');
           const decoded = JSON.parse(payload);
 
-        // Calculate token lifetime for accurate refresh timing
-        const issuedAt = decoded.iat ? decoded.iat * 1000 : Date.now()
-        const expiresAt = account.expires_at ? account.expires_at * 1000 : Date.now() + (60 * 60 * 1000) // 1 hour fallback — matches Google's access-token lifetime
-        const tokenLifetimeMs = expiresAt - issuedAt
+          // Calculate token lifetime for accurate refresh timing
+          const issuedAt = decoded.iat ? decoded.iat * 1000 : Date.now()
+          const expiresAt = account.expires_at ? account.expires_at * 1000 : Date.now() + (60 * 60 * 1000) // 1 hour fallback — matches Google's access-token lifetime
+          const tokenLifetimeMs = expiresAt - issuedAt
 
-        // Enhanced logging for token lifecycle debugging
-        log.debug("Token lifetime information", {
-          issuedAt: new Date(issuedAt).toISOString(),
-          expiresAt: new Date(expiresAt).toISOString(),
-          tokenLifetimeHours: Math.round(tokenLifetimeMs / (1000 * 60 * 60)),
-          googleProvidedExpiry: !!account.expires_at
-        })
+          // Enhanced logging for token lifecycle debugging
+          log.debug("Token lifetime information", {
+            issuedAt: new Date(issuedAt).toISOString(),
+            expiresAt: new Date(expiresAt).toISOString(),
+            tokenLifetimeHours: Math.round(tokenLifetimeMs / (1000 * 60 * 60)),
+            googleProvidedExpiry: !!account.expires_at
+          })
 
-        const newToken: JWT = {
-          sub: decoded.sub,
-          email: decoded.email,
-          name: decoded.name || decoded.given_name || decoded.preferred_username || decoded.email,
-          given_name: decoded.given_name,
-          family_name: decoded.family_name,
-          preferred_username: decoded.preferred_username,
-          accessToken: account.access_token,
-          refreshToken: account.refresh_token,
-          idToken: account.id_token,
-          expiresAt: expiresAt,
-          iat: decoded.iat,
-          tokenLifetimeMs: tokenLifetimeMs, // Store calculated lifetime for accurate refresh timing
-          roleVersion: 0, // Initialize role version
-          provider: 'google', // Always Google for SSD201
-        };
+          const newToken: JWT = {
+            sub: decoded.sub,
+            email: decoded.email,
+            name: decoded.name || decoded.given_name || decoded.preferred_username || decoded.email,
+            given_name: decoded.given_name,
+            family_name: decoded.family_name,
+            preferred_username: decoded.preferred_username,
+            accessToken: account.access_token,
+            refreshToken: account.refresh_token,
+            idToken: account.id_token,
+            expiresAt: expiresAt,
+            iat: decoded.iat,
+            tokenLifetimeMs: tokenLifetimeMs, // Store calculated lifetime for accurate refresh timing
+            roleVersion: 0, // Initialize role version
+            provider: 'google', // Always Google for SSD201
+          }
 
           log.info("Successfully created initial token", {
             sub: newToken.sub,
@@ -326,7 +326,10 @@ export const authConfig: NextAuthConfig = {
   session: {
     strategy: "jwt",
     // Session max age in seconds (default: 24 hours)
-    maxAge: process.env.SESSION_MAX_AGE ? Number.parseInt(process.env.SESSION_MAX_AGE) : 24 * 60 * 60,
+    maxAge: (() => {
+      const parsed = Number.parseInt(process.env.SESSION_MAX_AGE ?? '', 10)
+      return Number.isFinite(parsed) && parsed > 0 ? parsed : 24 * 60 * 60
+    })(),
   },
   cookies: {
     sessionToken: {

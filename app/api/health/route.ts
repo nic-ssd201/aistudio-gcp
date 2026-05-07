@@ -2,6 +2,7 @@ import { NextResponse } from "next/server"
 import { validateDatabaseConnection } from "@/lib/db/drizzle-client"
 import { getServerSession } from "@/lib/auth/server-session"
 import { createLogger, generateRequestId, startTimer } from "@/lib/logger"
+import { validateEnv } from "@/lib/env-validation"
 
 /**
  * Health Check API Endpoint — SSD201 GCP deployment
@@ -66,24 +67,16 @@ export async function GET() {
     }
   }
 
-  // 1. Check environment variables
+  // 1. Check environment variables — delegates to validateEnv() so this list
+  //    stays in sync with lib/env-validation.ts automatically.
   try {
-    const requiredEnvVars = [
-      'AUTH_URL',
-      'AUTH_SECRET',
-      'AUTH_GOOGLE_ID',
-      'AUTH_GOOGLE_SECRET',
-      'GCS_BUCKET_NAME',
-      // Database config is checked separately (three supported modes)
-    ]
+    const { isValid, missing } = validateEnv()
 
-    const missingVars = requiredEnvVars.filter(varName => !process.env[varName])
-
-    log.debug("Environment check completed", { missingVars: missingVars.length });
+    log.debug("Environment check completed", { missingVars: missing.length });
 
     healthCheck.checks.environment = {
-      status: missingVars.length === 0 ? "healthy" : "unhealthy",
-      missingVariables: missingVars,
+      status: isValid ? "healthy" : "unhealthy",
+      missingVariables: missing,
       nodeEnv: process.env.NODE_ENV,
       details: {
         hasAuthUrl: !!process.env.AUTH_URL,
@@ -91,7 +84,7 @@ export async function GET() {
         hasGoogleId: !!process.env.AUTH_GOOGLE_ID,
         hasGoogleSecret: !!process.env.AUTH_GOOGLE_SECRET,
         hasGcsBucket: !!process.env.GCS_BUCKET_NAME,
-        // Database — one of three modes required
+        // Database — one of three modes required (same logic as validateEnv)
         hasDatabaseUrl: !!process.env.DATABASE_URL,
         hasDbHost: !!process.env.DB_HOST,
         hasCloudSqlSocket: !!process.env.CLOUD_SQL_SOCKET_PATH,
