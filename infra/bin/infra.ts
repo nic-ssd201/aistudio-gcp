@@ -32,7 +32,13 @@ const alertEmail = app.node.tryGetContext('alertEmail');
 const brandingOrgName = app.node.tryGetContext('brandingOrgName');
 const brandingAppName = app.node.tryGetContext('brandingAppName');
 
-// Helper to get callback/logout URLs for any environment
+// DEAD CODE — SSD201 GCP fork: this function builds Cognito callback/logout URLs
+// that are fed into AuthStack (Cognito User Pool client configuration).
+// Neither AuthStack nor Cognito is deployed in the GCP fork — the app uses
+// Google OIDC via NextAuth v5 directly. This function and its callers below
+// (devAuthStack, prodAuthStack) are preserved only to keep the upstream merge
+// surface intact. Do NOT run `cdk deploy` targeting AuthStack from this fork.
+// Full removal tracked in nic-ssd201/aistudio-gcp#8.
 function getCallbackAndLogoutUrls(environment: string, baseDomain?: string): { callbackUrls: string[], logoutUrls: string[] } {
   // Determine ECS subdomain based on environment
   const ecsSubdomain = environment === 'dev'
@@ -126,6 +132,9 @@ const devDbStack = new DatabaseStack(app, 'AIStudio-DatabaseStack-Dev', {
 cdk.Tags.of(devDbStack).add('Environment', 'Dev');
 Object.entries(standardTags).forEach(([key, value]) => cdk.Tags.of(devDbStack).add(key, value));
 
+// DEAD CODE — SSD201 GCP fork: AuthStack provisions a Cognito User Pool.
+// Not deployed in the GCP fork (Google OIDC via NextAuth v5 is used instead).
+// Preserved for upstream merge surface only. See nic-ssd201/aistudio-gcp#8.
 const devUrls = getCallbackAndLogoutUrls('dev', baseDomain);
 const devAuthStack = new AuthStack(app, 'AIStudio-AuthStack-Dev', {
   environment: 'dev',
@@ -233,6 +242,9 @@ const prodDbStack = new DatabaseStack(app, 'AIStudio-DatabaseStack-Prod', {
 cdk.Tags.of(prodDbStack).add('Environment', 'Prod');
 Object.entries(standardTags).forEach(([key, value]) => cdk.Tags.of(prodDbStack).add(key, value));
 
+// DEAD CODE — SSD201 GCP fork: AuthStack provisions a Cognito User Pool.
+// Not deployed in the GCP fork (Google OIDC via NextAuth v5 is used instead).
+// Preserved for upstream merge surface only. See nic-ssd201/aistudio-gcp#8.
 const prodUrls = getCallbackAndLogoutUrls('prod', baseDomain);
 const prodAuthStack = new AuthStack(app, 'AIStudio-AuthStack-Prod', {
   environment: 'prod',

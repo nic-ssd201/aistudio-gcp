@@ -40,6 +40,8 @@ export const authConfig: NextAuthConfig = {
       profile(profile) {
         return {
           id: profile.sub,
+          // `||` collapses empty-string `name` values to `given_name`/`family_name`.
+          // Intentional: Google occasionally returns `name: ""` for service accounts.
           name: profile.name || profile.given_name || profile.family_name,
           email: profile.email,
           image: profile.picture,
@@ -123,7 +125,10 @@ export const authConfig: NextAuthConfig = {
         } catch (error) {
           // Log error but don't fail authentication
           // This handles malformed tokens gracefully
-          log.warn("Failed to parse ID token, using fallback approach", {
+          // log.error (not warn): malformed id_tokens from Google are unexpected
+          // and should be visible in production telemetry — they may indicate
+          // a token-integrity problem or a security event worth investigating.
+          log.error("Failed to parse ID token, using fallback approach", {
             error: error instanceof Error ? error.message : 'Unknown error'
           })
 

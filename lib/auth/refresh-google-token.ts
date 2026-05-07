@@ -38,9 +38,9 @@ import { createLogger } from "@/lib/auth/edge-logger"
  * Bound analysis: entries are deleted in `.finally()` when the Promise settles.
  * `fetch` always eventually settles (Node's HTTP agent enforces socket timeouts),
  * so the map is effectively bounded by concurrent users whose tokens expire at
- * the same instant — negligible in practice. No explicit size cap is needed at
- * current scale; add one if horizontal scaling ever makes concurrent expirations
- * a concern (e.g. `if (activeRefreshes.size > 500) activeRefreshes.clear()`).
+ * the same instant — negligible in practice. An explicit 500-entry safety cap
+ * is applied before each insertion as a defense-in-depth measure against
+ * unexpected horizontal-scaling scenarios (see guard below).
  */
 const activeRefreshes = new Map<string, Promise<JWT | null>>()
 
@@ -63,6 +63,17 @@ export async function refreshGoogleToken(token: JWT): Promise<JWT | null> {
   if (existing) {
     log.debug("Joining existing in-flight token refresh", { sub })
     return existing
+  }
+
+  // Safety cap: if the map grows unexpectedly large (e.g. in a pathological
+  // horizontal-scaling scenario where many tokens expire simultaneously), clear
+  // it rather than letting memory grow without bound. In normal operation the
+  // map holds at most a handful of entries at any given instant.
+  if (activeRefreshes.size > 500) {
+    log.warn("activeRefreshes map exceeded 500 entries — clearing as safety measure", {
+      size: activeRefreshes.size,
+    })
+    activeRefreshes.clear()
   }
 
   const promise = doRefresh(token, log).finally(() => {

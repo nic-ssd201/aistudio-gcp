@@ -15,6 +15,13 @@ export interface UserSession {
   familyName?: string | null;
   /** Google ID token — available in session (used for downstream API auth). */
   idToken?: string;
+  /**
+   * Forward-compat index signature: `getServerSession` spreads `session.user`
+   * (which may carry extra NextAuth fields such as `name` or `image`) into the
+   * returned object. Without this signature TypeScript rejects the object literal
+   * because the spread introduces keys not declared above. If you remove it,
+   * explicitly project only the fields you need instead of spreading session.user.
+   */
   [key: string]: unknown;
 }
 
