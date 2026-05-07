@@ -10,7 +10,7 @@ jest.mock('@/auth', () => ({
   createAuth: jest.fn(() => ({
     auth: jest.fn().mockResolvedValue({
       user: {
-        id: 'test-cognito-sub',
+        id: 'test-oidc-sub',
         email: 'test@example.com'
       }
     }),
@@ -31,10 +31,10 @@ jest.mock('@/lib/auth/request-context', () => ({
   })
 }));
 
-// Mock AWS Cognito authentication
+// Mock Google OIDC session
 jest.mock('@/lib/auth/server-session', () => ({
-  getServerSession: jest.fn(() => Promise.resolve({ 
-    sub: 'test-cognito-sub',
+  getServerSession: jest.fn(() => Promise.resolve({
+    sub: 'test-oidc-sub',
     email: 'test@example.com'
   }))
 }));

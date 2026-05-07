@@ -46,14 +46,14 @@ export const authConfig: NextAuthConfig = {
         tokenSub: token?.sub as string || 'unknown'
       })
 
-      // Handle session update trigger (when roles change)
+      // Handle session update trigger (when roles change).
+      // Decision: fail-closed — return null to force full re-authentication.
+      // Rationale: this codebase uses /api/auth/refresh-session (clears the
+      // session cookie and redirects to sign-in) for role-change propagation;
+      // `useSession().update()` is not called anywhere. If that ever changes,
+      // fail-closed remains the correct behaviour for demotion/revocation —
+      // better to re-auth once than to serve a stale high-privilege token.
       if (trigger === "update") {
-        // Intentionally fail-closed: returning null forces full re-authentication
-        // rather than serving a potentially stale token after a role change.
-        // This is correct for demotion/revocation — the user's next request will
-        // get a fresh token with current roles. If the roleVersion bumping approach
-        // in get-current-user-action.ts is preferred, remove this null return and
-        // instead return { ...token, roleVersion: (token.roleVersion as number ?? 0) + 1 }.
         log.info("Session update triggered — forcing re-authentication (fail-closed)")
         return null;
       }
@@ -79,7 +79,7 @@ export const authConfig: NextAuthConfig = {
 
         // Calculate token lifetime for accurate refresh timing
         const issuedAt = decoded.iat ? decoded.iat * 1000 : Date.now()
-        const expiresAt = account.expires_at ? account.expires_at * 1000 : Date.now() + (12 * 60 * 60 * 1000) // 12 hours fallback
+        const expiresAt = account.expires_at ? account.expires_at * 1000 : Date.now() + (60 * 60 * 1000) // 1 hour fallback — matches Google's access-token lifetime
         const tokenLifetimeMs = expiresAt - issuedAt
 
         // Enhanced logging for token lifecycle debugging
@@ -122,8 +122,8 @@ export const authConfig: NextAuthConfig = {
           })
 
           const now = Date.now()
-          const expiresAt = account.expires_at ? account.expires_at * 1000 : now + (12 * 60 * 60 * 1000) // 12 hours fallback
-          const tokenLifetimeMs = 12 * 60 * 60 * 1000 // 12 hours
+          const expiresAt = account.expires_at ? account.expires_at * 1000 : now + (60 * 60 * 1000) // 1 hour fallback — matches Google's access-token lifetime
+          const tokenLifetimeMs = 60 * 60 * 1000 // 1 hour — matches Google's default access-token lifetime
 
           // Carry given_name / family_name from `user` or `profile` so the
           // session-callback name chain (token.given_name || token.name || …)
@@ -298,6 +298,11 @@ export const authConfig: NextAuthConfig = {
       // hasVerifiedGoogleEmail uses `=== true` so absent/stringified/"false"
       // claims all fail — defense-in-depth against resolveUserId's email-fallback
       // path potentially fusing an unverified account into an existing user record.
+      //
+      // The `account?.provider === 'google'` guard is intentionally kept even though
+      // Google is the only registered provider. It ensures this check is skipped
+      // automatically if a future provider (e.g. GitHub) is added without its own
+      // email_verified gate — rather than incorrectly rejecting it here.
       if (account?.provider === 'google' && !hasVerifiedGoogleEmail(profile)) {
         const log = createLogger({ context: "auth-signin-callback" })
         // Mask most of the local-part before logging — email is PII even in warn logs.
