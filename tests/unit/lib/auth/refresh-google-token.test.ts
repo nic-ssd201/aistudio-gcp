@@ -166,4 +166,29 @@ describe("refreshGoogleToken", () => {
     expect(result).toBeNull()
     expect(global.fetch).not.toHaveBeenCalled()
   })
+
+  it("deduplicates concurrent refresh calls for the same user", async () => {
+    // Only one fetch response is queued — if both concurrent calls went to
+    // the network, the second would get undefined and the test would fail.
+    mockGoogleTokenResponse({
+      access_token: MOCK_ACCESS_TOKEN,
+      id_token: MOCK_ID_TOKEN,
+      expires_in: 3600,
+    })
+
+    const token = makeToken()
+    // Launch two concurrent refreshes without yielding between them.
+    const [result1, result2] = await Promise.all([
+      refreshGoogleToken(token),
+      refreshGoogleToken(token),
+    ])
+
+    // Google's token endpoint must have been called exactly once.
+    expect(global.fetch).toHaveBeenCalledTimes(1)
+    // Both callers receive the same refreshed token.
+    expect(result1).not.toBeNull()
+    expect(result2).not.toBeNull()
+    expect(result1!.accessToken).toBe(MOCK_ACCESS_TOKEN)
+    expect(result2!.accessToken).toBe(MOCK_ACCESS_TOKEN)
+  })
 })

@@ -261,31 +261,36 @@ describe('Drizzle Client Configuration', () => {
   })
 
   describe('Environment Configuration', () => {
-    it('should document required environment variables', () => {
-      const requiredEnvVars = [
-        'RDS_SECRET_ARN',
-        'RDS_RESOURCE_ARN',
-      ]
+    it('should document supported database connection modes (GCP deployment)', () => {
+      // Three mutually exclusive connection modes — at least one must be set.
+      const connectionModes = {
+        // 1. Direct URL — local dev and simple deployments
+        databaseUrl: 'DATABASE_URL',
+        // 2. TCP / Cloud SQL via IP
+        tcpConfig: ['DB_HOST', 'DB_USER', 'DB_PASSWORD'],
+        // 3. Cloud SQL Unix socket (Cloud Run)
+        socketConfig: ['CLOUD_SQL_SOCKET_PATH', 'DB_USER', 'DB_PASSWORD'],
+      }
 
+      expect(connectionModes.databaseUrl).toBe('DATABASE_URL')
+      expect(connectionModes.tcpConfig).toContain('DB_HOST')
+      expect(connectionModes.socketConfig).toContain('CLOUD_SQL_SOCKET_PATH')
+    })
+
+    it('should document optional database variables', () => {
       const optionalEnvVars = [
-        'RDS_DATABASE_NAME', // defaults to 'aistudio'
-        'AWS_REGION', // defaults to 'us-east-1'
+        'DB_NAME',    // defaults to 'aistudio'
+        'DB_SSL',     // defaults to true for TCP connections
+        'DB_PORT',    // defaults to 5432
       ]
 
-      expect(requiredEnvVars).toContain('RDS_SECRET_ARN')
-      expect(requiredEnvVars).toContain('RDS_RESOURCE_ARN')
-      expect(optionalEnvVars).toContain('RDS_DATABASE_NAME')
-      expect(optionalEnvVars).toContain('AWS_REGION')
+      expect(optionalEnvVars).toContain('DB_NAME')
+      expect(optionalEnvVars).toContain('DB_SSL')
     })
 
     it('should document default database name', () => {
       const DEFAULT_DATABASE_NAME = 'aistudio'
       expect(DEFAULT_DATABASE_NAME).toBe('aistudio')
-    })
-
-    it('should document default AWS region', () => {
-      const DEFAULT_AWS_REGION = 'us-east-1'
-      expect(DEFAULT_AWS_REGION).toBe('us-east-1')
     })
   })
 })

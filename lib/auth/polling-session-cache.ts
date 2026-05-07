@@ -4,12 +4,12 @@
  */
 
 import { createLogger } from '@/lib/logger';
-import type { CognitoSession } from '@/lib/auth/server-session';
+import type { UserSession } from '@/lib/auth/server-session';
 
 const log = createLogger({ module: 'polling-session-cache' });
 
 interface CachedSession {
-  session: CognitoSession;
+  session: UserSession;
   userId: number;
   userRoles: string[];
   cachedAt: number;
@@ -76,7 +76,7 @@ export class PollingSessionCache {
    */
   setCachedSession(
     sessionId: string,
-    session: CognitoSession,
+    session: UserSession,
     userId: number,
     userRoles: string[]
   ): void {
@@ -205,9 +205,9 @@ export const pollingSessionCache = new PollingSessionCache({
 /**
  * Generate cache key from session data
  */
-export function generateSessionCacheKey(session: CognitoSession): string {
+export function generateSessionCacheKey(session: UserSession): string {
   // Use sub (user ID) + iat (issued at time) for uniqueness and security
   // This prevents cache key collisions and adds session-specific entropy
-  const iat = (session as CognitoSession & { iat?: number }).iat || Date.now();
+  const iat = (session as UserSession & { iat?: number }).iat || Date.now();
   return `session:${session.sub}:${iat}`;
 }

@@ -24,28 +24,24 @@ services:
       # Adjust based on actual resource limits below
       - NODE_OPTIONS=--max-old-space-size=1400
 
-      # AWS Configuration (for local testing, use your own credentials)
-      # In production, these come from ECS task role
-      - AWS_REGION=${AWS_REGION:-us-west-2}
-      - NEXT_PUBLIC_AWS_REGION=${NEXT_PUBLIC_AWS_REGION:-us-west-2}
-
-      # Authentication (Cognito)
+      # Authentication (Google OIDC via NextAuth v5)
       - AUTH_URL=${AUTH_URL}
       - AUTH_SECRET=${AUTH_SECRET}
-      - AUTH_COGNITO_CLIENT_ID=${AUTH_COGNITO_CLIENT_ID}
-      - AUTH_COGNITO_ISSUER=${AUTH_COGNITO_ISSUER}
-      - NEXT_PUBLIC_COGNITO_USER_POOL_ID=${NEXT_PUBLIC_COGNITO_USER_POOL_ID}
-      - NEXT_PUBLIC_COGNITO_CLIENT_ID=${NEXT_PUBLIC_COGNITO_CLIENT_ID}
-      - NEXT_PUBLIC_COGNITO_DOMAIN=${NEXT_PUBLIC_COGNITO_DOMAIN}
+      - AUTH_GOOGLE_ID=${AUTH_GOOGLE_ID}
+      - AUTH_GOOGLE_SECRET=${AUTH_GOOGLE_SECRET}
 
-      # Database (RDS)
-      - RDS_RESOURCE_ARN=${RDS_RESOURCE_ARN}
-      - RDS_SECRET_ARN=${RDS_SECRET_ARN}
+      # Database — use one of:
+      #   DATABASE_URL (direct URL, local dev)
+      #   DB_HOST + DB_USER + DB_PASSWORD (TCP / Cloud SQL via IP)
+      #   CLOUD_SQL_SOCKET_PATH + DB_USER + DB_PASSWORD (Cloud Run socket)
+      - DATABASE_URL=${DATABASE_URL:-}
+      - DB_HOST=${DB_HOST:-}
+      - DB_USER=${DB_USER:-}
+      - DB_PASSWORD=${DB_PASSWORD:-}
+      - DB_NAME=${DB_NAME:-aistudio}
 
-      # Optional: AWS Credentials (for local development only)
-      # In production, use ECS task role
-      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID:-}
-      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY:-}
+      # Storage (GCS)
+      - GCS_BUCKET_NAME=${GCS_BUCKET_NAME}
 
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:3000/api/healthz"]

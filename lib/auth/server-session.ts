@@ -18,11 +18,6 @@ export interface UserSession {
   [key: string]: unknown;
 }
 
-/**
- * Backward-compat alias. Prefer UserSession in new code.
- * @deprecated Use UserSession directly.
- */
-export type CognitoSession = UserSession;
 
 /**
  * Gets the current authenticated session using NextAuth v5.

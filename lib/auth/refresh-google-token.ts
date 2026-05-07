@@ -29,11 +29,19 @@ import { createLogger } from "@/lib/auth/edge-logger"
  *
  * The map entry is deleted as soon as the Promise settles (success or error),
  * so the next expiry window starts a fresh request.
+ *
+ * Note: dedup is per-process. On multi-instance deployments (e.g. Cloud Run
+ * with several pods) each instance independently refreshes — token endpoints
+ * are designed for this traffic level, so the cross-instance duplication is
+ * acceptable in practice.
  */
 const activeRefreshes = new Map<string, Promise<JWT | null>>()
 
 export async function refreshGoogleToken(token: JWT): Promise<JWT | null> {
   const log = createLogger({ context: "google-token-refresh" })
+  // "anonymous" is a safe fallback: doRefresh short-circuits on missing
+  // refreshToken before doing any network I/O, so two anonymous calls sharing
+  // a Promise just both get null quickly — no correctness impact.
   const sub = (token.sub as string | undefined) ?? "anonymous"
 
   // Deduplicate concurrent refresh calls for the same user.
@@ -43,14 +51,14 @@ export async function refreshGoogleToken(token: JWT): Promise<JWT | null> {
     return existing
   }
 
-  const promise = _doRefresh(token, log).finally(() => {
+  const promise = doRefresh(token, log).finally(() => {
     activeRefreshes.delete(sub)
   })
   activeRefreshes.set(sub, promise)
   return promise
 }
 
-async function _doRefresh(token: JWT, log: ReturnType<typeof createLogger>): Promise<JWT | null> {
+async function doRefresh(token: JWT, log: ReturnType<typeof createLogger>): Promise<JWT | null> {
 
   if (!token.refreshToken) {
     log.warn("No refresh token available for Google token", { sub: token.sub })

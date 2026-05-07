@@ -1,9 +1,9 @@
 /**
- * Resolve a Cognito session to a database user ID.
+ * Resolve a user session to a database user ID.
  *
  * Performs JIT (just-in-time) user provisioning if the user
  * doesn't exist in the database yet. This handles the case where
- * a valid Cognito session has no corresponding users table record
+ * a valid Google OIDC session has no corresponding users table record
  * (e.g., first login, deleted user re-authenticating).
  *
  * @see actions/db/get-current-user-action.ts for the full provisioning
@@ -21,17 +21,17 @@ import {
 import { createLogger, sanitizeForLogging } from "@/lib/logger"
 import { ErrorFactories } from "@/lib/error-utils"
 import { ErrorCode } from "@/types/error-types"
-import type { CognitoSession } from "./server-session"
+import type { UserSession } from "./server-session"
 
 /**
- * Resolve a Cognito session to a numeric database user ID.
+ * Resolve a user session to a numeric database user ID.
  *
  * Flow:
- * 1. Look up user by cognito_sub (fast path)
- * 2. If not found, look up by email and link cognito_sub (migration path)
+ * 1. Look up user by sub / cognito_sub column (fast path)
+ * 2. If not found, look up by email and link sub (migration path)
  * 3. If still not found, create user via UPSERT and assign default role (new user path)
  *
- * **Write side-effect**: On the first call for a new Cognito user, this function
+ * **Write side-effect**: On the first call for a new user, this function
  * creates a users row and assigns a default role. Callers on read-only (GET) routes
  * accept this one-time write — it is intentional for JIT provisioning.
  *
@@ -40,7 +40,7 @@ import type { CognitoSession } from "./server-session"
  * @throws If database operations fail
  */
 export async function resolveUserId(
-  session: CognitoSession,
+  session: UserSession,
   requestId?: string
 ): Promise<number> {
   const log = createLogger({ module: "resolveUserId", requestId })
