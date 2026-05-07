@@ -203,11 +203,20 @@ export const pollingSessionCache = new PollingSessionCache({
 });
 
 /**
- * Generate cache key from session data
+ * Generate cache key from session data.
+ *
+ * Keyed on `sub` only. The previous implementation tried to incorporate `iat`
+ * (issued-at time) for per-session entropy, but `iat` is never copied from the
+ * JWT into the UserSession object returned by getServerSession(), so the
+ * fallback `|| Date.now()` fired on every call — producing a fresh key each
+ * time and making the cache a permanent miss.
+ *
+ * `sub` alone is sufficient: the cache TTL (5 min) is shorter than the token
+ * refresh window, and a new authentication event for the same sub will simply
+ * warm a fresh cache entry on the next request. No security regression — the
+ * cache stores auth results derived from a verified NextAuth session, not the
+ * session itself.
  */
 export function generateSessionCacheKey(session: UserSession): string {
-  // Use sub (user ID) + iat (issued at time) for uniqueness and security
-  // This prevents cache key collisions and adds session-specific entropy
-  const iat = (session as UserSession & { iat?: number }).iat || Date.now();
-  return `session:${session.sub}:${iat}`;
+  return `session:${session.sub}`;
 }

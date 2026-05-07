@@ -11,7 +11,18 @@ export default function SignOutPage() {
     // signOut() from next-auth/react posts to /api/auth/signout with a CSRF
     // token automatically, preventing CSRF-triggered logout via GET requests.
     // .catch() ensures a network blip doesn't strand the user on "Signing out…" forever.
-    signOut({ callbackUrl: '/' }).catch(() => router.push('/'));
+    // Note: signOut() is local-only — it clears the NextAuth session cookie but
+    // does NOT revoke the Google OAuth grant at accounts.google.com. After
+    // sign-out, returning users may be silently re-authenticated via their
+    // active Google session. This is the expected SSO behaviour for Workspace
+    // deployments. If explicit account-switching UX is needed, change
+    // `prompt: "consent"` → `prompt: "select_account"` in auth.ts.
+    signOut({ callbackUrl: '/' }).catch((err) => {
+      // Log so a partial-failure (e.g., 5xx clearing the cookie) is observable.
+      // eslint-disable-next-line no-console
+      console.error('[signout] signOut() failed, redirecting to / anyway:', err)
+      router.push('/')
+    });
   }, [router]);
 
   return (

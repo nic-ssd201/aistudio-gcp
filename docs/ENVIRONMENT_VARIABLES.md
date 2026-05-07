@@ -58,7 +58,8 @@ Optional tuning:
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `SESSION_MAX_AGE` | `86400` (24 h) | JWT session lifetime in seconds. Must be a positive integer; non-numeric values silently fall back to the default. |
+| `SESSION_MAX_AGE` | `86400` (24 h) | JWT session lifetime in seconds. Must be a positive integer; non-numeric values fall back to the default. |
+| `TOKEN_REFRESH_THRESHOLD_MS` | `300000` (5 min) | How many milliseconds before token expiry to proactively refresh. Minimum 60000 ms. Increase for deployments with long-running streaming paths (>5 min). |
 
 ---
 

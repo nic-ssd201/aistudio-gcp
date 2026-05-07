@@ -23,7 +23,17 @@ export const authConfig: NextAuthConfig = {
         params: {
           scope: "openid email profile",
           access_type: "offline",
-          prompt: "consent", // Required to receive refresh_token on every sign-in
+          // `prompt: "consent"` ensures Google returns a refresh_token on
+          // every sign-in (including repeat sign-ins for the same user).
+          // Without it, Google only issues a refresh_token on the first
+          // authorization for a given client+scope — subsequent logins may
+          // omit it, leaving the session unable to extend beyond 1 hour.
+          // Trade-off: users see the Google consent screen on every sign-in
+          // instead of silent SSO. Change to "select_account" if account
+          // picking without full consent re-prompt is preferred and the
+          // missing-refresh-token case can be handled (e.g., redirect to
+          // re-auth when expiresAt approaches without a refresh_token).
+          prompt: "consent",
         },
       },
       checks: ["pkce", "state", "nonce"],
@@ -160,10 +170,14 @@ export const authConfig: NextAuthConfig = {
       const isExpired = now > expiresAt
 
       // Proactively refresh when less than REFRESH_THRESHOLD_MS remain.
-      // 5 minutes is conservative for normal web requests; long-running paths
-      // (assistant-architect streaming, scheduled execution) are typically
-      // ≤2 min per request, so this window covers them comfortably.
-      const REFRESH_THRESHOLD_MS = 5 * 60 * 1000
+      // Default: 5 minutes — conservative for normal web requests. Override via
+      // TOKEN_REFRESH_THRESHOLD_MS (milliseconds) if long-running streaming or
+      // scheduled-execution paths take >5 min between JWT-callback invocations.
+      // Floor: 60 s — prevents accidentally disabling proactive refresh.
+      const envThreshold = Number.parseInt(process.env.TOKEN_REFRESH_THRESHOLD_MS ?? '', 10)
+      const REFRESH_THRESHOLD_MS = Number.isFinite(envThreshold) && envThreshold >= 60_000
+        ? envThreshold
+        : 5 * 60 * 1000
       const shouldRefresh = (expiresAt - now) < REFRESH_THRESHOLD_MS
 
       log.debug("Token status check", {
