@@ -1,11 +1,13 @@
 "use client"
 
 import { useEffect } from 'react';
+import { signOut } from 'next-auth/react';
 
 export default function SignOutPage() {
   useEffect(() => {
-    // Redirect to NextAuth's standard signout route (one hop, no intermediary)
-    window.location.href = '/api/auth/signout';
+    // signOut() from next-auth/react posts to /api/auth/signout with a CSRF
+    // token automatically, preventing CSRF-triggered logout via GET requests.
+    signOut({ callbackUrl: '/' });
   }, []);
 
   return (

@@ -39,12 +39,6 @@ jest.mock('@/lib/auth/server-session', () => ({
   }))
 }));
 
-jest.mock('aws-amplify', () => ({
-  Amplify: {
-    configure: jest.fn()
-  }
-}));
-
 // Mock logger
 jest.mock('@/lib/logger', () => ({
   __esModule: true,

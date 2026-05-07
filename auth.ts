@@ -280,7 +280,14 @@ export const authConfig: NextAuthConfig = {
       else if (new URL(url).origin === baseUrl) return url
       return baseUrl + "/dashboard"
     },
-    async signIn() {
+    async signIn({ account, profile }) {
+      // Reject sign-ins from Google accounts with unverified emails.
+      // Without this check, an unverified Google account could match an
+      // existing user record by email via resolveUserId's email-fallback
+      // path, potentially allowing account takeover through email collision.
+      if (account?.provider === 'google' && profile?.email_verified === false) {
+        return false;
+      }
       return true;
     },
   },

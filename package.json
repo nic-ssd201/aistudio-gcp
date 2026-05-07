@@ -116,7 +116,6 @@
     "@xyflow/react": "^12.9.2",
     "ai": "~6.0.91",
     "argon2": "^0.44.0",
-    "aws-amplify": "^6.16.0",
     "babel-plugin-react-compiler": "^1.0.0",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
