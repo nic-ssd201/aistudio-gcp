@@ -132,18 +132,25 @@ describe("PollingSessionCache", () => {
 
   // ── TTL enforcement ────────────────────────────────────────────────────────
 
-  it("returns null when the entry has expired", async () => {
+  it("returns null when the entry has expired", () => {
+    // Use fake timers instead of a real setTimeout — the original `await new
+    // Promise(resolve => setTimeout(resolve, 20))` is flaky on slow CI where
+    // the 20 ms wall-clock delay may not reliably exceed a 1 ms TTL.
+    jest.useFakeTimers()
+
     const shortLivedCache = new PollingSessionCache({ maxAge: 1, cleanupInterval: 600_000 })
     const session = makeSession()
     const key = generateSessionCacheKey(session)
 
     shortLivedCache.setCachedSession(key, session, 42, ["student"])
 
-    // Wait long enough for the 1 ms TTL to elapse.
-    await new Promise((resolve) => setTimeout(resolve, 20))
+    // Advance the fake clock past the 1 ms TTL.
+    jest.advanceTimersByTime(10)
 
     expect(shortLivedCache.getCachedSession(key)).toBeNull()
     shortLivedCache.destroy()
+
+    jest.useRealTimers()
   })
 })
 

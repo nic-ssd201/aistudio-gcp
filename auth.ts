@@ -142,7 +142,10 @@ export const authConfig: NextAuthConfig = {
             // loginIat is a custom claim that NextAuth never touches, so it stays
             // constant for the lifetime of the login session and gives the cache a
             // stable key to hit.  See lib/auth/polling-session-cache.ts.
-            loginIat: decoded.iat || Math.floor(Date.now() / 1000),
+            // `??` not `||`: iat=0 is theoretically valid (epoch) and should
+            // not be overwritten by a synthetic fallback that would diverge from
+            // the real token timestamp and break cache-key consistency.
+            loginIat: decoded.iat ?? Math.floor(Date.now() / 1000),
             roleVersion: 0, // Initialize role version
             provider: 'google', // Always Google for SSD201
           }
@@ -326,7 +329,19 @@ export const authConfig: NextAuthConfig = {
       // token.loginIat is a custom JWT claim that NextAuth never overwrites; the
       // standard token.iat is reset to Date.now() on every re-encode by jose's
       // .setIssuedAt() and would therefore produce a fresh cache key per request.
-      session.iat = typeof token.loginIat === 'number' ? token.loginIat : undefined;
+      if (typeof token.loginIat === 'number') {
+        session.iat = token.loginIat;
+      } else {
+        // loginIat is set unconditionally on every initial sign-in (happy path
+        // and malformed-id_token fallback). Reaching here on a non-initial token
+        // means a deploy removed the loginIat assignment — warn so the regression
+        // surfaces in production logs rather than silently collapsing all sessions
+        // for this user to cache key session:sub:0.
+        log.warn("loginIat missing on non-initial token — cache key will fall back to sub:0", {
+          sub: token.sub,
+        })
+        session.iat = undefined;
+      }
       // Propagate roleVersion so /api/auth/refresh-session can compare against the
       // DB value and detect role changes.  Without this the sessionRoleVersion is
       // always undefined (→ 0), which causes needsRefresh=true on every poll as

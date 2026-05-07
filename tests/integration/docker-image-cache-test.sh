@@ -80,8 +80,7 @@ docker run --rm \
   -v /tmp/nextjs-cache-test:/app/.next/cache \
   --name aistudio-test-cache \
   -e DOCUMENTS_BUCKET_NAME=test-bucket \
-  -e RDS_RESOURCE_ARN=arn:aws:rds:us-east-1:000000000000:cluster:test \
-  -e RDS_SECRET_ARN=arn:aws:secretsmanager:us-east-1:000000000000:secret:test \
+  -e DATABASE_URL=postgresql://test:test@localhost:5432/test \
   -e AUTH_SECRET=test-secret-12345678901234567890123456789012 \
   -e AUTH_URL=http://localhost:3000 \
   -e AUTH_GOOGLE_ID=test-google-id \
@@ -126,8 +125,7 @@ CONTAINER_ID=$(docker run -d --rm \
   --platform="$PLATFORM" \
   -v /tmp/nextjs-cache-test:/app/.next/cache \
   -e DOCUMENTS_BUCKET_NAME=test-bucket \
-  -e RDS_RESOURCE_ARN=arn:aws:rds:us-east-1:000000000000:cluster:test \
-  -e RDS_SECRET_ARN=arn:aws:secretsmanager:us-east-1:000000000000:secret:test \
+  -e DATABASE_URL=postgresql://test:test@localhost:5432/test \
   -e AUTH_SECRET=test-secret-12345678901234567890123456789012 \
   -e AUTH_URL=http://localhost:3000 \
   -e AUTH_GOOGLE_ID=test-google-id \

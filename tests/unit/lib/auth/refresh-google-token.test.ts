@@ -193,6 +193,60 @@ describe("refreshGoogleToken", () => {
     expect(global.fetch).not.toHaveBeenCalled()
   })
 
+  it("returns null (fail-closed) when Google returns 200 but access_token is absent", async () => {
+    // A 200 response without access_token is structurally malformed.
+    // Silently storing undefined would break downstream auth checks.
+    mockGoogleTokenResponse({
+      // access_token intentionally omitted
+      id_token: MOCK_ID_TOKEN,
+      expires_in: 3600,
+    })
+
+    const result = await refreshGoogleToken(makeToken())
+
+    expect(result).toBeNull()
+  })
+
+  it("returns null (fail-closed) when Google returns 200 but id_token is absent", async () => {
+    mockGoogleTokenResponse({
+      access_token: MOCK_ACCESS_TOKEN,
+      // id_token intentionally omitted
+      expires_in: 3600,
+    })
+
+    const result = await refreshGoogleToken(makeToken())
+
+    expect(result).toBeNull()
+  })
+
+  it("returns null (fail-closed) when the AbortController 10 s timeout fires", async () => {
+    // Simulate a hung Google token endpoint: fetch never resolves, the 10 s
+    // AbortController fires, and refreshGoogleToken returns null so the caller
+    // can force re-auth rather than waiting indefinitely.
+    jest.useFakeTimers()
+
+    global.fetch = jest.fn().mockImplementation(
+      (_url: string, opts: RequestInit) =>
+        new Promise((_resolve, reject) => {
+          // Wire the AbortSignal so abort() actually rejects the promise.
+          opts.signal?.addEventListener("abort", () => {
+            const err = new Error("The operation was aborted.")
+            err.name = "AbortError"
+            reject(err)
+          })
+        })
+    )
+
+    const refreshPromise = refreshGoogleToken(makeToken())
+    // Advance time past the 10 s abort threshold.
+    jest.advanceTimersByTime(11_000)
+    const result = await refreshPromise
+
+    expect(result).toBeNull()
+
+    jest.useRealTimers()
+  })
+
   it("deduplicates concurrent refresh calls for the same user", async () => {
     // Only one fetch response is queued — if both concurrent calls went to
     // the network, the second would get undefined and the test would fail.
