@@ -29,5 +29,9 @@ declare module "next-auth/jwt" {
     given_name?: string
     family_name?: string
     preferred_username?: string
+    /** Auth provider that issued this token — routes refresh logic ('cognito' | 'google'). */
+    provider?: string
+    tokenLifetimeMs?: number
+    roleVersion?: number
   }
 }

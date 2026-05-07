@@ -18,7 +18,7 @@ substitutions:
   _REGION: us-central1
   _SERVICE_NAME: aistudio
   _REPO: aistudio-images
-  _CLOUD_SQL_INSTANCE: ""        # e.g. my-project:us-central1:aistudio-db
+  _CLOUD_SQL_INSTANCE: REQUIRED_OVERRIDE  # e.g. my-project:us-central1:aistudio-db
   _MIN_INSTANCES: "0"
   _MAX_INSTANCES: "10"
   _MEMORY: 2Gi
@@ -29,7 +29,22 @@ options:
   machineType: E2_HIGHCPU_8   # Faster builds; Next.js webpack build is CPU-bound
 
 steps:
-  # ── 0. Lint + typecheck ──────────────────────────────────────────────────────
+  # ── 0. Guard: required substitutions ────────────────────────────────────────
+  # Fail fast if mandatory vars are missing, before any network or build work.
+  - name: gcr.io/google.com/cloudsdktool/cloud-sdk
+    id: validate-substitutions
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        set -e
+        if [ -z "${_CLOUD_SQL_INSTANCE}" ] || [ "${_CLOUD_SQL_INSTANCE}" = "REQUIRED_OVERRIDE" ]; then
+          echo "ERROR: _CLOUD_SQL_INSTANCE substitution must be set (e.g. project:region:instance)"
+          exit 1
+        fi
+        echo "Substitution validation passed: _CLOUD_SQL_INSTANCE=${_CLOUD_SQL_INSTANCE}"
+
+  # ── 1. Lint + typecheck ──────────────────────────────────────────────────────
   # Run before building the image so failures are caught cheaply.
   # Mirrors the CLAUDE.md requirement: lint and typecheck must pass before any
   # artifact is produced.
@@ -42,8 +57,10 @@ steps:
         bun install --frozen-lockfile
         bun run lint
         bun run typecheck
+    waitFor:
+      - validate-substitutions
 
-  # ── 1. Build Docker image ────────────────────────────────────────────────────
+  # ── 2. Build Docker image ────────────────────────────────────────────────────
   - name: gcr.io/cloud-builders/docker
     id: build
     args:
@@ -121,7 +138,9 @@ steps:
       # Format: ENV_VAR=secret-name:version
       # DB_USER and DB_PASSWORD must be stored in Secret Manager.
       - --update-secrets
-      - NEXTAUTH_SECRET=aistudio-nextauth-secret:latest,DB_USER=aistudio-db-user:latest,DB_PASSWORD=aistudio-db-password:latest
+      # AUTH_SECRET is the NextAuth v5 canonical name (lib/env-validation.ts).
+      # DB_USER and DB_PASSWORD must be stored in Secret Manager.
+      - AUTH_SECRET=aistudio-auth-secret:latest,DB_USER=aistudio-db-user:latest,DB_PASSWORD=aistudio-db-password:latest
       - --service-account
       - aistudio-cloudrun@$PROJECT_ID.iam.gserviceaccount.com
       - --allow-unauthenticated

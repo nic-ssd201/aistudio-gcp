@@ -50,12 +50,10 @@ async function refreshGoogleToken(token: JWT): Promise<JWT | null> {
       // Google may rotate the refresh token on security events — preserve the
       // new one when present; fall back to the current token.
       refreshToken: tokens.refresh_token ?? (token.refreshToken as string),
-      // Use expires_in if provided; default to 1 hour rather than inheriting
-      // the old (already-expired) expiresAt, which would cause an immediate
-      // re-refresh loop on the next jwt() invocation.
-      expiresAt: tokens.expires_in
-        ? Date.now() + tokens.expires_in * 1000
-        : Date.now() + 60 * 60 * 1000,
+      // Use expires_in if provided; floor at 60 s so a zero/missing value from
+      // Google (e.g. during clock-skew incidents) never produces an already-
+      // expired timestamp that triggers an immediate re-refresh loop.
+      expiresAt: Date.now() + Math.max(tokens.expires_in ?? 3600, 60) * 1000,
     }
     log.info("Google token refreshed successfully")
     return refreshed
@@ -97,13 +95,18 @@ export const authConfig: NextAuthConfig = {
       },
     }),
     // GCP migration: Google OIDC provider (SSD201)
-    // Enabled when AUTH_GOOGLE_ID / AUTH_GOOGLE_SECRET are set.
-    // access_type=offline + prompt=consent ensure a refresh_token is issued.
-    ...(process.env.AUTH_GOOGLE_ID
+    // Enabled when AUTH_GOOGLE_ID / AUTH_GOOGLE_SECRET are both set.
+    // Fail loud at startup if the ID is present without the secret — mirrors
+    // the check in refreshGoogleToken so misconfiguration surfaces on boot,
+    // not 12 hours later as an opaque `invalid_client` from Google.
+    ...(process.env.AUTH_GOOGLE_ID && !process.env.AUTH_GOOGLE_SECRET
+      ? (() => { throw new Error("AUTH_GOOGLE_ID is set but AUTH_GOOGLE_SECRET is missing") })()
+      : []),
+    ...(process.env.AUTH_GOOGLE_ID && process.env.AUTH_GOOGLE_SECRET
       ? [
           Google({
             clientId: process.env.AUTH_GOOGLE_ID,
-            clientSecret: process.env.AUTH_GOOGLE_SECRET ?? "",
+            clientSecret: process.env.AUTH_GOOGLE_SECRET,
             authorization: {
               params: {
                 scope: "openid email profile",

@@ -135,7 +135,8 @@ function getPgClient(): ReturnType<typeof postgres> {
 
       const user = process.env.DB_USER;
       const password = process.env.DB_PASSWORD;
-      const database = process.env.DB_NAME || "aistudio";
+      // Mirror TCP path: DB_NAME || RDS_DATABASE_NAME || "aistudio"
+      const database = process.env.DB_NAME || process.env.RDS_DATABASE_NAME || "aistudio";
 
       if (!user || !password) {
         throw new Error(
