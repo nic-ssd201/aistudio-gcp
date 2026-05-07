@@ -1,0 +1,33 @@
+# Bootstrap — production environment
+# Copy to prod.tfvars (gitignored) and fill in real values.
+# CRITICAL: Requires human review + manual approval gate before apply.
+#
+# Apply with:
+#   terraform init \
+#     -backend-config="bucket=aistudio-tfstate-shared" \
+#     -backend-config="prefix=bootstrap/prod"
+#   terraform apply -var-file=prod.tfvars
+
+env             = "prod"
+host_project_id = "aistudio-shared"
+env_project_id  = "aistudio-prod"
+
+# GCP org / billing
+org_id          = "123456789012"
+billing_account = "XXXXXX-XXXXXX-XXXXXX"
+
+region = "us-west1"
+
+github_repo = "psd401/aistudio"
+
+# Breakglass email — use a monitored shared mailbox; prod budget alerts must page someone.
+breakglass_email = "it-breakglass@sunnysideschools.org"
+
+# Budget — $5000/mo for prod; alert at 50/80/100% current-spend + 120% forecast
+budget_amount_usd         = 5000
+budget_threshold_percents = [0.5, 0.8, 1.0, 1.2]
+
+# Prod: supply real channel IDs (PagerDuty + Telegram) before first apply.
+# Format: ["projects/PROJECT/notificationChannels/CHANNEL_ID"]
+# Until populated, the breakglass email channel fires automatically.
+budget_notification_channels = []

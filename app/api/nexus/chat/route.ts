@@ -471,11 +471,22 @@ async function setupConversation(params: {
     conversationId = convResult.conversationId;
   }
 
-  // Save user message
+  // Save user message — guard against truly empty messages (no parts, no content)
+  // while preserving attachment-only turns. The guard checks the ORIGINAL message
+  // from the client (which includes file/attachment parts), not the extracted content.
+  // extractUserContent() only serializes text/image parts, so attachment-only messages
+  // arrive at saveUserMessage with content='' and parts=[] — but they ARE still saved
+  // because hasOriginalContent is true (the original message had file parts).
   const lastMessage = messages[messages.length - 1];
   if (lastMessage && lastMessage.role === 'user') {
-    const { content, parts } = extractUserContent(lastMessage as UIMessage);
-    await saveUserMessage({ conversationId, content, parts, dbModelId });
+    const hasOriginalContent = (lastMessage.parts && lastMessage.parts.length > 0) ||
+      (typeof lastMessage.content === 'string' && lastMessage.content.trim().length > 0) ||
+      (Array.isArray(lastMessage.content) && lastMessage.content.length > 0);
+
+    if (hasOriginalContent) {
+      const { content, parts } = extractUserContent(lastMessage as UIMessage);
+      await saveUserMessage({ conversationId, content, parts, dbModelId });
+    }
   }
 
   return { conversationId, conversationTitle };
@@ -601,18 +612,30 @@ export async function POST(req: Request) {
     // for all terminal states including errors (verified against ai@6.x).
     await closeMcpClients(connectorToolResults, log, 'catch');
 
+    if (error instanceof ContentSafetyBlockedError) {
+      log.warn('Content blocked by safety guardrails', {
+        error: { message: error.message, name: error.name },
+        categories: error.blockedCategories,
+        source: error.source
+      });
+      timer({ status: 'blocked' });
+      return new Response(
+        JSON.stringify({
+          error: error.message,
+          code: 'CONTENT_BLOCKED',
+          categories: error.blockedCategories,
+          source: error.source,
+          requestId,
+        }),
+        { status: 400, headers: { 'Content-Type': 'application/json', 'X-Request-Id': requestId } }
+      );
+    }
+
     log.error('Nexus chat API error', {
       error: error instanceof Error ? { message: error.message, name: error.name } : String(error)
     });
 
     timer({ status: 'error' });
-
-    if (error instanceof ContentSafetyBlockedError) {
-      return new Response(
-        JSON.stringify({ error: error.message, code: 'CONTENT_BLOCKED', requestId }),
-        { status: 400, headers: { 'Content-Type': 'application/json', 'X-Request-Id': requestId } }
-      );
-    }
 
     return new Response(
       JSON.stringify({ error: 'Failed to process chat request', requestId }),
