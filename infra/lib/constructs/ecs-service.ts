@@ -534,11 +534,21 @@ export class EcsServiceConstruct extends Construct {
         // variables below are AWS Cognito artefacts unused in the GCP deployment.
         // See nic-ssd201/aistudio-gcp#8.
         //
-        // The two Fn.importValue() calls are gated on isLegacyAwsDeploy so that
-        // a plain `cdk deploy` (without --context legacy=true) does not fail with
-        // "No export named <environment>-CognitoUserPoolId".  Without the gate,
-        // CloudFormation resolves the import at deploy time even though the values
-        // are never read by the GCP-only code path.
+        // DEPLOYMENT NOTE: This entire EcsServiceConstruct (and the FrontendStack
+        // that instantiates it) is DEAD CODE in the GCP fork.  Do not attempt to
+        // run `cdk deploy` on the FrontendStack without the full upstream AWS
+        // infrastructure (Cognito, SQS queues, DynamoDB tables, Lambdas, etc.).
+        // The many other Fn.importValue() calls above (queue URLs, table names,
+        // Lambda function names) reference exports from AWS-only stacks that are
+        // absent from the GCP deployment — they would all fail at CloudFormation
+        // deploy time.  See nic-ssd201/aistudio-gcp#8 for the removal roadmap.
+        //
+        // Among the Cognito references specifically, the two Fn.importValue() calls
+        // below are gated on isLegacyAwsDeploy so that a mistaken `cdk synth`
+        // does not embed the import token in the CloudFormation template.  Other
+        // Fn.importValue() calls in this file are not individually gated because
+        // the entire construct is declared dead code — gating every reference
+        // individually would add noise without reducing deployment risk.
         NEXT_PUBLIC_COGNITO_CLIENT_ID: props.cognitoClientId,
         NEXT_PUBLIC_COGNITO_USER_POOL_ID: props.isLegacyAwsDeploy
           ? cdk.Fn.importValue(`${environment}-CognitoUserPoolId`)

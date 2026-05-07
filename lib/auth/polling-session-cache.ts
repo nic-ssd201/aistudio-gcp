@@ -260,13 +260,23 @@ export const pollingSessionCache = new PollingSessionCache({
  * `iat` (issued-at), so the cache entry for the previous session is bypassed
  * automatically — without needing an explicit invalidation on sign-out.
  *
- * `iat` is now propagated from the JWT through the NextAuth session callback
- * and `getServerSession()` (previously it was not copied, making the original
- * `session:${sub}:${iat}` design a permanent cache miss).
+ * `iat` is propagated from the JWT's `loginIat` custom claim through the NextAuth
+ * session callback and `getServerSession()`.  A missing or zero iat indicates
+ * broken propagation — in that case we return `null` so callers skip the cache
+ * entirely rather than caching under the degenerate key `session:sub:0`.
  *
- * Falls back to iat=0 when absent (e.g. unit tests or token without iat claim)
- * so the key remains deterministic.
+ * Fail-closed: a cache miss on every request is preferable to multiple concurrent
+ * sessions for the same sub sharing one entry and potentially receiving stale roles.
+ *
+ * @returns The cache key string, or `null` when `iat` is absent or zero
+ *          (treat as cache miss — do not call getCachedSession with the result).
  */
-export function generateSessionCacheKey(session: UserSession): string {
-  return `session:${session.sub}:${session.iat ?? 0}`;
+export function generateSessionCacheKey(session: UserSession): string | null {
+  if (!session.iat) {
+    // iat is absent or 0 — skip caching to avoid the degenerate key collision
+    // where every session for a sub maps to session:sub:0 and cross-session
+    // stale-role serving becomes possible.
+    return null;
+  }
+  return `session:${session.sub}:${session.iat}`;
 }

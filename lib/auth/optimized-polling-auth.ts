@@ -49,32 +49,43 @@ export async function authenticatePollingRequest(): Promise<OptimizedAuthResult>
       };
     }
 
+    // generateSessionCacheKey returns null when session.iat is absent or 0,
+    // which indicates broken loginIat propagation.  In that case we skip the
+    // cache entirely (fail-closed) rather than caching under the degenerate key
+    // session:sub:0 where every session for the same sub would collide and
+    // potentially receive stale roles from a different session's cache entry.
     const cacheKey = generateSessionCacheKey(session);
 
-    // Step 2: Check cache first
-    const cachedAuth = pollingSessionCache.getCachedSession(cacheKey);
-    if (cachedAuth) {
-      const authTime = Date.now() - startTime;
-      authPerformanceMonitor.recordAuthRequest(authTime, 'cache', true);
+    // Step 2: Check cache first (skip when cacheKey is null — iat missing)
+    if (cacheKey) {
+      const cachedAuth = pollingSessionCache.getCachedSession(cacheKey);
+      if (cachedAuth) {
+        const authTime = Date.now() - startTime;
+        authPerformanceMonitor.recordAuthRequest(authTime, 'cache', true);
 
-      log.debug('Using cached authentication', {
-        userId: cachedAuth.userId,
-        cacheAge: Date.now() - cachedAuth.cachedAt,
-        requestCount: cachedAuth.requestCount,
-        authTime
+        log.debug('Using cached authentication', {
+          userId: cachedAuth.userId,
+          cacheAge: Date.now() - cachedAuth.cachedAt,
+          requestCount: cachedAuth.requestCount,
+          authTime
+        });
+
+        return {
+          isAuthorized: true,
+          userId: cachedAuth.userId,
+          session: cachedAuth.session,
+          userRoles: cachedAuth.userRoles,
+          authMethod: 'cache',
+          authTime
+        };
+      }
+    } else {
+      log.warn('Skipping polling cache — session.iat absent (loginIat propagation broken?)', {
+        sub: session.sub,
       });
-
-      return {
-        isAuthorized: true,
-        userId: cachedAuth.userId,
-        session: cachedAuth.session,
-        userRoles: cachedAuth.userRoles,
-        authMethod: 'cache',
-        authTime
-      };
     }
 
-    // Step 3: Full authentication (cache miss)
+    // Step 3: Full authentication (cache miss or iat-less session)
     log.debug('Cache miss - performing full authentication', { sub: session.sub });
 
     const userResult = await getCurrentUserAction();
@@ -96,8 +107,10 @@ export async function authenticatePollingRequest(): Promise<OptimizedAuthResult>
     const { user, roles } = userResult.data;
     const userRoles = roles.map(role => role.name);
 
-    // Step 4: Cache the result
-    pollingSessionCache.setCachedSession(cacheKey, session, user.id, userRoles);
+    // Step 4: Cache the result (only when cacheKey is non-null — iat present)
+    if (cacheKey) {
+      pollingSessionCache.setCachedSession(cacheKey, session, user.id, userRoles);
+    }
 
     const authTime = Date.now() - startTime;
     authPerformanceMonitor.recordAuthRequest(authTime, 'database', true);

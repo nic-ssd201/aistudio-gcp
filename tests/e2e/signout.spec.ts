@@ -49,6 +49,12 @@ test.describe('Sign-out page — unauthenticated context', () => {
     // The signing-out message should be visible during the transition.
     // (It may disappear quickly once signOut() resolves — assert it appeared.)
     await expect(page.getByText('Signing out')).toBeVisible({ timeout: 5000 })
+
+    // After signOut() resolves, the mocked endpoint returned { url: '/' } so
+    // NextAuth's redirect handling should navigate to the landing page.
+    // This pins the post-POST redirect behavior — if signOut()'s redirect broke
+    // (e.g. callbackUrl ignored), the user would remain on /signout indefinitely.
+    await expect(page).toHaveURL('/', { timeout: 5000 })
   })
 
   test('does not render a <noscript> form that would bypass CSRF', async ({ page }) => {
