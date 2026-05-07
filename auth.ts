@@ -386,64 +386,12 @@ export const authConfig: NextAuthConfig = {
       return Number.isFinite(parsed) && parsed > 0 ? parsed : 24 * 60 * 60
     })(),
   },
-  cookies: {
-    sessionToken: {
-      name: `authjs.session-token`,
-      options: {
-        httpOnly: true,
-        sameSite: 'lax',
-        path: '/',
-        secure: process.env.NODE_ENV === 'production'
-      }
-    },
-    callbackUrl: {
-      name: `authjs.callback-url`,
-      options: {
-        httpOnly: true,
-        sameSite: 'lax',
-        path: '/',
-        secure: process.env.NODE_ENV === 'production'
-      }
-    },
-    csrfToken: {
-      name: `authjs.csrf-token`,
-      options: {
-        httpOnly: true,
-        sameSite: 'lax',
-        path: '/',
-        secure: process.env.NODE_ENV === 'production'
-      }
-    },
-    pkceCodeVerifier: {
-      name: `authjs.pkce.code_verifier`,
-      options: {
-        httpOnly: true,
-        sameSite: 'lax',
-        path: '/',
-        secure: process.env.NODE_ENV === 'production',
-        maxAge: 60 * 15 // 15 minutes
-      }
-    },
-    state: {
-      name: `authjs.state`,
-      options: {
-        httpOnly: true,
-        sameSite: 'lax',
-        path: '/',
-        secure: process.env.NODE_ENV === 'production',
-        maxAge: 60 * 15 // 15 minutes
-      }
-    },
-    nonce: {
-      name: `authjs.nonce`,
-      options: {
-        httpOnly: true,
-        sameSite: 'lax',
-        path: '/',
-        secure: process.env.NODE_ENV === 'production'
-      }
-    },
-  },
+  // `cookies` block intentionally omitted — NextAuth v5 defaults are used as-is.
+  // In production NextAuth automatically uses the `__Secure-` cookie-name prefix
+  // (RFC 6265bis §4.1.3.1), which instructs browsers to reject same-name cookies
+  // set from a non-HTTPS origin, closing the sibling-subdomain-XSS cookie-
+  // overwrite vector. A custom `cookies` block would need to replicate this
+  // prefix logic manually; removing it gets the protection for free.
   debug: false, // Disabled to suppress CHUNKING_SESSION_COOKIE warnings (#361)
   events: {
     async signOut() {

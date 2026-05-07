@@ -79,6 +79,14 @@ export async function refreshGoogleToken(token: JWT): Promise<JWT | null> {
   // horizontal-scaling scenario where many tokens expire simultaneously), clear
   // it rather than letting memory grow without bound. In normal operation the
   // map holds at most a handful of entries at any given instant.
+  //
+  // Note on the dedup gap: clear() evicts in-flight Promises without cancelling
+  // their underlying fetches. Any request that immediately follows the clear will
+  // not find an existing entry and will start a new fetch — potentially racing
+  // with the orphaned in-flight one. This is the dedup gap, not the horizontal-
+  // scaling load itself. The risk is theoretical at the 500-entry threshold but
+  // worth knowing: prefer deletion of settled entries over a full clear if this
+  // branch fires in practice (filed for future hardening).
   if (activeRefreshes.size > 500) {
     log.warn("activeRefreshes map exceeded 500 entries — clearing as safety measure", {
       size: activeRefreshes.size,

@@ -164,10 +164,16 @@ export class FrontendStackEcs extends cdk.Stack {
         : 'unused-gcp-migration',
       rdsResourceArn: ssm.StringParameter.valueForStringParameter(this, `/aistudio/${environment}/db-cluster-arn`),
       rdsSecretArn: ssm.StringParameter.valueForStringParameter(this, `/aistudio/${environment}/db-secret-arn`),
-      // Auth secret from Secrets Manager
+      // Auth secret from Secrets Manager.
+      // When not in legacy mode the real AuthSecretArn export doesn't exist, so
+      // use cdk.Lazy.string() to produce a syntactically-valid ARN token at
+      // synth time. Secrets Manager's fromSecretCompleteArn() validates the
+      // 6-character suffix at CDK-construct-creation time for plain strings, but
+      // defers validation for CDK lazy/token values — avoiding the "missing
+      // 6-character suffix" synth error that a bare placeholder string causes.
       authSecretArn: props.isLegacyAwsDeploy
         ? cdk.Fn.importValue(`${environment}-AuthSecretArn`)
-        : 'unused-gcp-migration',
+        : cdk.Lazy.string({ produce: () => 'arn:aws:secretsmanager:us-east-1:000000000000:secret:unused-gcp-migration-aaaaaa' }),
       // Internal API secret (created above)
       internalApiSecretArn: internalApiSecret.secretArn,
       // K-12 Content Safety: Guardrails resources from GuardrailsStack
