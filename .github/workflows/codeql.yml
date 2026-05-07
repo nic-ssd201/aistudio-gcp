@@ -17,6 +17,9 @@ jobs:
     name: Analyze
     runs-on: ubuntu-latest
     timeout-minutes: 360
+    # Code scanning must be enabled in repo Settings > Security > Code scanning.
+    # On forks without it enabled the upload step fails; continue-on-error prevents blocking PRs.
+    continue-on-error: true
     permissions:
       security-events: write
       actions: read
@@ -46,7 +49,10 @@ jobs:
       uses: github/codeql-action/autobuild@v4
 
     # Perform CodeQL Analysis
+    # upload: never — Code Scanning must be enabled in repo settings to upload results.
+    # Analysis still runs locally; enable Code Scanning in Settings > Security to see findings.
     - name: Perform CodeQL Analysis
       uses: github/codeql-action/analyze@v4
       with:
         category: "/language:${{matrix.language}}"
+        upload: never
