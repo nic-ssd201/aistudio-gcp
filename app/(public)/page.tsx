@@ -19,7 +19,7 @@ function LandingPageContent() {
   
   const handleSignIn = () => {
     // Use signIn function to skip the intermediate page
-    signIn('cognito', { callbackUrl });
+    signIn('google', { callbackUrl });
   };
 
   useEffect(() => {

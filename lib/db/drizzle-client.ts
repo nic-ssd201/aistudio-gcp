@@ -639,6 +639,7 @@ export async function validateDatabaseConnection(): Promise<{
   config: {
     hasDatabaseUrl: boolean;
     hasDbHost: boolean;
+    hasCloudSqlSocket: boolean;
     maxConnections: string;
     database: string;
   };
@@ -649,6 +650,7 @@ export async function validateDatabaseConnection(): Promise<{
   const config = {
     hasDatabaseUrl: !!process.env.DATABASE_URL,
     hasDbHost: !!process.env.DB_HOST,
+    hasCloudSqlSocket: !!process.env.CLOUD_SQL_SOCKET_PATH,
     maxConnections: process.env.DB_MAX_CONNECTIONS || "20",
     database: process.env.DB_NAME || "aistudio",
   };

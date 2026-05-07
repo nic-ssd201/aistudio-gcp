@@ -395,6 +395,7 @@ describe('validateDatabaseConnection behavior documentation', () => {
       config: {
         hasDatabaseUrl: boolean
         hasDbHost: boolean
+        hasCloudSqlSocket: boolean
         maxConnections: string
         database: string
       }
@@ -404,8 +405,9 @@ describe('validateDatabaseConnection behavior documentation', () => {
       success: true,
       message: 'Database connection validated successfully (postgres.js)',
       config: {
-        hasDatabaseUrl: true,
+        hasDatabaseUrl: false,
         hasDbHost: false,
+        hasCloudSqlSocket: true,
         maxConnections: '20',
         database: 'aistudio',
       },
@@ -413,7 +415,7 @@ describe('validateDatabaseConnection behavior documentation', () => {
 
     expect(exampleSuccess.success).toBe(true)
     expect(exampleSuccess.config.database).toBe('aistudio')
-    expect(exampleSuccess.config.hasDatabaseUrl).toBe(true)
+    expect(exampleSuccess.config.hasCloudSqlSocket).toBe(true)
   })
 
   it('should document failure response structure', () => {
@@ -424,6 +426,7 @@ describe('validateDatabaseConnection behavior documentation', () => {
       config: {
         hasDatabaseUrl: boolean
         hasDbHost: boolean
+        hasCloudSqlSocket: boolean
         maxConnections: string
         database: string
       }
@@ -436,6 +439,7 @@ describe('validateDatabaseConnection behavior documentation', () => {
       config: {
         hasDatabaseUrl: false,
         hasDbHost: false,
+        hasCloudSqlSocket: false,
         maxConnections: '20',
         database: 'aistudio',
       },
@@ -459,13 +463,14 @@ describe('validateDatabaseConnection behavior documentation', () => {
 
   it('should document connection-mode config fields', () => {
     // The `config` object in the response reflects which connection mode is active:
-    // - hasDatabaseUrl: true → DATABASE_URL was set (local dev / direct URL)
-    // - hasDbHost: true     → DB_HOST was set (TCP or Cloud SQL via IP)
-    // Both can be false when CLOUD_SQL_SOCKET_PATH is the active mode.
-    const configFields = ['hasDatabaseUrl', 'hasDbHost', 'maxConnections', 'database']
+    // - hasDatabaseUrl: true      → DATABASE_URL (local dev / direct URL)
+    // - hasDbHost: true           → DB_HOST (TCP or Cloud SQL via IP)
+    // - hasCloudSqlSocket: true   → CLOUD_SQL_SOCKET_PATH (Cloud Run socket)
+    const configFields = ['hasDatabaseUrl', 'hasDbHost', 'hasCloudSqlSocket', 'maxConnections', 'database']
 
     expect(configFields).toContain('hasDatabaseUrl')
     expect(configFields).toContain('hasDbHost')
+    expect(configFields).toContain('hasCloudSqlSocket')
     expect(configFields).toContain('maxConnections')
     expect(configFields).toContain('database')
   })
