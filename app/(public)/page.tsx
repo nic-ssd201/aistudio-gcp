@@ -19,7 +19,21 @@ function LandingPageContent() {
   // on every render without memoization.  The parent <Suspense> boundary
   // (required for useSearchParams in Next.js App Router) is already in place.
   const searchParams = useSearchParams();
-  const callbackUrl = searchParams.get('callbackUrl') ?? '/dashboard';
+  // Validate callbackUrl to prevent open-redirect attacks.
+  // router.push() in Next.js App Router will hard-navigate to absolute URLs,
+  // so an attacker could craft /?callbackUrl=https://evil.com to redirect
+  // authenticated users off-site.
+  // Accept only paths that start with '/' but NOT '//' (protocol-relative) or
+  // '/\' (some browsers normalize '\' → '/' during URL resolution).
+  // NextAuth's redirect callback protects the signIn() path; this guard
+  // independently protects the useEffect router.push() path.
+  const rawCallbackUrl = searchParams.get('callbackUrl') ?? '/dashboard';
+  const callbackUrl =
+    rawCallbackUrl.startsWith('/') &&
+    !rawCallbackUrl.startsWith('//') &&
+    !rawCallbackUrl.startsWith('/\\')
+      ? rawCallbackUrl
+      : '/dashboard';
   
   const handleSignIn = () => {
     // Use signIn function to skip the intermediate page

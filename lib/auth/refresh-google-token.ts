@@ -186,6 +186,24 @@ async function doRefresh(token: JWT, log: ReturnType<typeof createLogger>): Prom
       return null
     }
 
+    // Fail-closed on a pathologically small expires_in.
+    // With a 5-minute proactive-refresh threshold (auth.ts:TOKEN_REFRESH_THRESHOLD_MS),
+    // any expires_in < 300 s would trigger a refresh on the very next request.
+    // If the upstream is misbehaving (returning 60 s, 0 s, or absent), we'd
+    // hot-loop hitting Google's token endpoint roughly once per minute per user.
+    // Returning null instead lets auth.ts force a single re-auth rather than
+    // hammering the endpoint indefinitely.
+    // Google's documented access token lifetime is 3600 s; < 300 s is abnormal.
+    const MIN_EXPIRES_IN = 300 // 5 minutes — matches TOKEN_REFRESH_THRESHOLD_MS default
+    const expiresIn = tokens.expires_in ?? 0
+    if (expiresIn < MIN_EXPIRES_IN) {
+      log.warn("Google token refresh returned unexpectedly short expires_in — treating as failure", {
+        expiresIn,
+        minExpected: MIN_EXPIRES_IN,
+      })
+      return null
+    }
+
     const refreshed: JWT = {
       ...token,
       accessToken: tokens.access_token,
@@ -195,11 +213,7 @@ async function doRefresh(token: JWT, log: ReturnType<typeof createLogger>): Prom
       // Using `||` (not `??`) so an empty-string rotation result is also treated
       // as absent — Google shouldn't return `""`, but `||` is free defense-in-depth.
       refreshToken: tokens.refresh_token || token.refreshToken,
-      // `?? 3600` handles a missing expires_in (default 1 hour).
-      // `Math.max(..., 60)` is a floor guard — 60 s is not the default, just
-      // the minimum allowed so a zero/malformed value doesn't cause an
-      // immediate re-refresh loop. Google's normal value is 3600 s.
-      expiresAt: Date.now() + Math.max(tokens.expires_in ?? 3600, 60) * 1000,
+      expiresAt: Date.now() + expiresIn * 1000,
     }
 
     log.info("Google token refreshed successfully")

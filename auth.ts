@@ -344,8 +344,14 @@ export const authConfig: NextAuthConfig = {
       return session
     },
     async redirect({ url, baseUrl }) {
-      // Allows relative callback URLs
-      if (url.startsWith("/")) return `${baseUrl}${url}`
+      // Allows relative callback URLs that start with '/' but NOT '//' or '/\':
+      //   '//evil.com'  — protocol-relative URL; some runtimes resolve it as
+      //                   https://evil.com when concatenated with baseUrl.
+      //   '/\evil.com'  — some browsers normalize '\' → '/' during URL parsing,
+      //                   turning this into '//evil.com'.
+      // Both are cheap defense-in-depth for the redirect callback.
+      if (url.startsWith("/") && !url.startsWith("//") && !url.startsWith("/\\"))
+        return `${baseUrl}${url}`
       // Allows callback URLs on the same origin. Both sides are normalised to
       // .origin so a trailing-slash AUTH_URL (e.g. "https://app.example.com/")
       // still matches correctly. Wrapped in try/catch because new URL() throws

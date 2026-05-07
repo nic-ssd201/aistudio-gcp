@@ -168,4 +168,89 @@ describe("validateEnv()", () => {
     const { warnings } = validateEnv()
     expect(warnings.some((w) => w.includes("No AI API keys configured"))).toBe(false)
   })
+
+  // ── TOKEN_REFRESH_THRESHOLD_MS validation ────────────────────────────────
+
+  it("warns but stays valid when TOKEN_REFRESH_THRESHOLD_MS is below the 60 000 ms floor", () => {
+    process.env.TOKEN_REFRESH_THRESHOLD_MS = "30000"
+
+    const { isValid, warnings } = validateEnv()
+
+    expect(isValid).toBe(true) // operator-visible warning, not a hard failure
+    expect(warnings.some((w) => w.includes("TOKEN_REFRESH_THRESHOLD_MS"))).toBe(true)
+    expect(warnings.some((w) => w.includes("30000"))).toBe(true)
+  })
+
+  it("warns but stays valid when TOKEN_REFRESH_THRESHOLD_MS is non-numeric", () => {
+    process.env.TOKEN_REFRESH_THRESHOLD_MS = "not-a-number"
+
+    const { isValid, warnings } = validateEnv()
+
+    expect(isValid).toBe(true)
+    expect(warnings.some((w) => w.includes("TOKEN_REFRESH_THRESHOLD_MS"))).toBe(true)
+  })
+
+  it("does not warn when TOKEN_REFRESH_THRESHOLD_MS is at or above the 60 000 ms floor", () => {
+    process.env.TOKEN_REFRESH_THRESHOLD_MS = "60000"
+
+    const { warnings } = validateEnv()
+
+    expect(warnings.some((w) => w.includes("TOKEN_REFRESH_THRESHOLD_MS"))).toBe(false)
+  })
+
+  // ── SESSION_MAX_AGE validation ────────────────────────────────────────────
+
+  it("warns but stays valid when SESSION_MAX_AGE is non-numeric", () => {
+    process.env.SESSION_MAX_AGE = "invalid"
+
+    const { isValid, warnings } = validateEnv()
+
+    expect(isValid).toBe(true)
+    expect(warnings.some((w) => w.includes("SESSION_MAX_AGE"))).toBe(true)
+  })
+
+  it("warns but stays valid when SESSION_MAX_AGE is zero or negative", () => {
+    process.env.SESSION_MAX_AGE = "0"
+
+    const { isValid, warnings } = validateEnv()
+
+    expect(isValid).toBe(true)
+    expect(warnings.some((w) => w.includes("SESSION_MAX_AGE"))).toBe(true)
+  })
+
+  // ── AUTH_GOOGLE_FORCE_CONSENT validation ──────────────────────────────────
+
+  it("warns but stays valid when AUTH_GOOGLE_FORCE_CONSENT has an unrecognised value", () => {
+    process.env.AUTH_GOOGLE_FORCE_CONSENT = "yes"
+
+    const { isValid, warnings } = validateEnv()
+
+    expect(isValid).toBe(true) // warning, not a hard failure
+    expect(warnings.some((w) => w.includes("AUTH_GOOGLE_FORCE_CONSENT"))).toBe(true)
+    expect(warnings.some((w) => w.includes("yes"))).toBe(true)
+  })
+
+  it("does not warn when AUTH_GOOGLE_FORCE_CONSENT is 'true'", () => {
+    process.env.AUTH_GOOGLE_FORCE_CONSENT = "true"
+
+    const { warnings } = validateEnv()
+
+    expect(warnings.some((w) => w.includes("AUTH_GOOGLE_FORCE_CONSENT"))).toBe(false)
+  })
+
+  it("does not warn when AUTH_GOOGLE_FORCE_CONSENT is 'false'", () => {
+    process.env.AUTH_GOOGLE_FORCE_CONSENT = "false"
+
+    const { warnings } = validateEnv()
+
+    expect(warnings.some((w) => w.includes("AUTH_GOOGLE_FORCE_CONSENT"))).toBe(false)
+  })
+
+  it("does not warn when AUTH_GOOGLE_FORCE_CONSENT is mixed-case (case-insensitive)", () => {
+    process.env.AUTH_GOOGLE_FORCE_CONSENT = "False"
+
+    const { warnings } = validateEnv()
+
+    expect(warnings.some((w) => w.includes("AUTH_GOOGLE_FORCE_CONSENT"))).toBe(false)
+  })
 })

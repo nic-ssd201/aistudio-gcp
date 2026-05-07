@@ -97,22 +97,26 @@ describe("refreshGoogleToken", () => {
     expect(result!.refreshToken).toBe(MOCK_NEW_REFRESH_TOKEN)
   })
 
-  it("uses 1-hour default when expires_in is absent", async () => {
-    const before = Date.now()
+  it("returns null (fail-closed) when expires_in is absent", async () => {
+    // Previously this defaulted to 3600 s, but a missing expires_in is
+    // structurally abnormal. With a 5-min proactive-refresh threshold, any
+    // token lifetime < 300 s would trigger a refresh on the very next request —
+    // a misbehaving upstream could cause a hot-loop hitting Google's endpoint
+    // once per minute per user. Returning null forces a single re-auth instead.
     mockGoogleTokenResponse({
       access_token: MOCK_ACCESS_TOKEN,
       id_token: MOCK_ID_TOKEN,
-      // expires_in intentionally omitted
+      // expires_in intentionally omitted — treated as 0 (< 300 s floor)
     })
 
     const result = await refreshGoogleToken(makeToken())
 
-    // Should be ~1 hour from now, not the token's old (expired) expiresAt
-    expect(result!.expiresAt).toBeGreaterThanOrEqual(before + 3600 * 1000)
+    expect(result).toBeNull()
   })
 
-  it("floors expires_in=0 to 60 s, preventing an immediate re-refresh loop", async () => {
-    const before = Date.now()
+  it("returns null (fail-closed) when expires_in is below the 300 s minimum", async () => {
+    // expires_in=0 used to be floored to 60 s; it now causes fail-closed to
+    // avoid hot-looping against Google's token endpoint when upstream misbehaves.
     mockGoogleTokenResponse({
       access_token: MOCK_ACCESS_TOKEN,
       id_token: MOCK_ID_TOKEN,
@@ -121,10 +125,21 @@ describe("refreshGoogleToken", () => {
 
     const result = await refreshGoogleToken(makeToken())
 
-    // Must be at least 60 s in the future (the floor)
-    expect(result!.expiresAt).toBeGreaterThanOrEqual(before + 60 * 1000)
-    // Must NOT be ~1 hour — confirming the floor, not the default
-    expect(result!.expiresAt).toBeLessThan(before + 3600 * 1000)
+    expect(result).toBeNull()
+  })
+
+  it("accepts expires_in at the 300 s minimum", async () => {
+    const before = Date.now()
+    mockGoogleTokenResponse({
+      access_token: MOCK_ACCESS_TOKEN,
+      id_token: MOCK_ID_TOKEN,
+      expires_in: 300,
+    })
+
+    const result = await refreshGoogleToken(makeToken())
+
+    expect(result).not.toBeNull()
+    expect(result!.expiresAt).toBeGreaterThanOrEqual(before + 300 * 1000)
   })
 
   it("returns null on Google error response (invalid_grant)", async () => {
