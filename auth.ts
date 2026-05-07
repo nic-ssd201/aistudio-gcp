@@ -77,16 +77,13 @@ export const authConfig: NextAuthConfig = {
           const payload = Buffer.from(base64Payload, 'base64').toString('utf-8');
           const decoded = JSON.parse(payload);
 
-          // Calculate token lifetime for accurate refresh timing
           const issuedAt = decoded.iat ? decoded.iat * 1000 : Date.now()
           const expiresAt = account.expires_at ? account.expires_at * 1000 : Date.now() + (60 * 60 * 1000) // 1 hour fallback — matches Google's access-token lifetime
-          const tokenLifetimeMs = expiresAt - issuedAt
 
-          // Enhanced logging for token lifecycle debugging
           log.debug("Token lifetime information", {
             issuedAt: new Date(issuedAt).toISOString(),
             expiresAt: new Date(expiresAt).toISOString(),
-            tokenLifetimeHours: Math.round(tokenLifetimeMs / (1000 * 60 * 60)),
+            tokenLifetimeHours: Math.round((expiresAt - issuedAt) / (1000 * 60 * 60)),
             googleProvidedExpiry: !!account.expires_at
           })
 
@@ -102,7 +99,6 @@ export const authConfig: NextAuthConfig = {
             idToken: account.id_token,
             expiresAt: expiresAt,
             iat: decoded.iat,
-            tokenLifetimeMs: tokenLifetimeMs, // Store calculated lifetime for accurate refresh timing
             roleVersion: 0, // Initialize role version
             provider: 'google', // Always Google for SSD201
           }
@@ -123,11 +119,13 @@ export const authConfig: NextAuthConfig = {
 
           const now = Date.now()
           const expiresAt = account.expires_at ? account.expires_at * 1000 : now + (60 * 60 * 1000) // 1 hour fallback — matches Google's access-token lifetime
-          const tokenLifetimeMs = 60 * 60 * 1000 // 1 hour — matches Google's default access-token lifetime
 
           // Carry given_name / family_name from `user` or `profile` so the
           // session-callback name chain (token.given_name || token.name || …)
           // has the same fields available on the fallback path as on the happy path.
+          // Note: `iat` and `preferred_username` are intentionally omitted here
+          // because they come from the id_token payload that failed to parse —
+          // using account.providerAccountId as sub is already a best-effort fallback.
           const fallbackToken: JWT = {
             sub: account.providerAccountId,
             email: user?.email || profile?.email || undefined,
@@ -138,7 +136,6 @@ export const authConfig: NextAuthConfig = {
             refreshToken: account.refresh_token,
             idToken: account.id_token,
             expiresAt: expiresAt,
-            tokenLifetimeMs: tokenLifetimeMs,
             roleVersion: 0,
             provider: 'google', // Always Google for SSD201
           };

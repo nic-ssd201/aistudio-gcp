@@ -42,6 +42,13 @@ export async function refreshGoogleToken(token: JWT): Promise<JWT | null> {
   // "anonymous" is a safe fallback: doRefresh short-circuits on missing
   // refreshToken before doing any network I/O, so two anonymous calls sharing
   // a Promise just both get null quickly — no correctness impact.
+  //
+  // Keying on sub alone assumes one browser session = one refreshToken per sub,
+  // which is true in practice (NextAuth issues one JWT cookie per session, and
+  // Google only rotates the refresh token occasionally). If two concurrent callers
+  // somehow held different refresh tokens for the same sub, the second caller's
+  // token would be silently dropped — but this cannot happen within a single
+  // JWT session since all callers share the same cookie.
   const sub = (token.sub as string | undefined) ?? "anonymous"
 
   // Deduplicate concurrent refresh calls for the same user.

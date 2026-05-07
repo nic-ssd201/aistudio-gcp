@@ -32,7 +32,6 @@ declare module "next-auth/jwt" {
     preferred_username?: string
     /** Auth provider — always 'google' for SSD201 GCP deployment. */
     provider?: 'google'
-    tokenLifetimeMs?: number
     roleVersion?: number
   }
 }
