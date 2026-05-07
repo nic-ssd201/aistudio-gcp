@@ -18,7 +18,11 @@ export default function SignOutPage() {
     // deployments. If explicit account-switching UX is needed, change
     // `prompt: "consent"` → `prompt: "select_account"` in auth.ts.
     signOut({ callbackUrl: '/' }).catch((err) => {
-      // Log so a partial-failure (e.g., 5xx clearing the cookie) is observable.
+      // In the normal (success) path, signOut() triggers navigation before this
+      // Promise settles, so this catch block is dead code in ~99% of runs.
+      // It only fires if the underlying fetch throws before navigation begins
+      // (e.g. network down, 5xx on /api/auth/signout) — in that case we log
+      // and redirect so the user isn't stranded on "Signing out…" indefinitely.
       // eslint-disable-next-line no-console -- client component; @/lib/logger is server-only, no client telemetry shim available
       console.error('[signout] signOut() failed, redirecting to / anyway:', err)
       router.push('/')

@@ -144,12 +144,14 @@ export const authConfig: NextAuthConfig = {
           // Note: `iat` and `preferred_username` are intentionally omitted here
           // because they come from the id_token payload that failed to parse —
           // using account.providerAccountId as sub is already a best-effort fallback.
+          // Cast once so the two field accesses below don't repeat the same type annotation.
+          const p = profile as { given_name?: string; family_name?: string } | undefined
           const fallbackToken: JWT = {
             sub: account.providerAccountId,
             email: user?.email || profile?.email || undefined,
             name: user?.name || profile?.name || undefined,
-            given_name: (profile as { given_name?: string } | undefined)?.given_name || undefined,
-            family_name: (profile as { family_name?: string } | undefined)?.family_name || undefined,
+            given_name: p?.given_name || undefined,
+            family_name: p?.family_name || undefined,
             accessToken: account.access_token,
             refreshToken: account.refresh_token,
             idToken: account.id_token,
