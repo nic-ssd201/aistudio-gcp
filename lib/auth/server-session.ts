@@ -16,6 +16,13 @@ export interface UserSession {
   /** Google ID token — available in session (used for downstream API auth). */
   idToken?: string;
   /**
+   * JWT issued-at timestamp (seconds since epoch). Copied from the NextAuth JWT
+   * into the session so the polling session cache can key on `sub + iat` and
+   * automatically bypass a stale entry when the user re-authenticates within the
+   * 5-minute TTL window (a fresh login produces a new `iat`).
+   */
+  iat?: number;
+  /**
    * Forward-compat index signature: `getServerSession` spreads `session.user`
    * (which may carry extra NextAuth fields such as `name` or `image`) into the
    * returned object. Without this signature TypeScript rejects the object literal
@@ -48,6 +55,7 @@ export async function getServerSession(): Promise<UserSession | null> {
       givenName: session.user.givenName || undefined,
       familyName: session.user.familyName || undefined,
       idToken: session.idToken || undefined,
+      iat: session.iat || undefined,
     };
   } catch (error) {
     logger.error("Session retrieval failed:", {

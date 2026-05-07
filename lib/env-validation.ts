@@ -95,6 +95,26 @@ export function validateEnv(): { isValid: boolean; missing: string[]; warnings: 
     missing.push('DATABASE_URL, or DB_HOST+DB_USER+DB_PASSWORD, or CLOUD_SQL_SOCKET_PATH+DB_USER+DB_PASSWORD (database configuration required)');
   }
 
+  // TOKEN_REFRESH_THRESHOLD_MS: warn at startup when the value is set but rejected
+  // by the 60 s floor so operators discover misconfiguration at deploy time.
+  const thresholdRaw = process.env.TOKEN_REFRESH_THRESHOLD_MS;
+  if (thresholdRaw !== undefined && thresholdRaw !== '') {
+    const thresholdMs = Number.parseInt(thresholdRaw, 10);
+    if (!Number.isFinite(thresholdMs) || thresholdMs < 60_000) {
+      warnings.push(
+        `TOKEN_REFRESH_THRESHOLD_MS="${thresholdRaw}" is below the 60 000 ms floor and will be ignored — effective value is 300 000 ms (5 min).`
+      );
+    }
+  }
+
+  // AUTH_GOOGLE_FORCE_CONSENT: warn when set to an unrecognised value.
+  const forceConsent = process.env.AUTH_GOOGLE_FORCE_CONSENT;
+  if (forceConsent !== undefined && forceConsent !== '' && forceConsent !== 'true' && forceConsent !== 'false') {
+    warnings.push(
+      `AUTH_GOOGLE_FORCE_CONSENT="${forceConsent}" is not recognised — expected "true" or "false". Defaulting to "true" (consent prompt).`
+    );
+  }
+
   // AI: warn if no keys configured.
   if (!process.env.ANTHROPIC_API_KEY && !process.env.OPENAI_API_KEY) {
     warnings.push('No AI API keys configured. AI features will not work.');

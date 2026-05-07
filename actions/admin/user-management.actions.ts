@@ -20,6 +20,7 @@ import { users, userRoles, roles } from "@/lib/db/schema"
 import { nexusConversations } from "@/lib/db/schema/tables/nexus-conversations"
 import { promptUsageEvents } from "@/lib/db/schema/tables/prompt-usage-events"
 import { getDateThreshold } from "@/lib/date-utils"
+import { pollingSessionCache } from "@/lib/auth/polling-session-cache"
 
 // Constants
 const ACTIVE_USER_THRESHOLD_DAYS = 30 // Users who signed in within this many days are considered "active"
@@ -564,6 +565,18 @@ export async function updateUser(
       },
       "updateUser-transaction"
     )
+
+    // Flush polling cache for this user so role changes propagate immediately
+    // to polling endpoints rather than waiting up to 5 minutes for TTL expiry.
+    // We look up cognitoSub (the Google sub) which is the polling cache's user identity.
+    const userRow = await executeQuery(
+      (db) => db.select({ cognitoSub: users.cognitoSub }).from(users).where(eq(users.id, userId)).limit(1),
+      "updateUser-lookupSubForCacheInvalidation"
+    )
+    if (userRow[0]?.cognitoSub) {
+      pollingSessionCache.invalidateUser(userRow[0].cognitoSub)
+      log.info("Polling cache flushed after role update", { userId, sub: userRow[0].cognitoSub })
+    }
 
     timer({ status: "success" })
     log.info("User updated successfully", { userId })

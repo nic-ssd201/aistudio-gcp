@@ -15,6 +15,10 @@ declare module "next-auth" {
     // not in the client-visible session object.
     accessToken?: string
     idToken?: string
+    /** JWT issued-at (seconds since epoch). Propagated so the polling cache can
+     *  key on sub+iat and avoid returning a stale role set when a user
+     *  re-authenticates within the 5-min TTL window. */
+    iat?: number
   }
 }
 

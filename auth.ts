@@ -296,6 +296,9 @@ export const authConfig: NextAuthConfig = {
       // - Never log or expose these tokens in client-side code
       session.accessToken = token.accessToken as string;
       session.idToken = token.idToken as string;
+      // Propagate iat so the polling session cache can key on sub+iat and avoid
+      // returning a stale role set when the user re-authenticates within TTL.
+      session.iat = typeof token.iat === 'number' ? token.iat : undefined;
 
       log.debug("Session created successfully", {
         userId: session.user.id,

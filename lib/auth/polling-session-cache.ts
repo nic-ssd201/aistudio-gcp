@@ -105,12 +105,41 @@ export class PollingSessionCache {
   }
 
   /**
-   * Invalidate cached session (on logout, role changes, etc.)
+   * Invalidate a specific cache entry by its full key.
    */
   invalidateSession(sessionId: string): void {
     const deleted = this.cache.delete(sessionId);
     if (deleted) {
       log.info('Session cache invalidated', { sessionId });
+    }
+  }
+
+  /**
+   * Invalidate ALL polling cache entries for a given user `sub`.
+   *
+   * Because the cache is keyed on `session:${sub}:${iat}`, a single user may
+   * have multiple entries (one per distinct login within the TTL window).
+   * This method scans for all matching prefixes and removes them — use it
+   * from role-change actions so revocations propagate immediately rather
+   * than waiting for the 5-minute TTL to expire.
+   *
+   * Also handles the legacy `session:${sub}` (no iat) format in case any
+   * entries were cached before the key format was updated.
+   */
+  invalidateUser(sub: string): void {
+    const prefix = `session:${sub}:`;
+    const legacyKey = `session:${sub}`; // pre-iat format — belt-and-braces
+    let count = 0;
+
+    for (const key of this.cache.keys()) {
+      if (key.startsWith(prefix) || key === legacyKey) {
+        this.cache.delete(key);
+        count++;
+      }
+    }
+
+    if (count > 0) {
+      log.info('Polling cache entries invalidated for user', { sub, count });
     }
   }
 
@@ -205,18 +234,18 @@ export const pollingSessionCache = new PollingSessionCache({
 /**
  * Generate cache key from session data.
  *
- * Keyed on `sub` only. The previous implementation tried to incorporate `iat`
- * (issued-at time) for per-session entropy, but `iat` is never copied from the
- * JWT into the UserSession object returned by getServerSession(), so the
- * fallback `|| Date.now()` fired on every call — producing a fresh key each
- * time and making the cache a permanent miss.
+ * Keyed on `sub:iat` to prevent cross-session collisions: if a user signs out
+ * and back in within the 5-minute TTL window, the new login produces a fresh
+ * `iat` (issued-at), so the cache entry for the previous session is bypassed
+ * automatically — without needing an explicit invalidation on sign-out.
  *
- * `sub` alone is sufficient: the cache TTL (5 min) is shorter than the token
- * refresh window, and a new authentication event for the same sub will simply
- * warm a fresh cache entry on the next request. No security regression — the
- * cache stores auth results derived from a verified NextAuth session, not the
- * session itself.
+ * `iat` is now propagated from the JWT through the NextAuth session callback
+ * and `getServerSession()` (previously it was not copied, making the original
+ * `session:${sub}:${iat}` design a permanent cache miss).
+ *
+ * Falls back to iat=0 when absent (e.g. unit tests or token without iat claim)
+ * so the key remains deterministic.
  */
 export function generateSessionCacheKey(session: UserSession): string {
-  return `session:${session.sub}`;
+  return `session:${session.sub}:${session.iat ?? 0}`;
 }
