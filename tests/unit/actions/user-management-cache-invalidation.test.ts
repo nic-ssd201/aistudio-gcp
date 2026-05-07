@@ -25,7 +25,7 @@ import { describe, it, expect, jest, beforeEach } from '@jest/globals'
 const STUB_SUB = 'google-oidc-sub-abc123'
 
 /**
- * Build a Proxy-based `tx` for use inside the transaction callback.
+ * Build a Proxy-based `tx` for use inside the updateUser transaction callback.
  *
  * All Drizzle chain calls (select, from, where, innerJoin, etc.) return the
  * Proxy itself so chains compose freely.
@@ -47,6 +47,41 @@ function makeProxyTx(cognitoSub: string | null, roleNames: string[]): unknown {
       if (prop === 'then') {
         return (resolve: (v: unknown[]) => void) =>
           resolve(roleNames.map((name, i) => ({ id: i + 1, name, roleName: name, count: 2 })))
+      }
+      if (prop === 'returning') {
+        return () =>
+          Promise.resolve(
+            ++returningCallCount === 1 ? [{ id: 42, cognitoSub }] : []
+          )
+      }
+      return () => proxy
+    },
+  }
+
+  const proxy = new Proxy(self, handler)
+  return proxy
+}
+
+/**
+ * Build a Proxy-based `tx` for use inside the deleteUser transaction callback.
+ *
+ * deleteUser's transaction does:
+ *   1. select admin check          → [] (user is not admin; skips count check)
+ *   2. delete(userRoles).where()   → void (ignored; resolved via `then`)
+ *   3. delete(users).where().returning({ id, cognitoSub }) → [{id:42, cognitoSub}]
+ *
+ * `then` always resolves to [] so the admin-check select finds no rows and the
+ * delete(userRoles) await resolves cleanly without a special return value.
+ * The first `.returning()` call yields the captured cognitoSub.
+ */
+function makeDeleteProxyTx(cognitoSub: string | null): unknown {
+  let returningCallCount = 0
+  const self: Record<string, unknown> = {}
+
+  const handler: ProxyHandler<typeof self> = {
+    get(_target, prop) {
+      if (prop === 'then') {
+        return (resolve: (v: unknown[]) => void) => resolve([])
       }
       if (prop === 'returning') {
         return () =>
@@ -148,6 +183,90 @@ async function loadUpdateUser(opts: {
   return fn
 }
 
+type DeleteUserFn = (userId: number) => Promise<{ isSuccess: boolean; message: string }>
+
+/**
+ * Load deleteUser with a fresh module registry, mirroring loadUpdateUser.
+ * getServerSession returns session.user.id = 999 so userId 42 is never self-deleted.
+ */
+async function loadDeleteUser(opts: {
+  cognitoSub: string | null
+  onInvalidateUser: jest.Mock
+}): Promise<DeleteUserFn> {
+  const { cognitoSub, onInvalidateUser } = opts
+  let fn!: DeleteUserFn
+
+  jest.isolateModules(() => {
+    // Auth mocks
+    jest.doMock('@/lib/auth/server-session', () => ({
+      getServerSession: jest.fn().mockResolvedValue({
+        sub: 'admin-sub',
+        email: 'admin@example.com',
+        user: { id: 999 }, // not the target userId (42) — prevents self-deletion guard
+      }),
+    }))
+    jest.doMock('@/lib/auth/role-helpers', () => ({
+      requireRole: jest.fn().mockResolvedValue(undefined),
+    }))
+    jest.doMock('@/lib/auth/polling-session-cache', () => ({
+      pollingSessionCache: { invalidateUser: onInvalidateUser },
+    }))
+
+    // DB mocks
+    jest.doMock('@/lib/db/drizzle-client', () => ({
+      executeTransaction: jest.fn((cb: (tx: unknown) => Promise<void>) =>
+        cb(makeDeleteProxyTx(cognitoSub))
+      ),
+      executeQuery: jest.fn().mockResolvedValue([]),
+    }))
+
+    // Schema stubs
+    jest.doMock('@/lib/db/schema', () => ({
+      users: {},
+      userRoles: {},
+      roles: {},
+    }))
+    jest.doMock('@/lib/db/schema/tables/nexus-conversations', () => ({ nexusConversations: {} }))
+    jest.doMock('@/lib/db/schema/tables/prompt-usage-events', () => ({ promptUsageEvents: {} }))
+    jest.doMock('@/lib/date-utils', () => ({ getDateThreshold: jest.fn() }))
+    jest.doMock('drizzle-orm', () => ({
+      eq: jest.fn(),
+      sql: jest.fn(),
+      desc: jest.fn(),
+      count: jest.fn(() => 'count()'),
+      inArray: jest.fn(),
+      ilike: jest.fn(),
+      or: jest.fn(),
+      and: jest.fn(),
+    }))
+
+    // Logger / error-utils
+    jest.doMock('@/lib/logger', () => ({
+      createLogger: () => ({ info: jest.fn(), warn: jest.fn(), debug: jest.fn(), error: jest.fn() }),
+      generateRequestId: () => 'req-test',
+      startTimer: () => jest.fn(),
+      sanitizeForLogging: (v: unknown) => v,
+    }))
+    jest.doMock('@/lib/error-utils', () => ({
+      handleError: jest.fn((_: unknown, msg: string) => ({ isSuccess: false, message: msg })),
+      ErrorFactories: {
+        authNoSession: jest.fn(() => new Error('no session')),
+        authInsufficientPermission: jest.fn(() => new Error('no permission')),
+        missingRequiredField: jest.fn((f: string) => new Error(`missing ${f}`)),
+        dbRecordNotFound: jest.fn(() => new Error('not found')),
+        invalidInput: jest.fn(() => new Error('invalid input')),
+        bizInvalidState: jest.fn(() => new Error('invalid state')),
+      },
+      createSuccess: jest.fn((_data: unknown, msg: string) => ({ isSuccess: true, message: msg })),
+    }))
+
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    fn = require('@/actions/admin/user-management.actions').deleteUser as DeleteUserFn
+  })
+
+  return fn
+}
+
 // ── Tests ──────────────────────────────────────────────────────────────────────
 
 describe('updateUser — pollingSessionCache.invalidateUser wiring', () => {
@@ -171,6 +290,33 @@ describe('updateUser — pollingSessionCache.invalidateUser wiring', () => {
     const updateUser = await loadUpdateUser({ cognitoSub: null, onInvalidateUser: mockInvalidateUser })
 
     const result = await updateUser(42, { firstName: 'Bob', lastName: 'Jones', roles: ['student'] })
+
+    expect(result.isSuccess).toBe(true)
+    expect(mockInvalidateUser).not.toHaveBeenCalled()
+  })
+})
+
+describe('deleteUser — pollingSessionCache.invalidateUser wiring', () => {
+  beforeEach(() => {
+    jest.clearAllMocks()
+  })
+
+  it('calls invalidateUser(cognitoSub) after a successful user deletion', async () => {
+    const mockInvalidateUser = jest.fn()
+    const deleteUser = await loadDeleteUser({ cognitoSub: STUB_SUB, onInvalidateUser: mockInvalidateUser })
+
+    const result = await deleteUser(42)
+
+    expect(result.isSuccess).toBe(true)
+    expect(mockInvalidateUser).toHaveBeenCalledTimes(1)
+    expect(mockInvalidateUser).toHaveBeenCalledWith(STUB_SUB)
+  })
+
+  it('does NOT call invalidateUser when cognitoSub is null (user never completed sign-in)', async () => {
+    const mockInvalidateUser = jest.fn()
+    const deleteUser = await loadDeleteUser({ cognitoSub: null, onInvalidateUser: mockInvalidateUser })
+
+    const result = await deleteUser(42)
 
     expect(result.isSuccess).toBe(true)
     expect(mockInvalidateUser).not.toHaveBeenCalled()

@@ -94,8 +94,13 @@ export async function refreshGoogleToken(token: JWT): Promise<JWT | null> {
     activeRefreshes.clear()
   }
 
+  // Use an identity check rather than a plain delete so that if the safety-cap
+  // clear() fires and a NEW promise is inserted for the same sub before this
+  // .finally() runs, the new promise is not evicted prematurely.
   const promise = doRefresh(token, log).finally(() => {
-    activeRefreshes.delete(sub)
+    if (activeRefreshes.get(sub) === promise) {
+      activeRefreshes.delete(sub)
+    }
   })
   activeRefreshes.set(sub, promise)
   return promise
@@ -147,6 +152,17 @@ async function doRefresh(token: JWT, log: ReturnType<typeof createLogger>): Prom
 
     if (!response.ok || tokens.error) {
       log.warn("Google token refresh failed", { error: tokens.error })
+      return null
+    }
+
+    // Fail-closed: Google returning 200 with a missing access_token or id_token
+    // is structurally malformed — treat it like a failure rather than silently
+    // storing `undefined` in the JWT, which would break downstream auth checks.
+    if (!tokens.access_token || !tokens.id_token) {
+      log.warn("Google token refresh returned 200 but access_token or id_token is absent — treating as failure", {
+        hasAccessToken: !!tokens.access_token,
+        hasIdToken: !!tokens.id_token,
+      })
       return null
     }
 

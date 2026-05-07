@@ -40,7 +40,7 @@ const ENV_VARS: EnvVar[] = [
   { name: 'DB_SSL', required: false, description: 'Enable SSL for TCP connections (defaults to true)' },
 
   // GCS / Storage
-  { name: 'GCS_BUCKET_NAME', required: true, description: 'GCS bucket for document storage' },
+  { name: 'GCS_BUCKET', required: true, description: 'GCS bucket for document storage' },
 
   // AI Services
   { name: 'ANTHROPIC_API_KEY', required: false, description: 'Anthropic API key for Claude' },
