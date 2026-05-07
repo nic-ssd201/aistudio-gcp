@@ -11,11 +11,36 @@ export function getActiveStorageBucketName(): string {
   return process.env.GCS_BUCKET || process.env.DOCUMENTS_BUCKET_NAME || DEFAULT_DOCUMENTS_BUCKET;
 }
 
+export interface ServerProxyUploadParams {
+  jobId: string;
+  fileName: string;
+  fileBuffer?: Buffer | Uint8Array | string;
+  fileStream?: ReadableStream<Uint8Array>;
+  contentType: string;
+}
+
 export async function uploadServerProxyDocument(
-  params: import('@/lib/gcp/gcs-client').UploadDocumentParams,
-) {
-  const { uploadDocument } = await import('@/lib/gcp/gcs-client');
-  return uploadDocument(params);
+  params: ServerProxyUploadParams,
+): Promise<{ key: string; bucket: string; sanitizedFileName: string }> {
+  const { uploadServerProxyDocument: gcsUpload } = await import('@/lib/gcp/gcs-client');
+
+  let fileBuffer: Buffer | Uint8Array | string;
+  if (params.fileStream) {
+    const chunks: Uint8Array[] = [];
+    const reader = params.fileStream.getReader();
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (value) chunks.push(value);
+    }
+    fileBuffer = Buffer.concat(chunks);
+  } else if (params.fileBuffer !== undefined) {
+    fileBuffer = params.fileBuffer;
+  } else {
+    throw new Error('Either fileBuffer or fileStream must be provided');
+  }
+
+  return gcsUpload({ jobId: params.jobId, fileName: params.fileName, fileBuffer, contentType: params.contentType });
 }
 
 export async function uploadDocument(params: import('@/lib/gcp/gcs-client').UploadDocumentParams) {

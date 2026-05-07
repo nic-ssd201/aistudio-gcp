@@ -15,7 +15,7 @@ import { createGoogleGenerativeAI } from '@ai-sdk/google';
 import { createLogger, generateRequestId } from '@/lib/logger';
 import { Settings } from '@/lib/settings-manager';
 import { ErrorFactories } from '@/lib/error-utils';
-import { getGcsClient } from '@/lib/gcp/gcs-client';
+import { getGCSClient } from '@/lib/gcp/gcs-client';
 
 // Type for OpenAI image size
 type OpenAIImageSize = '256x256' | '512x512' | '1024x1024' | '1792x1024' | '1024x1792';
@@ -34,14 +34,14 @@ const log = createLogger({ module: 'image-generation-service' });
 
 
 // Cache GCS client to avoid repeated async calls
-let gcsClientCache: ReturnType<typeof getGcsClient> | null = null;
+let gcsClientCache: ReturnType<typeof getGCSClient> | null = null;
 
 // Get or create GCS Storage client
-async function getStorageClient(): Promise<ReturnType<typeof getGcsClient>> {
+async function getStorageClient(): Promise<ReturnType<typeof getGCSClient>> {
   if (gcsClientCache) {
     return gcsClientCache;
    }
-  gcsClientCache = getGcsClient();
+  gcsClientCache = getGCSClient();
   log.debug('GCS Storage client initialized');
   return gcsClientCache;
 }

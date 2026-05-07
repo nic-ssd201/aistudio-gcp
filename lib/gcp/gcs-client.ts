@@ -97,7 +97,7 @@ export async function ensureDocumentsBucket(): Promise<void> {
         }
        } catch (error) {
         // Re-throw our own errors
-    if (error instanceof Error && error.code === "GCS_BUCKET_MISSING") {
+    if (error instanceof Error && (error as { code?: string }).code === "GCS_BUCKET_MISSING") {
       throw error
         }
     throw createError("Failed to check GCS bucket", {
@@ -426,7 +426,6 @@ export async function uploadServerProxyDocument({
 
   await file.save(fileBuffer, {
     contentType: contentType,
-      resumable: false,
     resumable: false,
     metadata: {
       metadata: {

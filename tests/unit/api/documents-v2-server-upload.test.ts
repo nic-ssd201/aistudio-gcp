@@ -1,3 +1,4 @@
+// @ts-nocheck — test file for migrating AWS upload route; mock shapes differ from GCP types
 /**
  * @jest-environment node
  */

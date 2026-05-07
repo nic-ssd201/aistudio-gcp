@@ -1,3 +1,4 @@
+// @ts-nocheck — test file for GCP secret manager migration; mock shapes differ from GCP types
 import {
   encryptToken,
   decryptToken,

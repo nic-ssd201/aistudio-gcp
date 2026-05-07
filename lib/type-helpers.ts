@@ -74,7 +74,7 @@ export function filterDefined<T>(array: (T | null | undefined)[]): T[] {
 // GCP equivalent: Cloud SQL types (if needed)
 // TODO: Add Cloud SQL type helpers if needed
 
-export type RDSFieldValue = string | number | boolean | Uint8Array | ArrayValue | null | undefined | unknown;
+export type RDSFieldValue = string | number | boolean | Uint8Array | unknown[] | null | undefined | unknown;
 
 /**
  * Type guard to check if RDS field value is a string

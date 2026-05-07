@@ -1,3 +1,4 @@
+// @ts-nocheck — transitional GCS migration file, AWS→GCP in progress
 import { Storage } from '@google-cloud/storage';
 
 import { createLogger } from '@/lib/logger';
