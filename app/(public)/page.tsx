@@ -10,7 +10,7 @@ import { useBranding } from "@/contexts/branding-context";
 
 function LandingPageContent() {
   const router = useRouter();
-  const { data: session, status } = useSession();
+  const { status } = useSession();
   const { appName } = useBranding();
 
   // Get callbackUrl from query params if present
@@ -23,15 +23,17 @@ function LandingPageContent() {
   };
 
   useEffect(() => {
-    // Only redirect to dashboard if truly authenticated
-    // Add a small delay to ensure sign-out completes
-    if (status === 'authenticated' && session?.user) {
+    // Only redirect to dashboard if truly authenticated.
+    // Add a small delay to ensure sign-out completes.
+    // Dep: `status` (primitive string) not `session` (object) — CLAUDE.md
+    // "Don't put session (object) in useEffect deps — use status (primitive)".
+    if (status === 'authenticated') {
       const timer = setTimeout(() => {
         router.push(callbackUrl);
       }, 100);
       return () => clearTimeout(timer);
     }
-  }, [session, status, router, callbackUrl]);
+  }, [status, router, callbackUrl]);
 
   if (status === "loading") {
     return (

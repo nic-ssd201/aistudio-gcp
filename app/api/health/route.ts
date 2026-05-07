@@ -12,239 +12,161 @@ import { validateEnv } from "@/lib/env-validation"
  * - Database connectivity (postgres.js — DATABASE_URL, TCP, or Cloud SQL socket)
  * - Authentication (NextAuth v5 + Google OIDC)
  *
- * Returns detailed diagnostic information to help troubleshoot deployment issues.
- * This endpoint is unauthenticated so it can be used by load-balancer health checks.
+ * **Response design (info-leak mitigation):**
+ * Load-balancer and Docker probes only need the HTTP status code (200/503).
+ * The response body is intentionally minimal for production callers so that
+ * unauthenticated probers cannot enumerate which credentials are missing or
+ * infer the infrastructure topology from the response body.
  *
- * TODO(nic-ssd201/aistudio-gcp#TBD): This endpoint leaks internal deployment
- * detail in its unauthenticated response body — missing env var names, per-var
- * presence flags, session user email, and the deploymentChecklist. LB/Docker
- * probes only need the HTTP status code (200 / 503), so the verbose body is
- * unnecessary for probes. Consider one of:
- *   a) Returning a minimal `{status, timestamp}` body to all callers and
- *      reserving the full diagnostics for requests that include an internal
- *      probe header (e.g. `X-Health-Detail: <shared-secret>`).
- *   b) Gating the full response behind authentication (session cookie present).
- * Until then, treat this endpoint as internal — do not expose it publicly
- * without a WAF rule or Cloud Run ingress restriction.
+ * - All environments: `{status, timestamp, checks: {<name>: {status}}}` +
+ *   `hasSession` (boolean — never the session user's email).
+ * - Non-production only: `missingVariables[]`, per-check `connectionType`,
+ *   and `diagnostics.hints[]` are included to ease local debugging.
  */
 export async function GET() {
   const requestId = generateRequestId();
   const timer = startTimer("api.health");
   const log = createLogger({ requestId, route: "api.health" });
+  const isDev = process.env.NODE_ENV !== 'production';
 
   log.info("GET /api/health - Health check requested");
 
-  interface HealthCheckResult {
-    timestamp: string;
-    status: string;
-    checks: {
-      environment: {
-        status: string;
-        missingVariables?: string[];
-        nodeEnv?: string;
-        details?: Record<string, unknown>;
-        error?: string;
-      };
-      authentication: {
-        status: string;
-        hasSession?: boolean;
-        sessionUser?: string;
-        authConfigured?: boolean;
-        error?: string;
-        hint?: string;
-      };
-      database: {
-        status: string;
-        success?: boolean;
-        configured?: boolean;
-        connectionType?: string;
-        hint?: string;
-        error?: unknown;
-        [key: string]: unknown;
-      };
-    };
-    diagnostics?: {
-      hints: string[];
-      deploymentChecklist?: string[];
-    };
-  }
+  // Run all three checks in parallel so the endpoint is fast for LB probes.
+  const [envResult, sessionResult, dbResult] = await Promise.allSettled([
+    // ── 1. Environment ────────────────────────────────────────────────────────
+    (async () => {
+      const { isValid, missing } = validateEnv()
+      log.debug("Environment check completed", { missingVars: missing.length });
+      return { isValid, missing }
+    })(),
 
-  const healthCheck: HealthCheckResult = {
-    timestamp: new Date().toISOString(),
-    status: "checking",
-    checks: {
-      environment: { status: "pending" },
-      authentication: { status: "pending" },
-      database: { status: "pending" }
-    }
-  }
-
-  // 1. Check environment variables — delegates to validateEnv() so this list
-  //    stays in sync with lib/env-validation.ts automatically.
-  try {
-    const { isValid, missing } = validateEnv()
-
-    log.debug("Environment check completed", { missingVars: missing.length });
-
-    healthCheck.checks.environment = {
-      status: isValid ? "healthy" : "unhealthy",
-      missingVariables: missing,
-      nodeEnv: process.env.NODE_ENV,
-      details: {
-        hasAuthUrl: !!process.env.AUTH_URL,
-        hasAuthSecret: !!process.env.AUTH_SECRET,
-        hasGoogleId: !!process.env.AUTH_GOOGLE_ID,
-        hasGoogleSecret: !!process.env.AUTH_GOOGLE_SECRET,
-        hasGcsBucket: !!process.env.GCS_BUCKET_NAME,
-        // Database — one of three modes required (same logic as validateEnv)
-        hasDatabaseUrl: !!process.env.DATABASE_URL,
-        hasDbHost: !!process.env.DB_HOST,
-        hasCloudSqlSocket: !!process.env.CLOUD_SQL_SOCKET_PATH,
-        dbConfigured: !!process.env.DATABASE_URL || !!process.env.DB_HOST || !!process.env.CLOUD_SQL_SOCKET_PATH,
+    // ── 2. Authentication ─────────────────────────────────────────────────────
+    // Only attempt if the Google OIDC vars are present; otherwise the
+    // NextAuth config itself would be invalid.
+    (async () => {
+      if (
+        !process.env.AUTH_SECRET ||
+        !process.env.AUTH_GOOGLE_ID ||
+        !process.env.AUTH_GOOGLE_SECRET
+      ) {
+        return { configured: false, hasSession: false }
       }
-    }
-  } catch (error) {
-    log.error("Environment check failed", error);
-    healthCheck.checks.environment = {
-      status: "error",
-      error: error instanceof Error ? error.message : "Unknown error"
-    }
-  }
-
-  // 2. Check authentication — gate on Google OIDC vars being present
-  if (process.env.AUTH_SECRET && process.env.AUTH_GOOGLE_ID && process.env.AUTH_GOOGLE_SECRET) {
-    try {
       const session = await getServerSession()
       log.debug("Authentication check completed", { hasSession: !!session });
-      healthCheck.checks.authentication = {
-        status: "healthy",
-        hasSession: !!session,
-        sessionUser: session?.email || "no active session",
-        authConfigured: true
+      // Never expose session user identity (email, name, sub) in the response
+      // body — only confirm whether a valid session exists.
+      return { configured: true, hasSession: !!session }
+    })(),
+
+    // ── 3. Database ───────────────────────────────────────────────────────────
+    (async () => {
+      const hasDatabaseUrl = !!process.env.DATABASE_URL;
+      const hasDbHost = !!process.env.DB_HOST;
+      const hasCloudSqlSocket = !!process.env.CLOUD_SQL_SOCKET_PATH;
+
+      const connectionType = hasDatabaseUrl
+        ? 'DATABASE_URL'
+        : hasDbHost
+          ? 'DB_HOST'
+          : hasCloudSqlSocket
+            ? 'CLOUD_SQL_SOCKET_PATH'
+            : null;
+
+      if (!connectionType) {
+        return { connected: false, connectionType: null }
       }
-    } catch (error) {
-      log.error("Authentication check failed", error);
-      healthCheck.checks.authentication = {
-        status: "error",
-        error: error instanceof Error ? error.message : "Unknown error",
-        hint: "Authentication system may not be properly configured"
-      }
-    }
-  } else {
-    healthCheck.checks.authentication = {
-      status: "unhealthy",
-      authConfigured: false,
-      hint: "AUTH_SECRET and AUTH_GOOGLE_ID must be set"
-    }
-  }
 
-  // 3. Check database connectivity
-  // Supports: DATABASE_URL (direct), DB_HOST (TCP), CLOUD_SQL_SOCKET_PATH (Cloud Run)
-  const hasDatabaseUrl = !!process.env.DATABASE_URL;
-  const hasDbHost = !!process.env.DB_HOST;
-  const hasCloudSqlSocket = !!process.env.CLOUD_SQL_SOCKET_PATH;
+      const validation = await validateDatabaseConnection()
+      log.debug("Database check completed", { success: validation.success });
+      return { connected: validation.success, connectionType }
+    })(),
+  ]);
 
-  const connectionType = hasDatabaseUrl
-    ? 'DATABASE_URL (direct)'
-    : hasDbHost
-      ? 'DB_HOST (TCP)'
-      : hasCloudSqlSocket
-        ? 'CLOUD_SQL_SOCKET_PATH (Cloud Run socket)'
-        : null;
+  // ── Build check statuses ───────────────────────────────────────────────────
 
-  if (connectionType) {
-    try {
-      const dbValidation = await validateDatabaseConnection()
-      log.debug("Database check completed", { success: dbValidation.success });
-      healthCheck.checks.database = {
-        status: dbValidation.success ? "healthy" : "unhealthy",
-        connectionType,
-        ...dbValidation
-      }
-    } catch (error) {
-      log.error("Database check failed", error);
-      healthCheck.checks.database = {
-        status: "error",
-        connectionType,
-        error: error instanceof Error ? {
-          name: error.name,
-          message: error.message,
-          stack: process.env.NODE_ENV !== 'production' ?
-            error.stack?.split('\n').slice(0, 5).join('\n') : undefined
-        } : "Unknown error"
-      }
-    }
-  } else {
-    healthCheck.checks.database = {
-      status: "unhealthy",
-      configured: false,
-      hint: "No database connection configured. Set one of: DATABASE_URL, DB_HOST+DB_USER+DB_PASSWORD, or CLOUD_SQL_SOCKET_PATH+DB_USER+DB_PASSWORD"
-    }
-  }
+  const envCheck = envResult.status === 'fulfilled' ? envResult.value : null
+  const sessionCheck = sessionResult.status === 'fulfilled' ? sessionResult.value : null
+  const dbCheck = dbResult.status === 'fulfilled' ? dbResult.value : null
 
-  // 4. Overall health status
-  const allHealthy = Object.values(healthCheck.checks).every(
-    (check) => check.status === "healthy"
-  )
+  const envStatus = envResult.status === 'rejected'
+    ? 'error'
+    : envCheck!.isValid ? 'healthy' : 'unhealthy'
 
-  healthCheck.status = allHealthy ? "healthy" : "unhealthy"
+  const authStatus = sessionResult.status === 'rejected'
+    ? 'error'
+    : sessionCheck!.configured ? 'healthy' : 'unhealthy'
+
+  const dbStatus = dbResult.status === 'rejected'
+    ? 'error'
+    : dbCheck!.connected ? 'healthy' : 'unhealthy'
+
+  const allHealthy = envStatus === 'healthy' && authStatus === 'healthy' && dbStatus === 'healthy'
 
   log.info("Health check completed", {
-    status: healthCheck.status,
-    environmentStatus: healthCheck.checks.environment.status,
-    authStatus: healthCheck.checks.authentication.status,
-    databaseStatus: healthCheck.checks.database.status
+    status: allHealthy ? 'healthy' : 'unhealthy',
+    envStatus,
+    authStatus,
+    dbStatus,
   });
-
   timer({ status: allHealthy ? "success" : "unhealthy" });
 
-  // 5. Add diagnostic hints if unhealthy
-  if (!allHealthy) {
-    healthCheck.diagnostics = { hints: [] }
+  // ── Response body ──────────────────────────────────────────────────────────
+  // Production: check statuses only — sufficient for LB probes, no info leak.
+  // Non-production: add missing-var names, connection type, and hints to ease
+  // local debugging.
 
-    if (healthCheck.checks.environment.status !== "healthy") {
-      const missing = healthCheck.checks.environment.missingVariables ?? []
-      healthCheck.diagnostics.hints.push(
-        `Missing required env vars: ${missing.join(', ')}. Check Cloud Run service environment configuration.`
-      )
-    }
-
-    if (healthCheck.checks.authentication.status !== "healthy") {
-      healthCheck.diagnostics.hints.push(
-        "AUTH_SECRET and both AUTH_GOOGLE_ID / AUTH_GOOGLE_SECRET must be set. Obtain OAuth 2.0 credentials from Google Cloud Console."
-      )
-    }
-
-    if (healthCheck.checks.database.status !== "healthy") {
-      if (!healthCheck.checks.database.configured) {
-        healthCheck.diagnostics.hints.push(
-          "Database not configured. Set DATABASE_URL (local dev), DB_HOST+DB_USER+DB_PASSWORD (TCP), or CLOUD_SQL_SOCKET_PATH+DB_USER+DB_PASSWORD (Cloud Run)."
-        )
-      } else {
-        healthCheck.diagnostics.hints.push(
-          "Database connectivity issue. Check connection credentials and that the Cloud SQL instance is running and accessible."
-        )
-      }
-    }
-
-    healthCheck.diagnostics.deploymentChecklist = [
-      "1. Set AUTH_URL, AUTH_SECRET, AUTH_GOOGLE_ID, AUTH_GOOGLE_SECRET, GCS_BUCKET_NAME in Cloud Run environment",
-      "2. For Cloud Run: set CLOUD_SQL_SOCKET_PATH=/cloudsql/<project>:<region>:<instance> and DB_USER/DB_PASSWORD",
-      "3. For local dev: set DATABASE_URL in .env.local",
-      "4. Check Cloud Run logs for detailed error messages",
-      "5. Verify Cloud SQL Auth Proxy is enabled or the Cloud Run service account has Cloud SQL Client role"
-    ]
+  const body: Record<string, unknown> = {
+    status: allHealthy ? 'healthy' : 'unhealthy',
+    timestamp: new Date().toISOString(),
+    checks: {
+      environment: {
+        status: envStatus,
+        // Missing var names exposed in dev only — the names alone don't reveal
+        // credential values but do reveal which infra vars are expected.
+        ...(isDev && envCheck?.missing.length
+          ? { missingVariables: envCheck.missing }
+          : {}),
+      },
+      authentication: {
+        status: authStatus,
+        // Boolean only — never expose session user identity in probe response.
+        hasSession: sessionCheck?.hasSession ?? false,
+      },
+      database: {
+        status: dbStatus,
+        // Connection type exposed in dev: reveals infrastructure topology.
+        ...(isDev && dbCheck?.connectionType
+          ? { connectionType: dbCheck.connectionType }
+          : {}),
+      },
+    },
   }
 
-  return NextResponse.json(
-    healthCheck,
-    {
-      status: allHealthy ? 200 : 503,
-      headers: {
-        'Cache-Control': 'no-store, no-cache, must-revalidate',
-        'Content-Type': 'application/json',
-        'X-Request-Id': requestId
-      }
+  // Append lightweight hints in non-production to help developers diagnose failures.
+  if (isDev && !allHealthy) {
+    const hints: string[] = []
+    if (envStatus !== 'healthy') {
+      hints.push("Check env vars: AUTH_URL, AUTH_SECRET, AUTH_GOOGLE_ID, AUTH_GOOGLE_SECRET, GCS_BUCKET_NAME, and one of DATABASE_URL / DB_HOST / CLOUD_SQL_SOCKET_PATH.")
     }
-  )
+    if (authStatus !== 'healthy') {
+      hints.push("AUTH_SECRET and both AUTH_GOOGLE_ID / AUTH_GOOGLE_SECRET must be set.")
+    }
+    if (dbStatus !== 'healthy') {
+      hints.push(
+        dbCheck?.connectionType
+          ? "Database connectivity issue. Check credentials and that the instance is reachable."
+          : "No database mode configured. Set DATABASE_URL (local), DB_HOST (TCP), or CLOUD_SQL_SOCKET_PATH (Cloud Run)."
+      )
+    }
+    if (hints.length) body.diagnostics = { hints }
+  }
+
+  return NextResponse.json(body, {
+    status: allHealthy ? 200 : 503,
+    headers: {
+      'Cache-Control': 'no-store, no-cache, must-revalidate',
+      'Content-Type': 'application/json',
+      'X-Request-Id': requestId,
+    },
+  })
 }
