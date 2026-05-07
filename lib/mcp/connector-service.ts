@@ -762,8 +762,15 @@ let secretsClient: SecretManagerServiceClient | null = null
 
 function getSecretsClient(): SecretManagerServiceClient {
   if (!secretsClient) {
+    // GCP Secret Manager SDK resolves project + endpoint from Application Default
+    // Credentials (ADC) on Cloud Run automatically. `projectId` can be supplied
+    // explicitly for local dev where ADC may not embed a project.
+    // The previous `region` option was an AWS SDK artefact — GCP does not accept
+    // it and silently ignored it; removed to avoid misleading future readers.
     secretsClient = new SecretManagerServiceClient({
-      region: process.env.AWS_REGION ?? process.env.AWS_DEFAULT_REGION ?? "us-west-2",
+      ...(process.env.GCP_PROJECT_ID
+        ? { projectId: process.env.GCP_PROJECT_ID }
+        : {}),
     })
   }
   return secretsClient

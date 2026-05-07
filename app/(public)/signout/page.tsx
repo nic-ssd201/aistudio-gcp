@@ -19,7 +19,7 @@ export default function SignOutPage() {
     // `prompt: "consent"` → `prompt: "select_account"` in auth.ts.
     signOut({ callbackUrl: '/' }).catch((err) => {
       // Log so a partial-failure (e.g., 5xx clearing the cookie) is observable.
-      // eslint-disable-next-line no-console
+      // eslint-disable-next-line no-console -- client component; @/lib/logger is server-only, no client telemetry shim available
       console.error('[signout] signOut() failed, redirecting to / anyway:', err)
       router.push('/')
     });

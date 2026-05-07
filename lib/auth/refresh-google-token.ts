@@ -34,6 +34,13 @@ import { createLogger } from "@/lib/auth/edge-logger"
  * with several pods) each instance independently refreshes — token endpoints
  * are designed for this traffic level, so the cross-instance duplication is
  * acceptable in practice.
+ *
+ * Bound analysis: entries are deleted in `.finally()` when the Promise settles.
+ * `fetch` always eventually settles (Node's HTTP agent enforces socket timeouts),
+ * so the map is effectively bounded by concurrent users whose tokens expire at
+ * the same instant — negligible in practice. No explicit size cap is needed at
+ * current scale; add one if horizontal scaling ever makes concurrent expirations
+ * a concern (e.g. `if (activeRefreshes.size > 500) activeRefreshes.clear()`).
  */
 const activeRefreshes = new Map<string, Promise<JWT | null>>()
 
