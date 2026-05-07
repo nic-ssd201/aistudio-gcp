@@ -6,7 +6,7 @@ import { UIMessage, createUIMessageStream, createUIMessageStreamResponse } from 
 import { sql, and, desc, eq } from 'drizzle-orm';
 import { executeQuery } from '@/lib/db/drizzle-client';
 import { nexusConversations, nexusMessages } from '@/lib/db/schema';
-import { getAttachmentFromS3 } from '@/lib/services/attachment-storage-service';
+import { getAttachmentFromGCS } from '@/lib/services/attachment-storage-service' // TODO: rename getAttachmentFromGCS;
 import { sanitizeTextForDatabase } from '@/lib/utils/text-sanitizer';
 import { safeJsonbStringify } from '@/lib/db/json-utils';
 import { createLogger } from '@/lib/logger';
@@ -35,7 +35,7 @@ export interface ImageGenerationParams {
 interface ReferenceImage {
   base64?: string;
   url?: string;
-  s3Key?: string;
+  gcsKey?: string;
   mimeType?: string;
   role?: 'reference' | 'mask';
 }
@@ -225,7 +225,7 @@ export async function extractReferenceImages(
     text?: string;
     image?: string;
     imageUrl?: string;
-    s3Key?: string;
+    gcsKey?: string;
     mediaType?: string;
     mimeType?: string;
     data?: string;
@@ -248,12 +248,12 @@ export async function extractReferenceImages(
 }
 
 async function handleImagePart(
-  part: { s3Key?: string; image?: string; imageUrl?: string },
+  part: { gcsKey?: string; image?: string; imageUrl?: string },
   referenceImages: ReferenceImage[]
 ): Promise<void> {
-  if (part.s3Key) {
+  if (part.gcsKey) {
     try {
-      const attachmentData = await getAttachmentFromS3(part.s3Key);
+      const attachmentData = await getAttachmentFromGCS(part.gcsKey);
       if (attachmentData.image) {
         referenceImages.push({
           base64: attachmentData.image,
@@ -263,20 +263,20 @@ async function handleImagePart(
       }
     } catch (s3Error) {
       log.warn('Failed to retrieve image from S3', {
-        s3Key: part.s3Key,
+        gcsKey: part.gcsKey,
         error: s3Error instanceof Error ? s3Error.message : String(s3Error)
       });
     }
   } else if (part.image && !part.image.startsWith('s3://')) {
     referenceImages.push({ base64: part.image, role: 'reference' });
   } else if (part.image && part.image.startsWith('s3://')) {
-    // Before this guard, s3:// images without s3Key would fall through to the
+    // Before this guard, s3:// images without gcsKey would fall through to the
     // imageUrl branch (if present) — silently using a URL that can't resolve.
     // Logging explicitly is safer than a silent fallback to an unusable URL.
-    log.warn('Image part has s3:// URL but no s3Key — cannot retrieve');
+    log.warn('Image part has s3:// URL but no gcsKey — cannot retrieve');
   } else if (part.imageUrl) {
-    // s3Key is intentionally omitted — it is provably undefined here because
-    // the first branch (if part.s3Key) already handles parts that carry an s3Key.
+    // gcsKey is intentionally omitted — it is provably undefined here because
+    // the first branch (if part.gcsKey) already handles parts that carry an gcsKey.
     referenceImages.push({
       url: part.imageUrl,
       role: 'reference'
@@ -287,8 +287,8 @@ async function handleImagePart(
 /**
  * Get S3 key from part data
  */
-function getS3KeyFromPart(part: { s3Key?: string; url?: string }): string | null {
-  if (part.s3Key) return part.s3Key;
+function getS3KeyFromPart(part: { gcsKey?: string; url?: string }): string | null {
+  if (part.gcsKey) return part.gcsKey;
   if (part.url && part.url.startsWith('s3://')) return part.url.replace('s3://', '');
   return null;
 }
@@ -297,12 +297,12 @@ function getS3KeyFromPart(part: { s3Key?: string; url?: string }): string | null
  * Handle S3-based file images
  */
 async function handleS3FileImage(
-  s3Key: string,
+  gcsKey: string,
   mimeType: string,
   referenceImages: ReferenceImage[]
 ): Promise<void> {
   try {
-    const attachmentData = await getAttachmentFromS3(s3Key);
+    const attachmentData = await getAttachmentFromGCS(gcsKey);
     if (attachmentData.image) {
       referenceImages.push({
         base64: attachmentData.image,
@@ -312,7 +312,7 @@ async function handleS3FileImage(
     }
   } catch (s3Error) {
     log.warn('Failed to retrieve file image from S3', {
-      s3Key,
+      gcsKey,
       error: s3Error instanceof Error ? s3Error.message : String(s3Error)
     });
   }
@@ -325,7 +325,7 @@ const ALLOWED_IMAGE_MIMES = new Set([
 ]);
 
 async function handleFilePart(
-  part: { mediaType?: string; mimeType?: string; s3Key?: string; url?: string; data?: string },
+  part: { mediaType?: string; mimeType?: string; gcsKey?: string; url?: string; data?: string },
   referenceImages: ReferenceImage[]
 ): Promise<void> {
   const mimeType = part.mediaType || part.mimeType || '';
@@ -333,9 +333,9 @@ async function handleFilePart(
     return;
   }
 
-  const s3Key = getS3KeyFromPart(part);
-  if (s3Key) {
-    await handleS3FileImage(s3Key, mimeType, referenceImages);
+  const gcsKey = getS3KeyFromPart(part);
+  if (gcsKey) {
+    await handleS3FileImage(gcsKey, mimeType, referenceImages);
     return;
   }
 
@@ -382,11 +382,11 @@ export async function getPreviousGeneratedImages(
   for (const msg of previousImages) {
     if (msg.parts && Array.isArray(msg.parts)) {
       for (const part of msg.parts) {
-        const partData = part as { type: string; imageUrl?: string; s3Key?: string };
-        if (partData.type === 'image' && (partData.imageUrl || partData.s3Key)) {
+        const partData = part as { type: string; imageUrl?: string; gcsKey?: string };
+        if (partData.type === 'image' && (partData.imageUrl || partData.gcsKey)) {
           referenceImages.push({
             url: partData.imageUrl,
-            s3Key: partData.s3Key,
+            gcsKey: partData.gcsKey,
             role: 'reference'
           });
           return referenceImages; // Only use most recent
@@ -405,7 +405,7 @@ export async function saveImageAssistantMessage(params: {
   conversationId: string;
   imageResult: {
     imageUrl: string;
-    s3Key?: string;
+    gcsKey?: string;
     model?: string;
     provider?: string;
     altText?: string;
@@ -420,7 +420,7 @@ export async function saveImageAssistantMessage(params: {
     type: string;
     text?: string;
     imageUrl?: string;
-    s3Key?: string;
+    gcsKey?: string;
     altText?: string;
   }> = [];
 
@@ -431,14 +431,14 @@ export async function saveImageAssistantMessage(params: {
   messageParts.push({
     type: 'image',
     imageUrl: imageResult.imageUrl,
-    s3Key: imageResult.s3Key,
+    gcsKey: imageResult.gcsKey,
     altText: 'Generated image'
   });
 
   const assistantMessageContent = JSON.stringify({
     type: 'image',
     imageUrl: imageResult.imageUrl,
-    s3Key: imageResult.s3Key,
+    gcsKey: imageResult.gcsKey,
     model: imageResult.model,
     provider: imageResult.provider,
     altText: imageResult.altText,

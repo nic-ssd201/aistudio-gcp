@@ -640,25 +640,8 @@ export async function replaceModelReferences(
           `);
         }
 
-        // Record in audit table with generated ID
-        // FIXME: COLLISION RISK - Epoch-based ID generation is dangerous
-        //
-        // Current approach: EXTRACT(EPOCH FROM NOW()) * 1000000 (microsecond precision)
-        //
-        // PROBLEMS:
-        // 1. Rapid succession replacements can collide (microseconds don't guarantee uniqueness)
-        // 2. Database clock skew across replicas
-        // 3. Not safe in distributed/high-throughput scenarios
-        //
-        // RECOMMENDED FIX: Database migration to add BIGSERIAL or use UUID
-        //
-        // Short-term: This is acceptable because model replacements are rare manual operations
-        // (typically < 1 per hour) and not called concurrently.
-        //
-        // TODO: Create migration to change model_replacement_audit.id to BIGSERIAL
-        // See: https://github.com/psd401/aistudio/issues/TBD
+         // Record in audit table — id is now auto-generated via generatedAlwaysAsIdentity
         await tx.insert(modelReplacementAudit).values({
-          id: sql`(EXTRACT(EPOCH FROM NOW()) * 1000000)::bigint`,
           originalModelId: targetModelId,
           originalModelName: targetModel.name,
           replacementModelId: replacementModelId,

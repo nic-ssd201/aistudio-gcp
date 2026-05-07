@@ -10,7 +10,7 @@ import {
   MAX_MESSAGE_LIMIT,
   type MessagePart,
 } from '@/lib/db/drizzle'
-import { getDocumentSignedUrl } from '@/lib/aws/s3-client'
+import { getDocumentSignedUrl } from '@/lib/services/document-storage-service'
 import { decodeHtmlEntitiesDeep } from '@/lib/utils/text-sanitizer'
 
 // Broader content type for API response (less strict than MessagePart)

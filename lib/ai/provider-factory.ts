@@ -9,6 +9,17 @@ import { LanguageModel } from 'ai';
 import { getProviderAdapter, type ProviderCapabilities } from '@/lib/streaming/provider-adapters';
 
 const log = createLogger({ module: 'provider-factory' });
+const VERTEX_TRANSITION_PROVIDERS = new Set(['amazon-bedrock', 'google']);
+
+function resolveProvider(provider: string): string {
+  const normalizedProvider = provider.toLowerCase();
+
+  if (process.env.VERTEX_AI_ENABLED === 'true' && VERTEX_TRANSITION_PROVIDERS.has(normalizedProvider)) {
+    return 'google-vertex';
+  }
+
+  return normalizedProvider;
+}
 
 /**
  * Creates a provider-specific model instance
@@ -32,8 +43,7 @@ export async function createProviderModel(provider: string, modelId: string): Pr
     ]);
   }
 
-  // Ensure provider is lowercase for comparison
-  const normalizedProvider = provider.toLowerCase();
+  const normalizedProvider = resolveProvider(provider);
 
   switch (normalizedProvider) {
     case 'openai':
@@ -44,6 +54,8 @@ export async function createProviderModel(provider: string, modelId: string): Pr
       return await createBedrockModel(modelId);
     case 'azure':
       return await createAzureModel(modelId);
+    case 'google-vertex':
+      return await createVertexModel(modelId);
     case 'latimer':
       return await createLatimerModel(modelId);
     default:
@@ -172,6 +184,17 @@ async function createAzureModel(modelId: string): Promise<LanguageModel> {
  * Latimer AI Provider - OpenAI-compatible API
  * Delegates to LatimerAdapter to avoid code duplication
  */
+async function createVertexModel(modelId: string): Promise<LanguageModel> {
+  try {
+    log.debug(`Creating Vertex model: ${modelId}`);
+    const adapter = await getProviderAdapter('google-vertex');
+    return await adapter.createModel(modelId);
+  } catch (error) {
+    log.error('Failed to create Vertex model', { modelId, error });
+    throw error;
+  }
+}
+
 async function createLatimerModel(modelId: string): Promise<LanguageModel> {
   try {
     log.debug(`Creating Latimer model: ${modelId}`);
@@ -187,14 +210,14 @@ async function createLatimerModel(modelId: string): Promise<LanguageModel> {
  * Helper to validate if a provider is supported
  */
 export function isSupportedProvider(provider: string): boolean {
-  return ['openai', 'google', 'amazon-bedrock', 'azure', 'latimer'].includes(provider);
+  return ['openai', 'google', 'amazon-bedrock', 'google-vertex', 'azure', 'latimer'].includes(provider);
 }
 
 /**
  * Get list of supported providers
  */
 export function getSupportedProviders(): string[] {
-  return ['openai', 'google', 'amazon-bedrock', 'azure', 'latimer'];
+  return ['openai', 'google', 'amazon-bedrock', 'google-vertex', 'azure', 'latimer'];
 }
 
 /**

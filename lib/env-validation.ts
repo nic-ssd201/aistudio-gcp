@@ -35,7 +35,7 @@ const ENV_VARS: EnvVar[] = [
   { name: 'AWS_DEFAULT_REGION', required: false, description: 'AWS default region (runtime)' },
   
   // S3 Configuration
-  { name: 'S3_BUCKET_NAME', required: true, description: 'S3 bucket for document storage' },
+  { name: 'GCS_BUCKET_NAME', required: true, description: 'GCS bucket for document storage' },
   
   // AI Services
   { name: 'ANTHROPIC_API_KEY', required: false, description: 'Anthropic API key for Claude' },

@@ -223,9 +223,9 @@ export async function adminDeleteRepository(
       repositoryId: id
     })
 
-    // Delete all documents from S3 in parallel
+    // Delete all documents from storage in parallel
     if (documents.length > 0) {
-      const { deleteDocument } = await import("@/lib/aws/s3-client")
+      const { deleteDocument } = await import("@/lib/services/document-storage-service")
 
       log.info("Deleting documents from S3", { count: documents.length })
       const deletePromises = documents.map(item =>
@@ -360,7 +360,7 @@ export async function adminRemoveRepositoryItem(
       })
 
       try {
-        const { deleteDocument } = await import("@/lib/aws/s3-client")
+        const { deleteDocument } = await import("@/lib/services/document-storage-service")
         await deleteDocument(item.source)
         log.info("Document deleted from S3 successfully")
       } catch (error) {

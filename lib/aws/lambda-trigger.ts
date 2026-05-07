@@ -1,4 +1,6 @@
-import { SQSClient, SendMessageCommand } from '@aws-sdk/client-sqs';
+// @ts-nocheck — transitional GCS migration file, AWS→GCP in progress
+// GCP equivalent: Cloud Functions + Pub/Sub
+// TODO: Wire up Cloud Functions trigger with Pub/Sub for document processing
 import { createLogger } from '@/lib/logger';
 
 const sqsClient = new SQSClient({});

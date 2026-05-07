@@ -1,0 +1,36 @@
+# Staging environment — sample variable values
+# Copy to terraform.tfvars (gitignored) and fill in real values.
+# §6.1: env_project_id must be manually created before first apply.
+# §6.6: billing_account, org_id, host_project_id → moved to envs/bootstrap/staging.tfvars
+#        Apply envs/bootstrap first, then this root.
+
+env_project_id = "aistudio-staging"
+region         = "us-west1"
+environment    = "staging"
+
+# LB domain
+domain_name = "staging-aistudio.sunnysideschools.org"
+
+# Container image
+container_image = "us-west1-docker.pkg.dev/aistudio-shared/aistudio/aistudio-web:staging-latest"
+
+# VPC-SC access policy (same org policy as dev)
+vpc_sc_access_policy_name = "1234567890"
+
+# Google Workspace OIDC — staging may share dev credentials or have separate staging client
+workspace_oidc_client_id     = "123456789-xxxx.apps.googleusercontent.com"
+workspace_oidc_client_secret = "GOCSPX-xxxx"
+
+# Budget amount is used for the observability FERPA tripwire threshold.
+# The actual google_billing_budget resource is managed in envs/bootstrap.
+budget_amount_usd = 2000
+
+# Observability alert channels
+alert_channels = []
+
+# Cloud Run scaling — staging: min=1 (always-warm for integration test reliability)
+cloud_run_min_instances = 1
+cloud_run_max_instances = 20
+
+# VPC-SC enforce — keep false on first apply; promote after 7-day clean dry-run
+enable_vpc_sc_enforce = false

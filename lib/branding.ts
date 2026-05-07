@@ -1,7 +1,7 @@
 import 'server-only'
 import { cache } from 'react'
 import { Settings } from '@/lib/settings-manager'
-import { getDocumentSignedUrl } from '@/lib/aws/s3-client'
+import { getDocumentSignedUrl } from '@/lib/services/document-storage-service'
 
 export interface BrandingConfig {
   orgName: string
