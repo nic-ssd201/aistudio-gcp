@@ -228,7 +228,6 @@ export const authConfig: NextAuthConfig = {
           },
           accessToken: '',
           idToken: '',
-          refreshToken: ''
         }
       }
 
@@ -251,26 +250,24 @@ export const authConfig: NextAuthConfig = {
         familyName: familyName || null,
       }
 
-      // Store tokens in session for server-side use
-      // NOTE: These tokens are necessary for:
-      // - accessToken: Making authenticated API calls to AWS services
-      // - idToken: Contains user claims and is used for identity verification
-      // - refreshToken: Required for token refresh when accessToken expires
+      // Store tokens in session for server-side use.
+      // NOTE: refreshToken is intentionally kept on the JWT only (not exposed
+      // here) — it is only needed server-side inside the jwt() callback to
+      // obtain a new access/id token and should not be reachable via useSession().
       //
       // Security considerations:
-      // - These tokens are encrypted in the JWT session cookie
+      // - These tokens are encrypted in the NextAuth JWT session cookie
+      // - accessToken: used for server-side Google API calls
+      // - idToken: contains OIDC user claims for identity verification
       // - Never log or expose these tokens in client-side code
-      // - Consider implementing token rotation for enhanced security
       session.accessToken = token.accessToken as string;
       session.idToken = token.idToken as string;
-      session.refreshToken = token.refreshToken as string;
 
       log.debug("Session created successfully", {
         userId: session.user.id,
         userEmail: session.user.email,
         hasAccessToken: !!session.accessToken,
         hasIdToken: !!session.idToken,
-        hasRefreshToken: !!session.refreshToken,
         tokenExpiresAt: token.expiresAt ? new Date(token.expiresAt as number).toISOString() : 'unknown'
       })
 

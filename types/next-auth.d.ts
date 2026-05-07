@@ -10,10 +10,11 @@ declare module "next-auth" {
       givenName?: string | null
       familyName?: string | null
     }
-    // Add token properties to session for server-side use
+    // Add token properties to session for server-side use.
+    // refreshToken is intentionally excluded — it lives only on the JWT,
+    // not in the client-visible session object.
     accessToken?: string
     idToken?: string
-    refreshToken?: string
   }
 }
 

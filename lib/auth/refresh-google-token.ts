@@ -18,11 +18,42 @@
 import type { JWT } from "next-auth/jwt"
 import { createLogger } from "@/lib/auth/edge-logger"
 
+/**
+ * In-process deduplication map: sub → in-flight refresh Promise.
+ *
+ * When multiple JWT callbacks fire concurrently for the same user (e.g. a
+ * page that renders several RSCs each triggering `auth()`), only the first
+ * one POSTs to Google's token endpoint.  All others await the same Promise,
+ * so they share the single refreshed token and never send a duplicate request
+ * that could race against Google's optional refresh-token rotation.
+ *
+ * The map entry is deleted as soon as the Promise settles (success or error),
+ * so the next expiry window starts a fresh request.
+ */
+const activeRefreshes = new Map<string, Promise<JWT | null>>()
+
 export async function refreshGoogleToken(token: JWT): Promise<JWT | null> {
   const log = createLogger({ context: "google-token-refresh" })
+  const sub = (token.sub as string | undefined) ?? "anonymous"
+
+  // Deduplicate concurrent refresh calls for the same user.
+  const existing = activeRefreshes.get(sub)
+  if (existing) {
+    log.debug("Joining existing in-flight token refresh", { sub })
+    return existing
+  }
+
+  const promise = _doRefresh(token, log).finally(() => {
+    activeRefreshes.delete(sub)
+  })
+  activeRefreshes.set(sub, promise)
+  return promise
+}
+
+async function _doRefresh(token: JWT, log: ReturnType<typeof createLogger>): Promise<JWT | null> {
 
   if (!token.refreshToken) {
-    log.warn("No refresh token available for Google token")
+    log.warn("No refresh token available for Google token", { sub: token.sub })
     return null
   }
 
