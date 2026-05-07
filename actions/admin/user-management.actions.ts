@@ -586,8 +586,18 @@ export async function updateUser(
     // for the polling-auth perf improvement; a cross-instance signal (Pub/Sub,
     // Redis invalidation) would eliminate the window but is out of scope here.
     if (subForCacheInvalidation) {
-      pollingSessionCache.invalidateUser(subForCacheInvalidation)
-      log.info("Polling cache flushed after role update", { userId })
+      // Wrap in try/catch: cache invalidation is best-effort. If invalidateUser
+      // throws (e.g. a bug in the cache module), we log a warning rather than
+      // turning a successful committed role change into an apparent failure.
+      try {
+        pollingSessionCache.invalidateUser(subForCacheInvalidation)
+        log.info("Polling cache flushed after role update", { userId })
+      } catch (cacheErr) {
+        log.warn("Polling cache flush failed after role update (non-fatal)", {
+          userId,
+          error: cacheErr instanceof Error ? cacheErr.message : String(cacheErr),
+        })
+      }
     }
 
     timer({ status: "success" })
@@ -698,8 +708,17 @@ export async function deleteUser(userId: number): Promise<ActionState<void>> {
     // Symmetric with updateUser — only the current instance is flushed; see
     // pollingSessionCache.invalidateUser JSDoc for multi-instance trade-off.
     if (subForCacheInvalidation) {
-      pollingSessionCache.invalidateUser(subForCacheInvalidation)
-      log.info("Polling cache flushed after user deletion", { userId })
+      // Best-effort: wrap in try/catch so a cache-module exception does not
+      // surface as "Failed to delete user" for a commit that already succeeded.
+      try {
+        pollingSessionCache.invalidateUser(subForCacheInvalidation)
+        log.info("Polling cache flushed after user deletion", { userId })
+      } catch (cacheErr) {
+        log.warn("Polling cache flush failed after user deletion (non-fatal)", {
+          userId,
+          error: cacheErr instanceof Error ? cacheErr.message : String(cacheErr),
+        })
+      }
     }
 
     timer({ status: "success" })

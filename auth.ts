@@ -59,7 +59,7 @@ export const authConfig: NextAuthConfig = {
     async jwt({ token, account, profile, user, trigger }) {
       const log = createLogger({
         context: "auth-jwt-callback",
-        tokenSub: token?.sub as string || 'unknown'
+        tokenSub: String(token?.sub ?? 'unknown')
       })
 
       // Handle session update trigger (when roles change).
@@ -241,7 +241,7 @@ export const authConfig: NextAuthConfig = {
     async session({ session, token }) {
       const log = createLogger({
         context: "auth-session-callback",
-        tokenSub: token?.sub as string || 'unknown'
+        tokenSub: String(token?.sub ?? 'unknown')
       })
 
       // Check if token exists and is valid
