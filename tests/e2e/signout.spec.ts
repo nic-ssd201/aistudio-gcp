@@ -22,7 +22,7 @@ import { test, expect } from '@playwright/test'
  */
 
 test.describe('Sign-out page — unauthenticated context', () => {
-  test('renders the signing-out message and redirects to /', async ({ page }) => {
+  test('renders the signing-out message and makes the CSRF-protected POST to /api/auth/signout', async ({ page }) => {
     // Mock the NextAuth signout endpoint so we don't need a live auth server.
     // NextAuth's POST /api/auth/signout returns a redirect to callbackUrl.
     await page.route('/api/auth/signout', (route) => {
@@ -33,7 +33,18 @@ test.describe('Sign-out page — unauthenticated context', () => {
       })
     })
 
+    // Set up the waitForRequest listener BEFORE navigating so the useEffect-
+    // triggered POST is captured. This asserts that signOut() actually fires
+    // a POST (not a GET) — locking in the CSRF-safe double-submit behavior.
+    const signoutPost = page.waitForRequest(
+      (req) => req.url().includes('/api/auth/signout') && req.method() === 'POST',
+      { timeout: 5000 }
+    )
+
     await page.goto('/signout')
+
+    // Assert the POST was actually made (CSRF-protected, not a bare GET).
+    await signoutPost
 
     // The signing-out message should be visible during the transition.
     // (It may disappear quickly once signOut() resolves — assert it appeared.)

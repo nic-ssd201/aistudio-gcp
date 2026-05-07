@@ -46,17 +46,26 @@ const activeRefreshes = new Map<string, Promise<JWT | null>>()
 
 export async function refreshGoogleToken(token: JWT): Promise<JWT | null> {
   const log = createLogger({ context: "google-token-refresh" })
-  // "anonymous" is a safe fallback: doRefresh short-circuits on missing
-  // refreshToken before doing any network I/O, so two anonymous calls sharing
-  // a Promise just both get null quickly — no correctness impact.
-  //
+
+  const sub = token.sub as string | undefined
+
+  // Skip the dedup map when sub is absent. In theory a token without sub but
+  // with a refreshToken could arrive from a malformed JWT; if two such callers
+  // shared a Promise, they'd receive the same rotation-replacing refresh_token
+  // — the second caller's token would be silently clobbered. Bypassing the map
+  // lets each caller go through doRefresh independently (which returns null
+  // quickly when refreshToken is absent anyway).
+  if (!sub) {
+    log.warn("refreshGoogleToken called with no sub — skipping dedup map")
+    return doRefresh(token, log)
+  }
+
   // Keying on sub alone assumes one browser session = one refreshToken per sub,
   // which is true in practice (NextAuth issues one JWT cookie per session, and
   // Google only rotates the refresh token occasionally). If two concurrent callers
   // somehow held different refresh tokens for the same sub, the second caller's
   // token would be silently dropped — but this cannot happen within a single
   // JWT session since all callers share the same cookie.
-  const sub = (token.sub as string | undefined) ?? "anonymous"
 
   // Deduplicate concurrent refresh calls for the same user.
   const existing = activeRefreshes.get(sub)

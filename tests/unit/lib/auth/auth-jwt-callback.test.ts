@@ -183,7 +183,9 @@ describe("jwt() callback — initial sign-in", () => {
 
   it("falls back to providerAccountId as sub when id_token payload is malformed", async () => {
     const account: AnyAccount = makeAccount({
-      // Replace valid id_token with one whose payload segment is not valid JSON.
+      // `!!!notbase64` is not valid base64url, so Buffer.from(..., 'base64url')
+      // produces a byte sequence that is not valid UTF-8 JSON — JSON.parse throws,
+      // auth.ts catches it, and the fallback path uses providerAccountId as sub.
       id_token: "header.!!!notbase64.signature",
     })
     const result = (await callbacks.jwt!({
