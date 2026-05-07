@@ -230,12 +230,14 @@ export async function getConnectorTools(
       }
     }
   } else if (authType === "cognito_passthrough") {
-    // Cognito passthrough: forward session idToken as Bearer header.
+    // Session passthrough: forward the Google OIDC idToken as a Bearer header.
     // idToken is populated in auth.ts jwt callback (account.id_token → token.idToken)
-    // and surfaced via session callback (session.idToken → CognitoSession.idToken).
+    // and surfaced via session callback (session.idToken → UserSession.idToken).
+    // Note: the auth type name 'cognito_passthrough' is a historical misnomer;
+    // it will be renamed to 'session_passthrough' in a follow-up migration.
     if (!options?.idToken) {
       throw new Error(
-        "Cognito passthrough requires an active session with an ID token. " +
+        "Session passthrough requires an active session with an ID token. " +
         "If this persists, reload the page to refresh your session."
       )
     }
