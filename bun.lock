@@ -76,7 +76,6 @@
         "ai": "~6.0.91",
         "argon2": "^0.44.0",
         "aws-amplify": "^6.16.0",
-        "aws-jwt-verify": "^5.1.1",
         "babel-plugin-react-compiler": "^1.0.0",
         "class-variance-authority": "^0.7.1",
         "clsx": "^2.1.1",
@@ -1680,8 +1679,6 @@
     "available-typed-arrays": ["available-typed-arrays@1.0.7", "", { "dependencies": { "possible-typed-array-names": "^1.0.0" } }, "sha512-wvUjBtSGN7+7SjNpq/9M2Tg350UZD3q62IFZLbRAR1bSMlCo1ZaeW+BJ+D090e4hIIZLBcTDWe4Mh4jvUDajzQ=="],
 
     "aws-amplify": ["aws-amplify@6.16.0", "", { "dependencies": { "@aws-amplify/analytics": "7.0.92", "@aws-amplify/api": "6.3.23", "@aws-amplify/auth": "6.18.0", "@aws-amplify/core": "6.16.0", "@aws-amplify/datastore": "5.1.4", "@aws-amplify/notifications": "2.0.92", "@aws-amplify/storage": "6.12.0", "tslib": "^2.5.0" } }, "sha512-4DIUtlgLJ7PIZZI30rNdd8EIuvMLbvCrT2Td4WaidsCekgZhJbekR10onnDKFmbDSw4Q8O4yoy2bRP4Qb1hRnQ=="],
-
-    "aws-jwt-verify": ["aws-jwt-verify@5.1.1", "", {}, "sha512-j6whGdGJmQ27agk4ijY8RPv6itb8JLb7SCJ86fEnneTcSBrpxuwL8kLq6y5WVH95aIknyAloEqAsaOLS1J8ITQ=="],
 
     "aws4fetch": ["aws4fetch@1.0.20", "", {}, "sha512-/djoAN709iY65ETD6LKCtyyEI04XIBP5xVvfmNxsEP0uJB5tyaGBztSryRr4HqMStr9R06PisQE7m9zDTXKu6g=="],
 

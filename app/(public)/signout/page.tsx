@@ -4,9 +4,8 @@ import { useEffect } from 'react';
 
 export default function SignOutPage() {
   useEffect(() => {
-    // Simply redirect to the server-side federated signout
-    // This avoids client-side signOut issues
-    window.location.href = '/api/auth/federated-signout';
+    // Redirect to NextAuth's standard signout route (one hop, no intermediary)
+    window.location.href = '/api/auth/signout';
   }, []);
 
   return (

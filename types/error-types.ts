@@ -15,7 +15,7 @@ export enum ErrorCode {
   AUTH_INVALID_TOKEN = "AUTH_INVALID_TOKEN",
   AUTH_EXPIRED_SESSION = "AUTH_EXPIRED_SESSION",
   AUTH_INVALID_CREDENTIALS = "AUTH_INVALID_CREDENTIALS",
-  AUTH_COGNITO_ERROR = "AUTH_COGNITO_ERROR",
+  AUTH_PROVIDER_ERROR = "AUTH_PROVIDER_ERROR",
   AUTH_TOKEN_REFRESH_FAILED = "AUTH_TOKEN_REFRESH_FAILED",
   
   // Authorization Errors (AUTHZ_*)
@@ -114,7 +114,7 @@ export interface AuthenticationError extends TypedError {
         ErrorCode.AUTH_INVALID_TOKEN | 
         ErrorCode.AUTH_EXPIRED_SESSION |
         ErrorCode.AUTH_INVALID_CREDENTIALS |
-        ErrorCode.AUTH_COGNITO_ERROR |
+        ErrorCode.AUTH_PROVIDER_ERROR |
         ErrorCode.AUTH_TOKEN_REFRESH_FAILED
   authMethod?: string
   userId?: string
@@ -291,7 +291,7 @@ export const ERROR_STATUS_CODES: Record<ErrorCode, number> = {
   [ErrorCode.DB_CONNECTION_FAILED]: 500,
   [ErrorCode.DB_QUERY_FAILED]: 500,
   [ErrorCode.DB_TRANSACTION_FAILED]: 500,
-  [ErrorCode.AUTH_COGNITO_ERROR]: 500,
+  [ErrorCode.AUTH_PROVIDER_ERROR]: 500,
   [ErrorCode.EXTERNAL_SERVICE_ERROR]: 500,
   [ErrorCode.AWS_SERVICE_ERROR]: 500,
   [ErrorCode.S3_UPLOAD_FAILED]: 500,
@@ -321,7 +321,7 @@ export function getUserMessage(code: ErrorCode): string {
     [ErrorCode.AUTH_INVALID_TOKEN]: "Your session is invalid. Please sign in again",
     [ErrorCode.AUTH_EXPIRED_SESSION]: "Your session has expired. Please sign in again",
     [ErrorCode.AUTH_INVALID_CREDENTIALS]: "Invalid email or password",
-    [ErrorCode.AUTH_COGNITO_ERROR]: "Authentication service is temporarily unavailable",
+    [ErrorCode.AUTH_PROVIDER_ERROR]: "Authentication service is temporarily unavailable",
     [ErrorCode.AUTH_TOKEN_REFRESH_FAILED]: "Failed to refresh your session. Please sign in again",
     
     // Authorization

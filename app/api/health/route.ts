@@ -107,7 +107,7 @@ export async function GET() {
   }
 
   // 2. Check authentication — gate on Google OIDC vars being present
-  if (process.env.AUTH_SECRET && process.env.AUTH_GOOGLE_ID) {
+  if (process.env.AUTH_SECRET && process.env.AUTH_GOOGLE_ID && process.env.AUTH_GOOGLE_SECRET) {
     try {
       const session = await getServerSession()
       log.debug("Authentication check completed", { hasSession: !!session });
