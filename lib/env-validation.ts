@@ -103,6 +103,18 @@ export function validateEnv(): { isValid: boolean; missing: string[]; warnings: 
     missing.push('DATABASE_URL, or DB_HOST+DB_USER+DB_PASSWORD, or CLOUD_SQL_SOCKET_PATH+DB_USER+DB_PASSWORD (database configuration required)');
   }
 
+  // SESSION_MAX_AGE: warn at startup when the value is set but will be silently
+  // ignored (non-numeric or non-positive) — mirrors the TOKEN_REFRESH_THRESHOLD_MS warning.
+  const sessionMaxAgeRaw = process.env.SESSION_MAX_AGE;
+  if (sessionMaxAgeRaw !== undefined && sessionMaxAgeRaw !== '') {
+    const sessionMaxAge = Number.parseInt(sessionMaxAgeRaw, 10);
+    if (!Number.isFinite(sessionMaxAge) || sessionMaxAge <= 0) {
+      warnings.push(
+        `SESSION_MAX_AGE="${sessionMaxAgeRaw}" is not a positive integer and will be ignored — effective value is 86400 s (24 h).`
+      );
+    }
+  }
+
   // TOKEN_REFRESH_THRESHOLD_MS: warn at startup when the value is set but rejected
   // by the 60 s floor so operators discover misconfiguration at deploy time.
   const thresholdRaw = process.env.TOKEN_REFRESH_THRESHOLD_MS;

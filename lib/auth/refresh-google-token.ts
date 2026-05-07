@@ -128,6 +128,15 @@ async function doRefresh(token: JWT, log: ReturnType<typeof createLogger>): Prom
     return null
   }
 
+  // 10 s abort timeout on the Google token endpoint.
+  // Without this, a hung upstream would hold the Promise in the dedup map
+  // indefinitely — every subsequent request for the same sub joins the hung
+  // Promise and waits until Node's default socket timeout (minutes), silently
+  // blocking all of that user's auth checks.  Failing fast with null lets the
+  // caller force re-auth immediately instead.
+  const controller = new AbortController()
+  const fetchTimeout = setTimeout(() => controller.abort(), 10_000)
+
   try {
     const response = await fetch("https://oauth2.googleapis.com/token", {
       method: "POST",
@@ -138,6 +147,7 @@ async function doRefresh(token: JWT, log: ReturnType<typeof createLogger>): Prom
         client_secret: secret,
         refresh_token: token.refreshToken as string,
       }),
+      signal: controller.signal,
     })
 
     const tokens = (await response.json()) as {
@@ -183,9 +193,18 @@ async function doRefresh(token: JWT, log: ReturnType<typeof createLogger>): Prom
     log.info("Google token refreshed successfully")
     return refreshed
   } catch (error) {
+    // AbortError means our 10 s timeout fired — log as warn, not error,
+    // since this is an expected failure path (upstream latency spike).
+    if (error instanceof Error && error.name === 'AbortError') {
+      log.warn("Google token refresh timed out after 10 s — returning null (fail-closed)")
+      return null
+    }
     log.error("Google token refresh threw error", {
       error: error instanceof Error ? error.message : "Unknown error",
     })
     return null
+  } finally {
+    // Always clear the abort timer so it doesn't fire after the fetch settles.
+    clearTimeout(fetchTimeout)
   }
 }

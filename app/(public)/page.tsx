@@ -5,7 +5,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import Image from "next/image";
 import { useSession, signIn } from "next-auth/react";
 import { useEffect, Suspense } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { useBranding } from "@/contexts/branding-context";
 
 function LandingPageContent() {
@@ -13,9 +13,13 @@ function LandingPageContent() {
   const { status } = useSession();
   const { appName } = useBranding();
 
-  // Get callbackUrl from query params if present
-  const searchParams = new URLSearchParams(typeof window !== 'undefined' ? window.location.search : '');
-  const callbackUrl = searchParams.get('callbackUrl') || '/dashboard';
+  // Get callbackUrl from query params if present.
+  // useSearchParams() is the idiomatic Next.js approach for client components;
+  // the typeof window guard pattern it replaces was an SSR workaround that runs
+  // on every render without memoization.  The parent <Suspense> boundary
+  // (required for useSearchParams in Next.js App Router) is already in place.
+  const searchParams = useSearchParams();
+  const callbackUrl = searchParams.get('callbackUrl') ?? '/dashboard';
   
   const handleSignIn = () => {
     // Use signIn function to skip the intermediate page
