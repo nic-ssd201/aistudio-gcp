@@ -126,6 +126,13 @@ function getPgClient(): ReturnType<typeof postgres> {
     const cloudSqlSocketPath = process.env.CLOUD_SQL_SOCKET_PATH;
 
     if (cloudSqlSocketPath) {
+      if (!cloudSqlSocketPath.startsWith("/")) {
+        throw new Error(
+          `CLOUD_SQL_SOCKET_PATH must be an absolute path starting with '/'. ` +
+          `Got: "${cloudSqlSocketPath}". Expected e.g. /cloudsql/project:region:instance`
+        );
+      }
+
       const user = process.env.DB_USER;
       const password = process.env.DB_PASSWORD;
       const database = process.env.DB_NAME || "aistudio";

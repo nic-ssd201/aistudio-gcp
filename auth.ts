@@ -15,6 +15,12 @@ async function refreshGoogleToken(token: JWT): Promise<JWT | null> {
     log.warn("No refresh token available for Google token")
     return null
   }
+  // Fail loud at call time if the secret is absent — avoids a confusing
+  // `invalid_client` error from Google 12 hours after initial sign-in.
+  if (!process.env.AUTH_GOOGLE_SECRET) {
+    log.error("AUTH_GOOGLE_SECRET is not set — cannot refresh Google token")
+    return null
+  }
   try {
     const response = await fetch("https://oauth2.googleapis.com/token", {
       method: "POST",
@@ -22,13 +28,14 @@ async function refreshGoogleToken(token: JWT): Promise<JWT | null> {
       body: new URLSearchParams({
         grant_type: "refresh_token",
         client_id: process.env.AUTH_GOOGLE_ID ?? "",
-        client_secret: process.env.AUTH_GOOGLE_SECRET ?? "",
+        client_secret: process.env.AUTH_GOOGLE_SECRET,
         refresh_token: token.refreshToken as string,
       }),
     })
     const tokens = await response.json() as {
       access_token?: string;
       id_token?: string;
+      refresh_token?: string;
       expires_in?: number;
       error?: string;
     }
@@ -36,13 +43,22 @@ async function refreshGoogleToken(token: JWT): Promise<JWT | null> {
       log.warn("Google token refresh failed", { error: tokens.error })
       return null
     }
-    log.info("Google token refreshed successfully")
-    return {
+    const refreshed: JWT = {
       ...token,
       accessToken: tokens.access_token,
       idToken: tokens.id_token,
-      expiresAt: tokens.expires_in ? Date.now() + tokens.expires_in * 1000 : token.expiresAt,
+      // Google may rotate the refresh token on security events — preserve the
+      // new one when present; fall back to the current token.
+      refreshToken: tokens.refresh_token ?? (token.refreshToken as string),
+      // Use expires_in if provided; default to 1 hour rather than inheriting
+      // the old (already-expired) expiresAt, which would cause an immediate
+      // re-refresh loop on the next jwt() invocation.
+      expiresAt: tokens.expires_in
+        ? Date.now() + tokens.expires_in * 1000
+        : Date.now() + 60 * 60 * 1000,
     }
+    log.info("Google token refreshed successfully")
+    return refreshed
   } catch (error) {
     log.error("Google token refresh threw error", {
       error: error instanceof Error ? error.message : "Unknown error",
@@ -94,6 +110,19 @@ export const authConfig: NextAuthConfig = {
                 access_type: "offline",
                 prompt: "consent", // Required to receive refresh_token on every sign-in
               },
+            },
+            // Match Cognito's explicit security checks — PKCE + state + nonce.
+            checks: ["pkce", "state", "nonce"],
+            profile(profile) {
+              return {
+                id: profile.sub,
+                name: profile.name || profile.given_name || profile.family_name,
+                email: profile.email,
+                image: profile.picture,
+                // Preserve given/family name for session-callback display-name chain
+                given_name: profile.given_name,
+                family_name: profile.family_name,
+              }
             },
           }),
         ]
