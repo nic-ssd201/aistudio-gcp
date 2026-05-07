@@ -32,6 +32,11 @@ const alertEmail = app.node.tryGetContext('alertEmail');
 const brandingOrgName = app.node.tryGetContext('brandingOrgName');
 const brandingAppName = app.node.tryGetContext('brandingAppName');
 
+// Gate Cognito AuthStack behind --context legacy=true so the default `cdk synth`
+// does not include it. The fork does not deploy Cognito; these stacks are preserved
+// only to ease upstream cherry-picks. Planned for deletion in nic-ssd201/aistudio-gcp#8.
+const isLegacyAwsDeploy = app.node.tryGetContext('legacy') === 'true';
+
 // DEAD CODE — SSD201 GCP fork: this function builds Cognito callback/logout URLs
 // that are fed into AuthStack (Cognito User Pool client configuration).
 // Neither AuthStack nor Cognito is deployed in the GCP fork — the app uses
@@ -132,19 +137,21 @@ const devDbStack = new DatabaseStack(app, 'AIStudio-DatabaseStack-Dev', {
 cdk.Tags.of(devDbStack).add('Environment', 'Dev');
 Object.entries(standardTags).forEach(([key, value]) => cdk.Tags.of(devDbStack).add(key, value));
 
-// DEAD CODE — SSD201 GCP fork: AuthStack provisions a Cognito User Pool.
-// Not deployed in the GCP fork (Google OIDC via NextAuth v5 is used instead).
-// Preserved for upstream merge surface only. See nic-ssd201/aistudio-gcp#8.
-const devUrls = getCallbackAndLogoutUrls('dev', baseDomain);
-const devAuthStack = new AuthStack(app, 'AIStudio-AuthStack-Dev', {
-  environment: 'dev',
-  googleClientSecret: SecretValue.secretsManager('aistudio-dev-google-oauth', { jsonField: 'clientSecret' }),
-  callbackUrls: devUrls.callbackUrls,
-  logoutUrls: devUrls.logoutUrls,
-  env: { account: process.env.CDK_DEFAULT_ACCOUNT, region: process.env.CDK_DEFAULT_REGION },
-});
-cdk.Tags.of(devAuthStack).add('Environment', 'Dev');
-Object.entries(standardTags).forEach(([key, value]) => cdk.Tags.of(devAuthStack).add(key, value));
+// DEAD CODE — gated: only instantiated when --context legacy=true.
+// To deploy (not recommended from this fork):
+//   bunx cdk deploy AIStudio-AuthStack-Dev --context legacy=true --context baseDomain=<domain>
+if (isLegacyAwsDeploy) {
+  const devUrls = getCallbackAndLogoutUrls('dev', baseDomain);
+  const devAuthStack = new AuthStack(app, 'AIStudio-AuthStack-Dev', {
+    environment: 'dev',
+    googleClientSecret: SecretValue.secretsManager('aistudio-dev-google-oauth', { jsonField: 'clientSecret' }),
+    callbackUrls: devUrls.callbackUrls,
+    logoutUrls: devUrls.logoutUrls,
+    env: { account: process.env.CDK_DEFAULT_ACCOUNT, region: process.env.CDK_DEFAULT_REGION },
+  });
+  cdk.Tags.of(devAuthStack).add('Environment', 'Dev');
+  Object.entries(standardTags).forEach(([key, value]) => cdk.Tags.of(devAuthStack).add(key, value));
+}
 
 const devStorageStack = new StorageStack(app, 'AIStudio-StorageStack-Dev', {
   environment: 'dev',
@@ -242,19 +249,21 @@ const prodDbStack = new DatabaseStack(app, 'AIStudio-DatabaseStack-Prod', {
 cdk.Tags.of(prodDbStack).add('Environment', 'Prod');
 Object.entries(standardTags).forEach(([key, value]) => cdk.Tags.of(prodDbStack).add(key, value));
 
-// DEAD CODE — SSD201 GCP fork: AuthStack provisions a Cognito User Pool.
-// Not deployed in the GCP fork (Google OIDC via NextAuth v5 is used instead).
-// Preserved for upstream merge surface only. See nic-ssd201/aistudio-gcp#8.
-const prodUrls = getCallbackAndLogoutUrls('prod', baseDomain);
-const prodAuthStack = new AuthStack(app, 'AIStudio-AuthStack-Prod', {
-  environment: 'prod',
-  googleClientSecret: SecretValue.secretsManager('aistudio-prod-google-oauth', { jsonField: 'clientSecret' }),
-  callbackUrls: prodUrls.callbackUrls,
-  logoutUrls: prodUrls.logoutUrls,
-  env: { account: process.env.CDK_DEFAULT_ACCOUNT, region: process.env.CDK_DEFAULT_REGION },
-});
-cdk.Tags.of(prodAuthStack).add('Environment', 'Prod');
-Object.entries(standardTags).forEach(([key, value]) => cdk.Tags.of(prodAuthStack).add(key, value));
+// DEAD CODE — gated: only instantiated when --context legacy=true.
+// To deploy (not recommended from this fork):
+//   bunx cdk deploy AIStudio-AuthStack-Prod --context legacy=true --context baseDomain=<domain>
+if (isLegacyAwsDeploy) {
+  const prodUrls = getCallbackAndLogoutUrls('prod', baseDomain);
+  const prodAuthStack = new AuthStack(app, 'AIStudio-AuthStack-Prod', {
+    environment: 'prod',
+    googleClientSecret: SecretValue.secretsManager('aistudio-prod-google-oauth', { jsonField: 'clientSecret' }),
+    callbackUrls: prodUrls.callbackUrls,
+    logoutUrls: prodUrls.logoutUrls,
+    env: { account: process.env.CDK_DEFAULT_ACCOUNT, region: process.env.CDK_DEFAULT_REGION },
+  });
+  cdk.Tags.of(prodAuthStack).add('Environment', 'Prod');
+  Object.entries(standardTags).forEach(([key, value]) => cdk.Tags.of(prodAuthStack).add(key, value));
+}
 
 const prodStorageStack = new StorageStack(app, 'AIStudio-StorageStack-Prod', {
   environment: 'prod',
@@ -343,7 +352,8 @@ if (baseDomain) {
   });
   devFrontendStack.addDependency(devDbStack); // Need VPC from DB stack
   devFrontendStack.addDependency(devStorageStack); // Need bucket name
-  devFrontendStack.addDependency(devAuthStack); // Need auth secret ARN export
+  // devFrontendStack.addDependency(devAuthStack) — removed; AuthStack is gated behind
+  // --context legacy=true (Cognito is not deployed in the GCP fork).
   devFrontendStack.addDependency(devGuardrailsStack); // Need guardrails config exports
   cdk.Tags.of(devFrontendStack).add('Environment', 'Dev');
   Object.entries(standardTags).forEach(([key, value]) => cdk.Tags.of(devFrontendStack).add(key, value));
@@ -362,7 +372,8 @@ if (baseDomain) {
   });
   prodFrontendStack.addDependency(prodDbStack); // Need VPC from DB stack
   prodFrontendStack.addDependency(prodStorageStack); // Need bucket name
-  prodFrontendStack.addDependency(prodAuthStack); // Need auth secret ARN export
+  // prodFrontendStack.addDependency(prodAuthStack) — removed; AuthStack is gated behind
+  // --context legacy=true (Cognito is not deployed in the GCP fork).
   prodFrontendStack.addDependency(prodGuardrailsStack); // Need guardrails config exports
   cdk.Tags.of(prodFrontendStack).add('Environment', 'Prod');
   Object.entries(standardTags).forEach(([key, value]) => cdk.Tags.of(prodFrontendStack).add(key, value));

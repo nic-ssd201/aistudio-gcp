@@ -162,28 +162,6 @@ export function validateJobOwnership(
 }
 
 /**
- * Invalidate cached sessions for a given user.
- *
- * This function is intentionally not wired to `/api/auth/refresh-session`.
- * The polling cache has a 5-minute TTL, so a role change will naturally
- * propagate to polling endpoints within that window without any explicit
- * invalidation call. The ≤5 min staleness is an accepted trade-off for the
- * auth-overhead reduction that the cache provides.
- *
- * If strict immediate propagation is required in the future, call this from
- * the role-change server action (e.g. `updateUserRoles`) with the affected
- * user's `sub` value.
- *
- * @deprecated Currently unwired — the 5-min TTL staleness is accepted. Wire
- * this up (or delete it) if strict immediate revocation becomes a requirement.
- */
-export function invalidateUserSessions(userSub: string): void {
-  const cacheKey = `session:${userSub}`;
-  pollingSessionCache.invalidateSession(cacheKey);
-  log.info('User sessions invalidated', { userSub });
-}
-
-/**
  * Get authentication cache statistics
  */
 export function getAuthCacheStats() {

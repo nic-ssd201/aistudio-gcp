@@ -28,7 +28,9 @@ export async function GET() {
   const requestId = generateRequestId();
   const timer = startTimer("api.health");
   const log = createLogger({ requestId, route: "api.health" });
-  const isDev = process.env.NODE_ENV !== 'production';
+  // Use `=== 'development'` (not `!== 'production'`) so staging environments
+  // get production-shaped responses and accurate LB probe behavior by default.
+  const isDev = process.env.NODE_ENV === 'development';
 
   log.info("GET /api/health - Health check requested");
 

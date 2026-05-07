@@ -14,7 +14,7 @@
  * - jwt() TOKEN_REFRESH_THRESHOLD_MS env override: custom value respected when
  *   >= 60 000 ms; values below the 60 s floor fall back to the 5-min default
  * - signIn() integration: returns false when hasVerifiedGoogleEmail fails
- * - redirect() hardening: malformed URL falls through to safe /dashboard default
+ * - redirect() hardening: malformed URL and javascript: scheme fall through to safe /dashboard default
  */
 
 import type { NextAuthConfig } from "next-auth"
@@ -513,9 +513,16 @@ describe("redirect() callback — URL handling", () => {
   })
 
   it("handles malformed URL strings without throwing", async () => {
-    // new URL("javascript:alert(1)") parses in Node but origin is "null" — falls
-    // through to /dashboard. A completely malformed string throws — also falls through.
+    // A completely malformed string causes new URL() to throw — caught, falls through.
     const result = await callbacks.redirect!({ url: "not-a-url", baseUrl })
+    expect(result).toBe(`${baseUrl}/dashboard`)
+  })
+
+  it("rejects javascript: scheme (origin is 'null') and returns safe default", async () => {
+    // new URL("javascript:alert(1)") does NOT throw in Node — it parses successfully
+    // but produces origin = "null", which never matches the baseUrl origin.
+    // This test locks in the hardening so XSS-via-redirect is not regressable.
+    const result = await callbacks.redirect!({ url: "javascript:alert(1)", baseUrl })
     expect(result).toBe(`${baseUrl}/dashboard`)
   })
 

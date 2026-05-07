@@ -23,17 +23,20 @@ export const authConfig: NextAuthConfig = {
         params: {
           scope: "openid email profile",
           access_type: "offline",
-          // `prompt: "consent"` ensures Google returns a refresh_token on
-          // every sign-in (including repeat sign-ins for the same user).
-          // Without it, Google only issues a refresh_token on the first
-          // authorization for a given client+scope — subsequent logins may
-          // omit it, leaving the session unable to extend beyond 1 hour.
-          // Trade-off: users see the Google consent screen on every sign-in
-          // instead of silent SSO. Change to "select_account" if account
-          // picking without full consent re-prompt is preferred and the
-          // missing-refresh-token case can be handled (e.g., redirect to
-          // re-auth when expiresAt approaches without a refresh_token).
-          prompt: "consent",
+          // `prompt` controls whether Google shows the consent screen on repeat sign-ins.
+          //
+          // "consent" (default when AUTH_GOOGLE_FORCE_CONSENT=true or unset):
+          //   Google always returns a refresh_token. Users see the consent dialog on
+          //   every sign-in — a UX cost, but guarantees long-lived sessions.
+          //
+          // "select_account" (when AUTH_GOOGLE_FORCE_CONSENT=false):
+          //   Google shows an account-picker but re-uses an existing grant, so it
+          //   may not return a refresh_token on repeat logins. Handle the missing
+          //   refresh_token case (e.g. redirect to re-auth when expiresAt nears
+          //   without a refreshToken) before enabling this in production.
+          //
+          // Default: "consent" — set AUTH_GOOGLE_FORCE_CONSENT=false to opt out.
+          prompt: process.env.AUTH_GOOGLE_FORCE_CONSENT === 'false' ? 'select_account' : 'consent',
         },
       },
       checks: ["pkce", "state", "nonce"],
