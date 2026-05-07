@@ -1,9 +1,55 @@
 import NextAuth from "next-auth"
 import Cognito from "next-auth/providers/cognito"
+import Google from "next-auth/providers/google"
 import type { NextAuthConfig } from "next-auth"
 import type { JWT } from "next-auth/jwt"
 import { refreshAccessToken, shouldRefreshToken } from "@/lib/auth/token-refresh-client"
 import { createLogger } from "@/lib/auth/edge-logger"
+
+// ─── Google token refresh ────────────────────────────────────────────────────
+// Uses the standard OAuth2 refresh-token grant against Google's token endpoint.
+// Called instead of the Cognito-specific refreshAccessToken when provider=google.
+async function refreshGoogleToken(token: JWT): Promise<JWT | null> {
+  const log = createLogger({ context: "google-token-refresh" })
+  if (!token.refreshToken) {
+    log.warn("No refresh token available for Google token")
+    return null
+  }
+  try {
+    const response = await fetch("https://oauth2.googleapis.com/token", {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        grant_type: "refresh_token",
+        client_id: process.env.AUTH_GOOGLE_ID ?? "",
+        client_secret: process.env.AUTH_GOOGLE_SECRET ?? "",
+        refresh_token: token.refreshToken as string,
+      }),
+    })
+    const tokens = await response.json() as {
+      access_token?: string;
+      id_token?: string;
+      expires_in?: number;
+      error?: string;
+    }
+    if (!response.ok || tokens.error) {
+      log.warn("Google token refresh failed", { error: tokens.error })
+      return null
+    }
+    log.info("Google token refreshed successfully")
+    return {
+      ...token,
+      accessToken: tokens.access_token,
+      idToken: tokens.id_token,
+      expiresAt: tokens.expires_in ? Date.now() + tokens.expires_in * 1000 : token.expiresAt,
+    }
+  } catch (error) {
+    log.error("Google token refresh threw error", {
+      error: error instanceof Error ? error.message : "Unknown error",
+    })
+    return null
+  }
+}
 
 export const authConfig: NextAuthConfig = {
   providers: [
@@ -33,7 +79,25 @@ export const authConfig: NextAuthConfig = {
           image: profile.picture,
         }
       },
-    })
+    }),
+    // GCP migration: Google OIDC provider (SSD201)
+    // Enabled when AUTH_GOOGLE_ID / AUTH_GOOGLE_SECRET are set.
+    // access_type=offline + prompt=consent ensure a refresh_token is issued.
+    ...(process.env.AUTH_GOOGLE_ID
+      ? [
+          Google({
+            clientId: process.env.AUTH_GOOGLE_ID,
+            clientSecret: process.env.AUTH_GOOGLE_SECRET ?? "",
+            authorization: {
+              params: {
+                scope: "openid email profile",
+                access_type: "offline",
+                prompt: "consent", // Required to receive refresh_token on every sign-in
+              },
+            },
+          }),
+        ]
+      : []),
   ],
   callbacks: {
     async jwt({ token, account, profile, user, trigger }) {
@@ -96,6 +160,7 @@ export const authConfig: NextAuthConfig = {
           iat: decoded.iat,
           tokenLifetimeMs: tokenLifetimeMs, // Store calculated lifetime for accurate refresh timing
           roleVersion: 0, // Initialize role version
+          provider: account.provider, // Track provider for refresh logic (cognito | google)
         };
 
           log.info("Successfully created initial token", {
@@ -126,6 +191,7 @@ export const authConfig: NextAuthConfig = {
             expiresAt: expiresAt,
             tokenLifetimeMs: tokenLifetimeMs,
             roleVersion: 0,
+            provider: account.provider, // Track provider for refresh logic
           };
 
           log.info("Created fallback token", {
@@ -167,9 +233,11 @@ export const authConfig: NextAuthConfig = {
 
       // Attempt token refresh if expired or should be refreshed proactively
       if (isExpired || shouldRefresh) {
+        const provider = token.provider as string | undefined
         log.info("Attempting token refresh", {
           reason: isExpired ? 'expired' : 'proactive',
-          hasRefreshToken: !!token.refreshToken
+          hasRefreshToken: !!token.refreshToken,
+          provider: provider ?? 'unknown',
         })
 
         if (!token.refreshToken) {
@@ -178,24 +246,31 @@ export const authConfig: NextAuthConfig = {
         }
 
         try {
-          const refreshedTokens = await refreshAccessToken(token)
-
-          if (refreshedTokens) {
-            log.info("Token refresh successful", {
-              newExpiresAt: new Date(refreshedTokens.expiresAt).toISOString()
-            })
-
-            // Return refreshed token with existing user data and preserve lifetime info
-            const tokenWithLifetime = token as JWT & { tokenLifetimeMs?: number }
-            return {
-              ...token,
-              accessToken: refreshedTokens.accessToken,
-              idToken: refreshedTokens.idToken,
-              refreshToken: refreshedTokens.refreshToken,
-              expiresAt: refreshedTokens.expiresAt,
-              // Preserve the original token lifetime for consistent refresh calculations
-              tokenLifetimeMs: tokenWithLifetime.tokenLifetimeMs
+          // Dispatch to provider-specific refresh handler
+          let refreshed: JWT | null = null
+          if (provider === 'google') {
+            refreshed = await refreshGoogleToken(token)
+          } else {
+            // Default: Cognito refresh via server action
+            const refreshedTokens = await refreshAccessToken(token)
+            if (refreshedTokens) {
+              const tokenWithLifetime = token as JWT & { tokenLifetimeMs?: number }
+              refreshed = {
+                ...token,
+                accessToken: refreshedTokens.accessToken,
+                idToken: refreshedTokens.idToken,
+                refreshToken: refreshedTokens.refreshToken,
+                expiresAt: refreshedTokens.expiresAt,
+                tokenLifetimeMs: tokenWithLifetime.tokenLifetimeMs,
+              }
             }
+          }
+
+          if (refreshed) {
+            log.info("Token refresh successful", {
+              newExpiresAt: refreshed.expiresAt ? new Date(refreshed.expiresAt as number).toISOString() : 'unknown',
+            })
+            return refreshed
           } else {
             log.warn("Token refresh failed - forcing re-authentication")
             return null
