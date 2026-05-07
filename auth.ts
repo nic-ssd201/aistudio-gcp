@@ -1,5 +1,5 @@
 import NextAuth from "next-auth"
-import Google from "next-auth/providers/google"
+import Google, { type GoogleProfile } from "next-auth/providers/google"
 import type { NextAuthConfig } from "next-auth"
 import type { JWT } from "next-auth/jwt"
 import { createLogger } from "@/lib/auth/edge-logger"
@@ -178,8 +178,8 @@ export const authConfig: NextAuthConfig = {
           // `iat` falls back to Math.floor(Date.now()/1000) so each fallback session
           // gets a distinct cache key (session:sub:iat) rather than the default
           // session:sub:0 that all sub-less fallback sessions would otherwise share.
-          // Cast once so the two field accesses below don't repeat the same type annotation.
-          const p = profile as { given_name?: string; family_name?: string } | undefined
+          // Cast to the exported GoogleProfile type (not an ad-hoc structural type).
+          const p = profile as GoogleProfile | undefined
           const fallbackToken: JWT = {
             sub: account.providerAccountId,
             email: user?.email || profile?.email || undefined,

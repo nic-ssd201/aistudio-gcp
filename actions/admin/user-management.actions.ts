@@ -496,23 +496,46 @@ export async function updateUser(
     // silently clobbered by a concurrent call on the same event-loop tick.
     const subFromTx = await executeTransaction(
       async (tx) => {
-        // Update user basic info - verify user exists.
+        // ── 1. Fetch current role assignments ────────────────────────────────
+        // Done first so we can (a) diff against incoming roles before the UPDATE
+        // and (b) reuse the result for the admin-removal guard below without a
+        // second round-trip.
+        const currentUserRoles = await tx
+          .select({ roleName: roles.name })
+          .from(userRoles)
+          .innerJoin(roles, eq(userRoles.roleId, roles.id))
+          .where(eq(userRoles.userId, userId))
+
+        const currentRoleNames = new Set(currentUserRoles.map((r) => r.roleName))
+        const incomingRoleNames = new Set(data.roles)
+        // A role diff exists when the sets differ in size OR any incoming name
+        // is absent from the current set.  Symmetric: if sizes match and all
+        // incoming names are present, the sets are identical.
+        const rolesChanged =
+          currentRoleNames.size !== incomingRoleNames.size ||
+          [...incomingRoleNames].some((name) => !currentRoleNames.has(name))
+
+        // ── 2. Update user basic info ────────────────────────────────────────
         // Include cognitoSub in .returning() so it is available post-commit for
         // pollingSessionCache.invalidateUser() without an additional DB query.
+        //
+        // roleVersion is bumped only when roles actually changed.  An unnecessary
+        // bump on a name-only edit triggers /api/auth/refresh-session fleet-wide
+        // (every instance whose JWT carries an older roleVersion will force re-auth
+        // for that user) — disruptive for a purely cosmetic change.
         const result = await tx
           .update(users)
           .set({
             firstName: data.firstName.trim(),
             lastName: data.lastName.trim(),
-            // Increment role_version so /api/auth/refresh-session detects the
-            // change on other instances: sessionRoleVersion (from the JWT)
-            // will be < dbRoleVersion, triggering re-authentication.
-            // Without this bump, the multi-instance stale-role fallback never
-            // fires — pollingSessionCache.invalidateUser() only flushes the
-            // in-process cache on the instance handling this request.
-            roleVersion: sql`${users.roleVersion} + 1`,
+            // Conditional bump: only when roles actually differ.
+            // Without this bump on role changes, the multi-instance stale-role
+            // fallback (/api/auth/refresh-session) never fires — the in-process
+            // pollingSessionCache.invalidateUser() only flushes the local cache.
+            ...(rolesChanged ? { roleVersion: sql`${users.roleVersion} + 1` } : {}),
           })
           .where(eq(users.id, userId))
+          // rename pending: users.cognitoSub → users.authSub (issue #8)
           .returning({ id: users.id, cognitoSub: users.cognitoSub })
 
         // Throw if user doesn't exist
@@ -522,6 +545,7 @@ export async function updateUser(
 
         const capturedSub = result[0].cognitoSub ?? null;
 
+        // ── 3. Validate incoming role names ──────────────────────────────────
         // Get role IDs from role names (inside transaction to prevent race condition)
         const roleList = await tx
           .select({ id: roles.id, name: roles.name })
@@ -536,16 +560,11 @@ export async function updateUser(
           )
         }
 
-        // Prevent removing admin role from last administrator (would lock everyone out)
+        // ── 4. Admin-removal guard ───────────────────────────────────────────
+        // Prevent removing admin role from last administrator (would lock everyone out).
+        // Reuse currentUserRoles fetched in step 1 — no extra query needed.
         const isRemovingAdmin = !data.roles.includes("administrator")
         if (isRemovingAdmin) {
-          // Check if user currently has admin role
-          const currentUserRoles = await tx
-            .select({ roleName: roles.name })
-            .from(userRoles)
-            .innerJoin(roles, eq(userRoles.roleId, roles.id))
-            .where(eq(userRoles.userId, userId))
-
           const isCurrentlyAdmin = currentUserRoles.some((r) => r.roleName === "administrator")
 
           if (isCurrentlyAdmin) {
@@ -567,6 +586,7 @@ export async function updateUser(
           }
         }
 
+        // ── 5. Replace role assignments ──────────────────────────────────────
         // Delete existing role assignments
         await tx.delete(userRoles).where(eq(userRoles.userId, userId))
 
@@ -703,6 +723,7 @@ export async function deleteUser(userId: number): Promise<ActionState<void>> {
         const result = await tx
           .delete(users)
           .where(eq(users.id, userId))
+          // rename pending: users.cognitoSub → users.authSub (issue #8)
           .returning({ id: users.id, cognitoSub: users.cognitoSub })
 
         if (result.length === 0) {

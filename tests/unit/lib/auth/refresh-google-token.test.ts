@@ -142,6 +142,20 @@ describe("refreshGoogleToken", () => {
     expect(result!.expiresAt).toBeGreaterThanOrEqual(before + 300 * 1000)
   })
 
+  it("returns null (fail-closed) when expires_in is exactly 1 s below MIN_EXPIRES_IN (299 s)", async () => {
+    // Boundary pin: 299 s is one tick below the 300 s minimum and must be rejected.
+    // If MIN_EXPIRES_IN ever slips to 298 s or the comparison flips to <=, this test catches it.
+    mockGoogleTokenResponse({
+      access_token: MOCK_ACCESS_TOKEN,
+      id_token: MOCK_ID_TOKEN,
+      expires_in: 299,
+    })
+
+    const result = await refreshGoogleToken(makeToken())
+
+    expect(result).toBeNull()
+  })
+
   it("returns null on Google error response (invalid_grant)", async () => {
     mockGoogleTokenResponse({ error: "invalid_grant" }, false)
 
@@ -275,6 +289,55 @@ describe("refreshGoogleToken", () => {
     // The identity-check .finally() in refreshGoogleToken() is the only
     // mechanism keeping activeRefreshes bounded under load — a regression
     // that strands entries would silently degrade to a 500-entry safety-cap leak.
+    expect(getActiveRefreshCount()).toBe(0)
+  })
+
+  it("bypasses dedup (still refreshes) when the activeRefreshes map is at capacity (≥500 entries)", async () => {
+    // Regression pin: when the dedup map holds ≥500 entries, refreshGoogleToken()
+    // must bypass dedup and call doRefresh() directly rather than clearing the map
+    // (clearing would orphan in-flight Promises and create a dedup gap).
+
+    // Seed the map with 500 in-flight Promises.  Each dummy token has a unique sub
+    // (none collide with makeToken()'s sub='user-123').  We use mockRejectedValue so
+    // the fetch calls resolve quickly and the dummy .finally() callbacks can clean
+    // up the map entries after we've made our assertions.
+    // Crucially: all 500 fetch() calls are issued SYNCHRONOUSLY before any await,
+    // so the map stays full when we check getActiveRefreshCount() below.
+    global.fetch = jest.fn().mockRejectedValue(new Error('cap-test dummy'))
+
+    const dummyPromises: Promise<unknown>[] = []
+    for (let i = 0; i < 500; i++) {
+      dummyPromises.push(
+        refreshGoogleToken({
+          sub: `cap-dummy-${i}`,
+          provider: 'google' as const,
+          refreshToken: MOCK_REFRESH_TOKEN,
+          expiresAt: Date.now() - 1000,
+        })
+      )
+    }
+
+    // No await has happened yet — all 500 subs are in the map synchronously.
+    expect(getActiveRefreshCount()).toBe(500)
+
+    // Replace fetch so the real token's doRefresh() gets a successful response.
+    // The dummy fetch() calls have already been issued to the reject mock above;
+    // this replacement only affects new calls (i.e., the real token below).
+    mockGoogleTokenResponse({
+      access_token: MOCK_ACCESS_TOKEN,
+      id_token: MOCK_ID_TOKEN,
+      expires_in: 3600,
+    })
+
+    // Map is at capacity → refreshGoogleToken bypasses dedup and calls doRefresh() directly.
+    const result = await refreshGoogleToken(makeToken()) // sub='user-123'
+
+    // Bypass path called doRefresh() and the real token was refreshed successfully.
+    expect(result).not.toBeNull()
+    expect(result!.accessToken).toBe(MOCK_ACCESS_TOKEN)
+
+    // Settle dummies so their .finally() callbacks clean up the map entries.
+    await Promise.allSettled(dummyPromises)
     expect(getActiveRefreshCount()).toBe(0)
   })
 

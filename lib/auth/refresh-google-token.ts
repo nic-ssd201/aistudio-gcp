@@ -188,20 +188,28 @@ async function doRefresh(token: JWT, log: ReturnType<typeof createLogger>): Prom
     }
 
     // Fail-closed on a pathologically small expires_in.
-    // The proactive-refresh threshold in auth.ts defaults to 300 s (5 min) and
-    // is operator-tunable via TOKEN_REFRESH_THRESHOLD_MS (floor: 60 s).  Any
-    // token whose expires_in ≤ threshold would trigger another refresh on the
-    // very next jwt() callback — a misbehaving upstream returning a tiny
-    // expires_in causes a hot-loop against Google's token endpoint.
     //
-    // MIN_EXPIRES_IN is intentionally hard-coded to the default threshold (300 s)
-    // rather than reading TOKEN_REFRESH_THRESHOLD_MS here.  If an operator raises
-    // the threshold above 300 s (e.g. 600 s), a Google-returned expires_in between
-    // 300–599 s would still hot-loop.  Fixing that correctly requires passing the
-    // configured threshold into doRefresh(), which is a larger refactor tracked as
-    // a follow-up (see issue #8).  For now, 300 s is the safe baseline: Google's
-    // documented access token lifetime is 3600 s and < 300 s is structurally abnormal.
-    const MIN_EXPIRES_IN = 300 // seconds — see note above re: TOKEN_REFRESH_THRESHOLD_MS
+    // Any token whose expires_in ≤ the proactive-refresh threshold would trigger
+    // another refresh on the very next jwt() callback — a misbehaving upstream
+    // returning a tiny expires_in causes a hot-loop against Google's token endpoint.
+    //
+    // MIN_EXPIRES_IN is derived from TOKEN_REFRESH_THRESHOLD_MS (the same value
+    // auth.ts uses for the proactive-refresh look-ahead) so that an operator who
+    // raises the threshold above the default 300 s doesn't inadvertently re-introduce
+    // the hot-loop for tokens whose expires_in falls between 300 s and their custom
+    // threshold.  Math.max(300, …) preserves the absolute lower bound: Google's
+    // documented access-token lifetime is 3600 s and < 300 s is structurally abnormal
+    // regardless of any threshold setting.
+    //
+    // Parsing rules mirror auth.ts: parseInt + isFinite guard + 60 000 ms floor.
+    // If the env var is absent, malformed, or below the 60 s floor, we fall back
+    // to the 300 s default (same behaviour as auth.ts).
+    const thresholdRaw = process.env.TOKEN_REFRESH_THRESHOLD_MS
+    const thresholdMs = Number.parseInt(thresholdRaw ?? '300000', 10)
+    const thresholdS = Number.isFinite(thresholdMs) && thresholdMs >= 60_000
+      ? Math.round(thresholdMs / 1000)
+      : 300 // default 5 min
+    const MIN_EXPIRES_IN = Math.max(300, thresholdS) // seconds
     const expiresIn = tokens.expires_in ?? 0
     if (expiresIn < MIN_EXPIRES_IN) {
       log.warn("Google token refresh returned unexpectedly short expires_in — treating as failure", {

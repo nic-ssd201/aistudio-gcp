@@ -543,4 +543,20 @@ describe("redirect() callback — URL handling", () => {
     })
     expect(result).toBe("https://app.example.com/chat")
   })
+
+  it("rejects // prefix (protocol-relative open-redirect vector)", async () => {
+    // '//evil.com' looks like a relative path but some runtimes resolve it as
+    // https://evil.com when prepended with the base URL.
+    const result = await callbacks.redirect!({ url: "//evil.com", baseUrl })
+    expect(result).not.toMatch(/evil\.com/)
+    expect(result).toBe(`${baseUrl}/dashboard`)
+  })
+
+  it("rejects /\\ prefix (backslash normalisation open-redirect vector)", async () => {
+    // Browsers normalize '\' → '/' so '/\\evil.com' becomes '//evil.com'.
+    // The guard checks for both prefixes explicitly.
+    const result = await callbacks.redirect!({ url: "/\\evil.com", baseUrl })
+    expect(result).not.toMatch(/evil\.com/)
+    expect(result).toBe(`${baseUrl}/dashboard`)
+  })
 })

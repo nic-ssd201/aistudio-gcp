@@ -139,6 +139,12 @@ export class PollingSessionCache {
    * (e.g. Pub/Sub or a shared Redis cache) would eliminate the window if
    * sub-5-minute revocation propagation becomes a hard requirement.
    */
+  // HOT_PATH_UNSAFE: O(N) over all cache entries.
+  // Acceptable today because invalidateUser() is only called from admin-triggered
+  // role-change operations (updateUser / deleteUser) — never on a hot request path.
+  // If a future cross-instance invalidation (e.g. Pub/Sub-driven) calls this on
+  // every incoming request, replace with a sub-keyed Map<sub, Map<key, entry>>
+  // to make invalidation O(sessions-per-user) instead of O(total-sessions).
   invalidateUser(sub: string): void {
     const prefix = `session:${sub}:`;
     const legacyKey = `session:${sub}`; // pre-iat format — belt-and-braces

@@ -67,12 +67,18 @@ export async function GET() {
       const hasDbHost = !!process.env.DB_HOST;
       const hasCloudSqlSocket = !!process.env.CLOUD_SQL_SOCKET_PATH;
 
-      const connectionType = hasDatabaseUrl
-        ? 'DATABASE_URL'
-        : hasDbHost
-          ? 'DB_HOST'
-          : hasCloudSqlSocket
-            ? 'CLOUD_SQL_SOCKET_PATH'
+      // Priority mirrors getPgClient() in lib/db/drizzle-client.ts:
+      //   1. CLOUD_SQL_SOCKET_PATH (Cloud Run Unix socket — checked first)
+      //   2. DATABASE_URL          (full connection string via getDatabaseUrl())
+      //   3. DB_HOST               (TCP, also resolved by getDatabaseUrl())
+      // Reporting a different priority would cause diagnostics to disagree with
+      // the pool actually in use when multiple vars are set simultaneously.
+      const connectionType = hasCloudSqlSocket
+        ? 'CLOUD_SQL_SOCKET_PATH'
+        : hasDatabaseUrl
+          ? 'DATABASE_URL'
+          : hasDbHost
+            ? 'DB_HOST'
             : null;
 
       if (!connectionType) {

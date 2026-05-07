@@ -116,6 +116,14 @@ export interface EcsServiceConstructProps {
    * If provided, enables precise IAM scoping with tag conditions
    */
   violationTopicArn?: string;
+  /**
+   * When true, resolve Cognito CloudFormation exports via Fn.importValue().
+   * Set this only when deploying the legacy AWS Cognito stack (--context legacy=true).
+   * Without this gate, `cdk deploy` fails with "No export named …-CognitoUserPoolId"
+   * on GCP-only deployments that never create the Cognito stack.
+   * @default false
+   */
+  isLegacyAwsDeploy?: boolean;
 }
 
 /**
@@ -525,11 +533,21 @@ export class EcsServiceConstruct extends Construct {
         // DEAD CODE — SSD201 GCP fork: NEXT_PUBLIC_COGNITO_* and COGNITO_*
         // variables below are AWS Cognito artefacts unused in the GCP deployment.
         // See nic-ssd201/aistudio-gcp#8.
+        //
+        // The two Fn.importValue() calls are gated on isLegacyAwsDeploy so that
+        // a plain `cdk deploy` (without --context legacy=true) does not fail with
+        // "No export named <environment>-CognitoUserPoolId".  Without the gate,
+        // CloudFormation resolves the import at deploy time even though the values
+        // are never read by the GCP-only code path.
         NEXT_PUBLIC_COGNITO_CLIENT_ID: props.cognitoClientId,
-        NEXT_PUBLIC_COGNITO_USER_POOL_ID: cdk.Fn.importValue(`${environment}-CognitoUserPoolId`),
+        NEXT_PUBLIC_COGNITO_USER_POOL_ID: props.isLegacyAwsDeploy
+          ? cdk.Fn.importValue(`${environment}-CognitoUserPoolId`)
+          : 'unused-gcp-deployment',
         NEXT_PUBLIC_COGNITO_DOMAIN: `aistudio-${environment}.auth.${cdk.Stack.of(this).region}.amazoncognito.com`,
         COGNITO_ACCESS_TOKEN_LIFETIME_SECONDS: '43200', // 12 hours
-        COGNITO_JWKS_URL: `https://aistudio-${environment}.auth.${cdk.Stack.of(this).region}.amazoncognito.com/.well-known/jwks.json`,
+        COGNITO_JWKS_URL: props.isLegacyAwsDeploy
+          ? `https://cognito-idp.${cdk.Stack.of(this).region}.amazonaws.com/${cdk.Fn.importValue(`${environment}-CognitoUserPoolId`)}/.well-known/jwks.json`
+          : `unused-gcp-deployment`,
         // K-12 Content Safety - Bedrock Guardrails configuration
         BEDROCK_GUARDRAIL_ID: cdk.Fn.importValue(`${environment}-GuardrailId`),
         BEDROCK_GUARDRAIL_VERSION: 'DRAFT',
