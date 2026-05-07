@@ -327,34 +327,42 @@ export const authConfig: NextAuthConfig = {
       return baseUrl + "/dashboard"
     },
     async signIn({ account, profile }) {
-      // Reject sign-ins from Google accounts with unverified emails.
-      // hasVerifiedGoogleEmail uses `=== true` so absent/stringified/"false"
-      // claims all fail — defense-in-depth against resolveUserId's email-fallback
-      // path potentially fusing an unverified account into an existing user record.
-      //
-      // The `account?.provider === 'google'` guard is intentionally kept even though
-      // Google is the only registered provider. It ensures this check is skipped
-      // automatically if a future provider (e.g. GitHub) is added without its own
-      // email_verified gate — rather than incorrectly rejecting it here.
-      if (account?.provider === 'google' && !hasVerifiedGoogleEmail(profile)) {
-        const log = createLogger({ context: "auth-signin-callback" })
-        // Mask the local-part before logging — email is PII even in warn logs.
-        // Capture only the first character so short local-parts (≤3 chars) are
-        // also masked (e.g. "abc@x.com" → "a***@x.com" not "abc***@x.com").
-        // Fail-closed: emails without '@' do not match the regex; the fallback
-        // '***' prevents a raw malformed address from appearing in logs.
-        const maskedEmail = profile?.email
-          ? (profile.email.includes('@')
-              ? profile.email.replace(/^(.).*(@.*)$/, '$1***$2')
-              : '***')
-          : undefined
-        log.warn("Sign-in rejected: Google email not verified", {
-          email: maskedEmail,
-          emailVerified: profile?.email_verified,
-        })
-        return false;
+      const log = createLogger({ context: "auth-signin-callback" })
+
+      if (account?.provider === 'google') {
+        // Reject Google accounts with unverified emails.
+        // hasVerifiedGoogleEmail uses `=== true` so absent/stringified/"false"
+        // claims all fail — defense-in-depth against resolveUserId's email-fallback
+        // path potentially fusing an unverified account into an existing user record.
+        if (!hasVerifiedGoogleEmail(profile)) {
+          // Mask the local-part before logging — email is PII even in warn logs.
+          // Capture only the first character so short local-parts (≤3 chars) are
+          // also masked (e.g. "abc@x.com" → "a***@x.com" not "abc***@x.com").
+          // Fail-closed: emails without '@' do not match the regex; the fallback
+          // '***' prevents a raw malformed address from appearing in logs.
+          const maskedEmail = profile?.email
+            ? (profile.email.includes('@')
+                ? profile.email.replace(/^(.).*(@.*)$/, '$1***$2')
+                : '***')
+            : undefined
+          log.warn("Sign-in rejected: Google email not verified", {
+            email: maskedEmail,
+            emailVerified: profile?.email_verified,
+          })
+          return false;
+        }
+        return true;
       }
-      return true;
+
+      // Default-deny: any provider not explicitly listed above is rejected.
+      // This is the safe posture — a future GitHub/SAML/etc. provider added
+      // without thinking about email-verification would silently bypass *any*
+      // check in the provider-conditional design; here it is rejected until an
+      // explicit `if (account?.provider === 'new-provider')` branch is added.
+      log.warn("Sign-in rejected: unsupported provider", {
+        provider: account?.provider ?? 'unknown',
+      })
+      return false;
     },
   },
   pages: {

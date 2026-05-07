@@ -156,7 +156,10 @@ export function requireValidEnv(): void {
     throw new EnvironmentValidationError(missing, warnings);
   }
 
-  if (process.env.NODE_ENV === 'development' && warnings.length > 0) {
+  // Emit warnings in all environments except 'test' so operators see them in
+  // staging and production deployment logs — not just local dev sessions.
+  // 'test' is excluded to keep Jest output clean.
+  if (process.env.NODE_ENV !== 'test' && warnings.length > 0) {
     console.warn('Environment validation warnings:'); // eslint-disable-line no-console -- Edge-runtime compatible; @/lib/logger unavailable here
     for (const warning of warnings) console.warn(`  - ${warning}`); // eslint-disable-line no-console -- same reason
   }

@@ -493,7 +493,7 @@ export async function updateUser(
     // cognitoSub is returned from the transaction body (not closed over) so the
     // binding is a const and there is no mutable outer variable that could be
     // silently clobbered by a concurrent call on the same event-loop tick.
-    const cognitoSubFromTx = await executeTransaction(
+    const subFromTx = await executeTransaction(
       async (tx) => {
         // Update user basic info - verify user exists.
         // Include cognitoSub in .returning() so it is available post-commit for
@@ -580,7 +580,7 @@ export async function updateUser(
 
     // Flush polling cache for this user so role changes propagate immediately
     // to polling endpoints rather than waiting up to 5 minutes for TTL expiry.
-    // cognitoSubFromTx was returned from inside the transaction via .returning()
+    // subFromTx was returned from inside the transaction via .returning()
     // so no extra DB query is needed and a post-commit query failure cannot mask
     // a successful commit as an error.
     // NOTE: only the current process's in-process cache is flushed. On Cloud Run
@@ -588,12 +588,12 @@ export async function updateUser(
     // stale roles for up to 5 minutes (the TTL).  This is the accepted trade-off
     // for the polling-auth perf improvement; a cross-instance signal (Pub/Sub,
     // Redis invalidation) would eliminate the window but is out of scope here.
-    if (cognitoSubFromTx) {
+    if (subFromTx) {
       // Wrap in try/catch: cache invalidation is best-effort. If invalidateUser
       // throws (e.g. a bug in the cache module), we log a warning rather than
       // turning a successful committed role change into an apparent failure.
       try {
-        pollingSessionCache.invalidateUser(cognitoSubFromTx)
+        pollingSessionCache.invalidateUser(subFromTx)
         log.info("Polling cache flushed after role update", { userId })
       } catch (cacheErr) {
         log.warn("Polling cache flush failed after role update (non-fatal)", {
@@ -657,7 +657,7 @@ export async function deleteUser(userId: number): Promise<ActionState<void>> {
     // cognitoSub is returned from the transaction body (not closed over) so the
     // binding is a const and there is no mutable outer variable that could be
     // silently clobbered by a concurrent call on the same event-loop tick.
-    const cognitoSubFromTx = await executeTransaction(
+    const subFromTx = await executeTransaction(
       async (tx) => {
         // Check if user being deleted is an admin (inside transaction to prevent race)
         const userToDelete = await tx
@@ -709,11 +709,11 @@ export async function deleteUser(userId: number): Promise<ActionState<void>> {
     // used by polling endpoints until the 5-minute TTL expires naturally.
     // Symmetric with updateUser — only the current instance is flushed; see
     // pollingSessionCache.invalidateUser JSDoc for multi-instance trade-off.
-    if (cognitoSubFromTx) {
+    if (subFromTx) {
       // Best-effort: wrap in try/catch so a cache-module exception does not
       // surface as "Failed to delete user" for a commit that already succeeded.
       try {
-        pollingSessionCache.invalidateUser(cognitoSubFromTx)
+        pollingSessionCache.invalidateUser(subFromTx)
         log.info("Polling cache flushed after user deletion", { userId })
       } catch (cacheErr) {
         log.warn("Polling cache flush failed after user deletion (non-fatal)", {

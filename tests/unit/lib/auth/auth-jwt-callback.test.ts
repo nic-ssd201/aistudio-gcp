@@ -323,11 +323,11 @@ describe("signIn() callback — email-verification gate", () => {
     expect(result).toBe(true)
   })
 
-  it("returns true for non-google providers (gate is provider-scoped)", async () => {
+  it("rejects non-google providers (default-deny: only 'google' is explicitly allowed)", async () => {
     const { hasVerifiedGoogleEmail } = jest.requireMock(
       "@/lib/auth/google-email-guard"
     ) as { hasVerifiedGoogleEmail: jest.Mock }
-    hasVerifiedGoogleEmail.mockReturnValueOnce(false) // would reject if applied
+    hasVerifiedGoogleEmail.mockReturnValueOnce(false) // irrelevant — never reached for non-google
 
     const result = await callbacks.signIn!({
       account: { provider: "github" } as AnyAccount,
@@ -336,8 +336,10 @@ describe("signIn() callback — email-verification gate", () => {
       credentials: undefined,
     })
 
-    // Guard only fires for provider === 'google'
-    expect(result).toBe(true)
+    // Default-deny: providers not explicitly handled return false.
+    // Only 'google' has an explicit allow-branch; any future provider must be
+    // added consciously with its own email-verification logic.
+    expect(result).toBe(false)
   })
 })
 

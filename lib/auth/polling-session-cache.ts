@@ -19,7 +19,7 @@ interface CachedSession {
 
 interface SessionCacheOptions {
   maxAge?: number; // Cache duration in ms (default: 5 minutes)
-  maxEntries?: number; // Max cached sessions (default: 1000)
+  maxEntries?: number; // Max cached sessions (default: 500)
   cleanupInterval?: number; // Cleanup frequency in ms (default: 2 minutes)
 }
 
@@ -31,7 +31,7 @@ export class PollingSessionCache {
   constructor(options: SessionCacheOptions = {}) {
     this.options = {
       maxAge: options.maxAge || 5 * 60 * 1000, // 5 minutes
-      maxEntries: options.maxEntries || 1000,
+      maxEntries: options.maxEntries || 500,
       cleanupInterval: options.cleanupInterval || 2 * 60 * 1000, // 2 minutes
     };
 
