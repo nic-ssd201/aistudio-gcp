@@ -197,6 +197,17 @@ export function getDb(): ReturnType<typeof drizzle<typeof schema>> {
 }
 
 /**
+ * Exported for unit tests only — validates and returns the postgres.js client.
+ * @internal Do not call from application code; use `db` or `executeQuery` instead.
+ */
+export function getPgClientForTesting(): ReturnType<typeof postgres> {
+  if (process.env.NODE_ENV !== "test") {
+    throw new Error("getPgClientForTesting is only available in test environments");
+  }
+  return getPgClient();
+}
+
+/**
  * Drizzle database instance - lazily initialized on first property access
  *
  * This is a Proxy that initializes the postgres.js connection pool on first

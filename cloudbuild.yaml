@@ -60,7 +60,7 @@ steps:
     waitFor:
       - validate-substitutions
 
-  # ── 2. Build Docker image ────────────────────────────────────────────────────
+  # ── 3. Build Docker image ────────────────────────────────────────────────────
   - name: gcr.io/cloud-builders/docker
     id: build
     args:
@@ -79,7 +79,7 @@ steps:
     waitFor:
       - validate
 
-  # ── 2. Push image to Artifact Registry ──────────────────────────────────────
+  # ── 4. Push image to Artifact Registry ──────────────────────────────────────
   - name: gcr.io/cloud-builders/docker
     id: push
     args:
@@ -89,7 +89,7 @@ steps:
     waitFor:
       - build
 
-  # ── 3. Deploy to Cloud Run ───────────────────────────────────────────────────
+  # ── 5. Deploy to Cloud Run ───────────────────────────────────────────────────
   # Uses --update-env-vars / --update-secrets so only the declared variables are
   # changed; all other runtime config set via console or Terraform is preserved.
   #
@@ -132,6 +132,11 @@ steps:
       - --add-cloudsql-instances
       - ${_CLOUD_SQL_INSTANCE}
       # Update only these env vars; leave all others unchanged.
+      # NOTE: AUTH_GOOGLE_ID and AUTH_GOOGLE_SECRET are intentionally absent here.
+      # Google OIDC is opt-in and those values are managed via Terraform or the
+      # Cloud Run console so they survive deploys that don't enable Google auth.
+      # To enable Google OIDC, set AUTH_GOOGLE_ID and AUTH_GOOGLE_SECRET on the
+      # service directly: gcloud run services update <service> --update-secrets ...
       - --update-env-vars
       - NODE_ENV=production,NEXT_TELEMETRY_DISABLED=1,CLOUD_SQL_SOCKET_PATH=/cloudsql/${_CLOUD_SQL_INSTANCE},DB_NAME=aistudio
       # Update only these secrets; leave all others unchanged.

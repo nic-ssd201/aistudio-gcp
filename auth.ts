@@ -65,6 +65,13 @@ async function refreshGoogleToken(token: JWT): Promise<JWT | null> {
   }
 }
 
+// Fail loud at module load when Google ID is present without its secret.
+// This surfaces misconfiguration on boot rather than 12 hours later as an
+// opaque `invalid_client` from Google during the first token refresh.
+if (process.env.AUTH_GOOGLE_ID && !process.env.AUTH_GOOGLE_SECRET) {
+  throw new Error("AUTH_GOOGLE_ID is set but AUTH_GOOGLE_SECRET is missing")
+}
+
 export const authConfig: NextAuthConfig = {
   providers: [
     Cognito({
@@ -96,12 +103,7 @@ export const authConfig: NextAuthConfig = {
     }),
     // GCP migration: Google OIDC provider (SSD201)
     // Enabled when AUTH_GOOGLE_ID / AUTH_GOOGLE_SECRET are both set.
-    // Fail loud at startup if the ID is present without the secret — mirrors
-    // the check in refreshGoogleToken so misconfiguration surfaces on boot,
-    // not 12 hours later as an opaque `invalid_client` from Google.
-    ...(process.env.AUTH_GOOGLE_ID && !process.env.AUTH_GOOGLE_SECRET
-      ? (() => { throw new Error("AUTH_GOOGLE_ID is set but AUTH_GOOGLE_SECRET is missing") })()
-      : []),
+    // Missing-secret case is caught by the module-level guard above.
     ...(process.env.AUTH_GOOGLE_ID && process.env.AUTH_GOOGLE_SECRET
       ? [
           Google({
@@ -157,8 +159,8 @@ export const authConfig: NextAuthConfig = {
 
         try {
           // SECURITY NOTE: This JWT parsing is safe here because the id_token comes directly
-          // from Cognito during the OAuth callback flow and has already been validated by NextAuth.
-          // The token signature has been verified by NextAuth before reaching this callback.
+          // from the OAuth provider (Cognito or Google) during the callback flow and has already
+          // been validated by NextAuth — signature verified via JWKS before reaching this callback.
           // DO NOT use this pattern for parsing JWTs from untrusted sources or user input.
           // For untrusted JWTs, always use proper JWT verification libraries like 'jose'.
           const base64Payload = account.id_token.split('.')[1];
@@ -265,7 +267,7 @@ export const authConfig: NextAuthConfig = {
 
       // Attempt token refresh if expired or should be refreshed proactively
       if (isExpired || shouldRefresh) {
-        const provider = token.provider as string | undefined
+        const provider = token.provider
         log.info("Attempting token refresh", {
           reason: isExpired ? 'expired' : 'proactive',
           hasRefreshToken: !!token.refreshToken,
@@ -300,7 +302,7 @@ export const authConfig: NextAuthConfig = {
 
           if (refreshed) {
             log.info("Token refresh successful", {
-              newExpiresAt: refreshed.expiresAt ? new Date(refreshed.expiresAt as number).toISOString() : 'unknown',
+              newExpiresAt: refreshed.expiresAt ? new Date(refreshed.expiresAt).toISOString() : 'unknown',
             })
             return refreshed
           } else {
