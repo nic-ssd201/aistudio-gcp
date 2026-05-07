@@ -316,9 +316,11 @@ export const authConfig: NextAuthConfig = {
       // email_verified gate — rather than incorrectly rejecting it here.
       if (account?.provider === 'google' && !hasVerifiedGoogleEmail(profile)) {
         const log = createLogger({ context: "auth-signin-callback" })
-        // Mask most of the local-part before logging — email is PII even in warn logs.
+        // Mask the local-part before logging — email is PII even in warn logs.
+        // Capture only the first character so short local-parts (≤3 chars) are
+        // also masked (e.g. "abc@x.com" → "a***@x.com" not "abc***@x.com").
         const maskedEmail = profile?.email
-          ? profile.email.replace(/^(.{3}).*(@.*)$/, '$1***$2')
+          ? profile.email.replace(/^(.).*(@.*)$/, '$1***$2')
           : undefined
         log.warn("Sign-in rejected: Google email not verified", {
           email: maskedEmail,

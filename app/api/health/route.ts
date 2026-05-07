@@ -14,6 +14,18 @@ import { validateEnv } from "@/lib/env-validation"
  *
  * Returns detailed diagnostic information to help troubleshoot deployment issues.
  * This endpoint is unauthenticated so it can be used by load-balancer health checks.
+ *
+ * TODO(nic-ssd201/aistudio-gcp#TBD): This endpoint leaks internal deployment
+ * detail in its unauthenticated response body — missing env var names, per-var
+ * presence flags, session user email, and the deploymentChecklist. LB/Docker
+ * probes only need the HTTP status code (200 / 503), so the verbose body is
+ * unnecessary for probes. Consider one of:
+ *   a) Returning a minimal `{status, timestamp}` body to all callers and
+ *      reserving the full diagnostics for requests that include an internal
+ *      probe header (e.g. `X-Health-Detail: <shared-secret>`).
+ *   b) Gating the full response behind authentication (session cookie present).
+ * Until then, treat this endpoint as internal — do not expose it publicly
+ * without a WAF rule or Cloud Run ingress restriction.
  */
 export async function GET() {
   const requestId = generateRequestId();

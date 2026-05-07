@@ -486,6 +486,11 @@ export class EcsServiceConstruct extends Construct {
         // Application configuration
         S3_BUCKET_NAME: documentsBucketName,
         DOCUMENTS_BUCKET_NAME: documentsBucketName, // Legacy name for compatibility
+        // DEAD CODE — SSD201 GCP fork: the variables below (RDS_DATABASE_NAME,
+        // AUTH_COGNITO_*, RDS_RESOURCE_ARN, RDS_SECRET_ARN) are AWS/Cognito
+        // artefacts that have no effect in the GCP deployment. This entire AWS
+        // CDK infrastructure layer is unused by the fork; do not trust these
+        // stack files for the active deployment. See nic-ssd201/aistudio-gcp#6.
         RDS_DATABASE_NAME: 'aistudio',
         AUTH_URL: props.authUrl,
         AUTH_COGNITO_CLIENT_ID: props.cognitoClientId,
@@ -517,11 +522,12 @@ export class EcsServiceConstruct extends Construct {
         // Application settings
         MAX_FILE_SIZE_MB: '100',
         SQL_LOGGING: 'false',
-        // Public Cognito configuration for client-side
+        // DEAD CODE — SSD201 GCP fork: NEXT_PUBLIC_COGNITO_* and COGNITO_*
+        // variables below are AWS Cognito artefacts unused in the GCP deployment.
+        // See nic-ssd201/aistudio-gcp#6.
         NEXT_PUBLIC_COGNITO_CLIENT_ID: props.cognitoClientId,
         NEXT_PUBLIC_COGNITO_USER_POOL_ID: cdk.Fn.importValue(`${environment}-CognitoUserPoolId`),
         NEXT_PUBLIC_COGNITO_DOMAIN: `aistudio-${environment}.auth.${cdk.Stack.of(this).region}.amazoncognito.com`,
-        // Cognito token configuration
         COGNITO_ACCESS_TOKEN_LIFETIME_SECONDS: '43200', // 12 hours
         COGNITO_JWKS_URL: `https://aistudio-${environment}.auth.${cdk.Stack.of(this).region}.amazoncognito.com/.well-known/jwks.json`,
         // K-12 Content Safety - Bedrock Guardrails configuration

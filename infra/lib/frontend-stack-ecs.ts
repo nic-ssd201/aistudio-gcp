@@ -136,11 +136,14 @@ export class FrontendStackEcs extends cdk.Stack {
       // Docker image configuration
       dockerImageSource: 'fromAsset', // CDK builds and pushes image automatically
       dockerfilePath: '../', // Dockerfile in project root
-      // Auth configuration from Cognito stack outputs
       authUrl: `https://${subdomain}`,
+      // DEAD CODE — SSD201 GCP fork: cognitoClientId, cognitoIssuer,
+      // rdsResourceArn, and rdsSecretArn are AWS/Cognito artefacts that have
+      // no effect in the GCP deployment. This AWS CDK stack is not used by the
+      // fork; do not trust it for the active Cloud Run deployment.
+      // See nic-ssd201/aistudio-gcp#6.
       cognitoClientId: cdk.Fn.importValue(`${environment}-CognitoUserPoolClientId`),
       cognitoIssuer: `https://cognito-idp.${this.region}.amazonaws.com/${cdk.Fn.importValue(`${environment}-CognitoUserPoolId`)}`,
-      // Database configuration from SSM parameters
       rdsResourceArn: ssm.StringParameter.valueForStringParameter(this, `/aistudio/${environment}/db-cluster-arn`),
       rdsSecretArn: ssm.StringParameter.valueForStringParameter(this, `/aistudio/${environment}/db-secret-arn`),
       // Auth secret from Secrets Manager
