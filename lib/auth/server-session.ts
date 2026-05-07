@@ -15,6 +15,13 @@ export interface CognitoSession {
 }
 
 /**
+ * Provider-agnostic alias for CognitoSession.
+ * Prefer UserSession in new code; CognitoSession is kept for backward compat.
+ * GCP migration (SSD201): rename to UserSession once Cognito is fully retired.
+ */
+export type UserSession = CognitoSession;
+
+/**
  * Gets the current authenticated session using NextAuth v5.
  * This wraps NextAuth's auth() to maintain the same interface.
  */

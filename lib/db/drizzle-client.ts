@@ -47,7 +47,11 @@ function getDatabaseUrl(): string {
     return process.env.DATABASE_URL;
   }
 
-  // Option 2: Construct from individual components
+  // Option 2: Cloud SQL Unix socket (Cloud Run / GCE)
+  // Handled directly in getPgClient() — not a URL-based connection.
+  // If CLOUD_SQL_SOCKET_PATH is set, getPgClient() bypasses getDatabaseUrl().
+
+  // Option 3: Construct from individual components (ECS / TCP host)
   const host = process.env.DB_HOST;
   const port = process.env.DB_PORT || "5432";
   const user = process.env.DB_USER;
@@ -69,7 +73,7 @@ function getDatabaseUrl(): string {
 
   throw new Error(
     "Database configuration not found. " +
-    "Set DATABASE_URL or DB_HOST/DB_USER/DB_PASSWORD environment variables."
+    "Set DATABASE_URL, CLOUD_SQL_SOCKET_PATH, or DB_HOST/DB_USER/DB_PASSWORD environment variables."
   );
 }
 
@@ -104,16 +108,56 @@ function getPgClient(): ReturnType<typeof postgres> {
     // Set SQL_LOGGING=true to see all queries in console
     const sqlLoggingEnabled = process.env.SQL_LOGGING === "true";
 
-    pgClient = postgres(getDatabaseUrl(), {
+    const commonOptions = {
       max: Number.parseInt(process.env.DB_MAX_CONNECTIONS || "20", 10),
       idle_timeout: Number.parseInt(process.env.DB_IDLE_TIMEOUT || "20", 10),
       connect_timeout: Number.parseInt(process.env.DB_CONNECT_TIMEOUT || "10", 10),
       max_lifetime: 60 * 60, // 1 hour - forces reconnection for credential rotation
       prepare: true, // Enable prepared statements for performance
-      ssl: sslEnabled ? "require" : false, // SSL required for AWS, optional for local dev
-      onnotice: () => {}, // Suppress PostgreSQL notices
+      onnotice: (): void => {}, // Suppress PostgreSQL notices
       debug: sqlLoggingEnabled, // Opt-in via SQL_LOGGING=true (default: off)
-    });
+    };
+
+    // GCP Cloud SQL Unix socket (Cloud Run / GCE)
+    // Set CLOUD_SQL_SOCKET_PATH to the socket directory, e.g.:
+    //   /cloudsql/my-project:us-central1:my-instance
+    // Cloud Run with Cloud SQL proxy mounts this automatically when you configure
+    // the Cloud SQL connection in the Cloud Run service settings.
+    const cloudSqlSocketPath = process.env.CLOUD_SQL_SOCKET_PATH;
+
+    if (cloudSqlSocketPath) {
+      if (!cloudSqlSocketPath.startsWith("/")) {
+        throw new Error(
+          `CLOUD_SQL_SOCKET_PATH must be an absolute path starting with '/'. ` +
+          `Got: "${cloudSqlSocketPath}". Expected e.g. /cloudsql/project:region:instance`
+        );
+      }
+
+      const user = process.env.DB_USER;
+      const password = process.env.DB_PASSWORD;
+      // Mirror TCP path: DB_NAME || RDS_DATABASE_NAME || "aistudio"
+      const database = process.env.DB_NAME || process.env.RDS_DATABASE_NAME || "aistudio";
+
+      if (!user || !password) {
+        throw new Error(
+          "CLOUD_SQL_SOCKET_PATH is set but DB_USER or DB_PASSWORD is missing."
+        );
+      }
+
+      pgClient = postgres({
+        ...commonOptions,
+        host: cloudSqlSocketPath, // postgres.js accepts socket dir as host when it starts with /
+        user,
+        password,
+        database,
+        ssl: false, // Unix socket connections don't use TLS
+      });
+    } else {
+      pgClient = postgres(getDatabaseUrl(), {
+        ...commonOptions,
+        ssl: sslEnabled ? "require" : false, // SSL required for AWS/Cloud SQL TCP, optional for local dev
+      });
+    }
   }
   return pgClient;
 }
@@ -150,6 +194,17 @@ export function getDb(): ReturnType<typeof drizzle<typeof schema>> {
     _db = drizzle(getPgClient(), { schema });
   }
   return _db;
+}
+
+/**
+ * Exported for unit tests only — validates and returns the postgres.js client.
+ * @internal Do not call from application code; use `db` or `executeQuery` instead.
+ */
+export function getPgClientForTesting(): ReturnType<typeof postgres> {
+  if (process.env.NODE_ENV !== "test") {
+    throw new Error("getPgClientForTesting is only available in test environments");
+  }
+  return getPgClient();
 }
 
 /**

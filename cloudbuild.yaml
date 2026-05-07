@@ -1,0 +1,158 @@
+# Cloud Build pipeline — AI Studio GCP deployment (SSD201 fork)
+#
+# Triggered on pushes to the `dev` branch (or manually via `gcloud builds submit`).
+# Builds a production Docker image, pushes it to Artifact Registry, and deploys
+# to Cloud Run.
+#
+# Required substitution variables (set in Cloud Build trigger or pass via --substitutions):
+#   _REGION                     GCP region, e.g. us-central1
+#   _SERVICE_NAME               Cloud Run service name, e.g. aistudio
+#   _REPO                       Artifact Registry repo, e.g. aistudio-images
+#   _CLOUD_SQL_INSTANCE         Full instance connection name, e.g. project:region:instance
+#                               Cloud Run mounts the socket at /cloudsql/<instance>
+#
+# The pipeline uses --update-env-vars and --update-secrets so it only changes what
+# it explicitly declares — other runtime config set via console or Terraform is preserved.
+
+substitutions:
+  _REGION: us-central1
+  _SERVICE_NAME: aistudio
+  _REPO: aistudio-images
+  _CLOUD_SQL_INSTANCE: REQUIRED_OVERRIDE  # e.g. my-project:us-central1:aistudio-db
+  _MIN_INSTANCES: "0"
+  _MAX_INSTANCES: "10"
+  _MEMORY: 2Gi
+  _CPU: "2"
+
+options:
+  logging: CLOUD_LOGGING_ONLY
+  machineType: E2_HIGHCPU_8   # Faster builds; Next.js webpack build is CPU-bound
+
+steps:
+  # ── 0. Guard: required substitutions ────────────────────────────────────────
+  # Fail fast if mandatory vars are missing, before any network or build work.
+  - name: gcr.io/google.com/cloudsdktool/cloud-sdk
+    id: validate-substitutions
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        set -e
+        if [ -z "${_CLOUD_SQL_INSTANCE}" ] || [ "${_CLOUD_SQL_INSTANCE}" = "REQUIRED_OVERRIDE" ]; then
+          echo "ERROR: _CLOUD_SQL_INSTANCE substitution must be set (e.g. project:region:instance)"
+          exit 1
+        fi
+        echo "Substitution validation passed: _CLOUD_SQL_INSTANCE=${_CLOUD_SQL_INSTANCE}"
+
+  # ── 1. Lint + typecheck ──────────────────────────────────────────────────────
+  # Run before building the image so failures are caught cheaply.
+  # Mirrors the CLAUDE.md requirement: lint and typecheck must pass before any
+  # artifact is produced.
+  - name: oven/bun:1.3-alpine
+    id: validate
+    entrypoint: sh
+    args:
+      - -c
+      - |
+        bun install --frozen-lockfile
+        bun run lint
+        bun run typecheck
+    waitFor:
+      - validate-substitutions
+
+  # ── 2. Build Docker image ────────────────────────────────────────────────────
+  - name: gcr.io/cloud-builders/docker
+    id: build
+    args:
+      - build
+      - --tag
+      - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/${_SERVICE_NAME}:$SHORT_SHA
+      - --tag
+      - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/${_SERVICE_NAME}:latest
+      - --cache-from
+      - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/${_SERVICE_NAME}:latest
+      - --build-arg
+      - BUILDKIT_INLINE_CACHE=1
+      - .
+    env:
+      - DOCKER_BUILDKIT=1
+    waitFor:
+      - validate
+
+  # ── 3. Push image to Artifact Registry ──────────────────────────────────────
+  - name: gcr.io/cloud-builders/docker
+    id: push
+    args:
+      - push
+      - --all-tags
+      - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/${_SERVICE_NAME}
+    waitFor:
+      - build
+
+  # ── 4. Deploy to Cloud Run ───────────────────────────────────────────────────
+  # Uses --update-env-vars / --update-secrets so only the declared variables are
+  # changed; all other runtime config set via console or Terraform is preserved.
+  #
+  # --add-cloudsql-instances mounts the Cloud SQL Auth Proxy socket inside the
+  # container at /cloudsql/<INSTANCE_CONNECTION_NAME>, which is then picked up
+  # by CLOUD_SQL_SOCKET_PATH in drizzle-client.ts.
+  #
+  # --allow-unauthenticated: the app implements its own auth (NextAuth); Cloud
+  # Run IAM is not used for end-user authentication.
+  - name: gcr.io/google.com/cloudsdktool/cloud-sdk
+    id: deploy
+    entrypoint: gcloud
+    args:
+      - run
+      - deploy
+      - ${_SERVICE_NAME}
+      - --image
+      - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/${_SERVICE_NAME}:$SHORT_SHA
+      - --region
+      - ${_REGION}
+      - --platform
+      - managed
+      - --port
+      - "3000"
+      - --memory
+      - ${_MEMORY}
+      - --cpu
+      - ${_CPU}
+      - --min-instances
+      - ${_MIN_INSTANCES}
+      - --max-instances
+      - ${_MAX_INSTANCES}
+      - --timeout
+      - "300"
+      - --concurrency
+      - "80"
+      # Attach Cloud SQL instance so the proxy socket is available in the container.
+      # The socket path /cloudsql/<_CLOUD_SQL_INSTANCE> is referenced via
+      # CLOUD_SQL_SOCKET_PATH below.
+      - --add-cloudsql-instances
+      - ${_CLOUD_SQL_INSTANCE}
+      # Update only these env vars; leave all others unchanged.
+      # NOTE: AUTH_GOOGLE_ID and AUTH_GOOGLE_SECRET are intentionally absent here.
+      # Google OIDC is opt-in and those values are managed via Terraform or the
+      # Cloud Run console so they survive deploys that don't enable Google auth.
+      # To enable Google OIDC, set AUTH_GOOGLE_ID and AUTH_GOOGLE_SECRET on the
+      # service directly: gcloud run services update <service> --update-secrets ...
+      - --update-env-vars
+      - NODE_ENV=production,NEXT_TELEMETRY_DISABLED=1,CLOUD_SQL_SOCKET_PATH=/cloudsql/${_CLOUD_SQL_INSTANCE},DB_NAME=aistudio
+      # Update only these secrets; leave all others unchanged.
+      # Format: ENV_VAR=secret-name:version
+      # DB_USER and DB_PASSWORD must be stored in Secret Manager.
+      - --update-secrets
+      # AUTH_SECRET is the NextAuth v5 canonical name (lib/env-validation.ts).
+      # DB_USER and DB_PASSWORD must be stored in Secret Manager.
+      - AUTH_SECRET=aistudio-auth-secret:latest,DB_USER=aistudio-db-user:latest,DB_PASSWORD=aistudio-db-password:latest
+      - --service-account
+      - aistudio-cloudrun@$PROJECT_ID.iam.gserviceaccount.com
+      - --allow-unauthenticated
+    waitFor:
+      - push
+
+# Images pushed to Artifact Registry (also used as layer cache source)
+images:
+  - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/${_SERVICE_NAME}:$SHORT_SHA
+  - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/${_SERVICE_NAME}:latest
