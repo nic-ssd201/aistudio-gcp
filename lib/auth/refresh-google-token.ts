@@ -44,6 +44,17 @@ import { createLogger } from "@/lib/auth/edge-logger"
  */
 const activeRefreshes = new Map<string, Promise<JWT | null>>()
 
+/**
+ * Returns the number of in-flight refresh Promises currently tracked by the
+ * dedup map.  Exported exclusively for unit-test assertions — call sites in
+ * production code should use refreshGoogleToken() directly.
+ *
+ * @internal
+ */
+export function getActiveRefreshCount(): number {
+  return activeRefreshes.size
+}
+
 export async function refreshGoogleToken(token: JWT): Promise<JWT | null> {
   const log = createLogger({ context: "google-token-refresh" })
 

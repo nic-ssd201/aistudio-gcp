@@ -8,6 +8,12 @@ export default function SignOutPage() {
   const router = useRouter();
 
   useEffect(() => {
+    // Security dependency: this page relies on middleware.ts setting
+    // `X-Frame-Options: DENY` on every response. Without it an attacker could
+    // embed this page in an invisible iframe and trigger an unconditional
+    // signOut() on mount — a clickjacking-based logout CSRF. Do not remove
+    // the X-Frame-Options header from middleware without re-evaluating this.
+    //
     // signOut() from next-auth/react posts to /api/auth/signout with a CSRF
     // token automatically, preventing CSRF-triggered logout via GET requests.
     // .catch() ensures a network blip doesn't strand the user on "Signing out…" forever.

@@ -12,7 +12,7 @@
  * - Missing AUTH_GOOGLE_SECRET at refresh time: returns null with error log (no fetch)
  */
 
-import { refreshGoogleToken } from "@/lib/auth/refresh-google-token"
+import { refreshGoogleToken, getActiveRefreshCount } from "@/lib/auth/refresh-google-token"
 
 const MOCK_REFRESH_TOKEN = "mock-refresh-token-value"
 const MOCK_ACCESS_TOKEN = "mock-access-token-new"
@@ -201,5 +201,44 @@ describe("refreshGoogleToken", () => {
     expect(result2).not.toBeNull()
     expect(result1!.accessToken).toBe(MOCK_ACCESS_TOKEN)
     expect(result2!.accessToken).toBe(MOCK_ACCESS_TOKEN)
+
+    // The dedup map must be empty after both Promises settle.
+    // The identity-check .finally() in refreshGoogleToken() is the only
+    // mechanism keeping activeRefreshes bounded under load — a regression
+    // that strands entries would silently degrade to a 500-entry safety-cap leak.
+    expect(getActiveRefreshCount()).toBe(0)
+  })
+
+  it("sequential refreshes each hit the network (no stale dedup join)", async () => {
+    const SECOND_ACCESS_TOKEN = "second-access-token"
+
+    const token = makeToken()
+
+    // First refresh: queue one mock response, await it, confirm map is clear.
+    // mockGoogleTokenResponse replaces global.fetch entirely, so queue each
+    // response separately — before the call that will consume it.
+    mockGoogleTokenResponse({
+      access_token: MOCK_ACCESS_TOKEN,
+      id_token: MOCK_ID_TOKEN,
+      expires_in: 3600,
+    })
+    const result1 = await refreshGoogleToken(token)
+    expect(result1).not.toBeNull()
+    expect(getActiveRefreshCount()).toBe(0) // .finally() cleanup ran
+
+    // Second refresh: queue a fresh mock and call again.  The dedup map must
+    // create a new entry rather than joining the already-settled Promise from
+    // the first call — if it joined a stale entry, result2 would be the first
+    // call's value (MOCK_ACCESS_TOKEN), not SECOND_ACCESS_TOKEN.
+    mockGoogleTokenResponse({
+      access_token: SECOND_ACCESS_TOKEN,
+      id_token: MOCK_ID_TOKEN,
+      expires_in: 3600,
+    })
+    const result2 = await refreshGoogleToken(token)
+    expect(result2).not.toBeNull()
+    expect(result2!.accessToken).toBe(SECOND_ACCESS_TOKEN)
+    expect(getActiveRefreshCount()).toBe(0) // map cleared after second settlement
+    expect(global.fetch).toHaveBeenCalledTimes(1) // each mockGoogleTokenResponse resets fetch
   })
 })

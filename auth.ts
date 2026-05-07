@@ -222,6 +222,16 @@ export const authConfig: NextAuthConfig = {
         }
 
         try {
+          // Refresh-token rotation race: two concurrent callers sharing a
+          // deduped Promise both receive the rotated refresh_token, but the
+          // *next* request may still carry the previous refreshToken in its
+          // cookie before NextAuth's encode+set-cookie round-trip completes.
+          // If the cookie arrives stale, Google's grace window (~30 s) usually
+          // covers it; the 10 s AbortController timeout and fail-closed null
+          // return in refreshGoogleToken() handle the invalid_grant case.
+          // If sub-30 s grace becomes insufficient, consider storing the new
+          // refreshToken server-side (e.g. Firestore/Redis) keyed on sub and
+          // reading it in doRefresh() rather than from the cookie.
           const refreshed = await refreshGoogleToken(token)
 
           if (refreshed) {
@@ -286,8 +296,11 @@ export const authConfig: NextAuthConfig = {
       // - accessToken: used for server-side Google API calls
       // - idToken: contains OIDC user claims for identity verification
       // - Never log or expose these tokens in client-side code
-      session.accessToken = token.accessToken as string;
-      session.idToken = token.idToken as string;
+      // `?? undefined` rather than `as string`: token fields are string | undefined
+      // in next-auth.d.ts, so `as string` would silently assign undefined to a
+      // string-typed slot when the token lacks the field.
+      session.accessToken = token.accessToken ?? undefined;
+      session.idToken = token.idToken ?? undefined;
       // Propagate loginIat (our stable login-time marker) as session.iat so the
       // polling session cache can key on sub+loginIat and avoid returning a stale
       // role set when the user re-authenticates within the 5-min TTL window.

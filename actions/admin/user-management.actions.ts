@@ -503,6 +503,13 @@ export async function updateUser(
           .set({
             firstName: data.firstName.trim(),
             lastName: data.lastName.trim(),
+            // Increment role_version so /api/auth/refresh-session detects the
+            // change on other instances: sessionRoleVersion (from the JWT)
+            // will be < dbRoleVersion, triggering re-authentication.
+            // Without this bump, the multi-instance stale-role fallback never
+            // fires — pollingSessionCache.invalidateUser() only flushes the
+            // in-process cache on the instance handling this request.
+            roleVersion: sql`${users.roleVersion} + 1`,
           })
           .where(eq(users.id, userId))
           .returning({ id: users.id, cognitoSub: users.cognitoSub })
