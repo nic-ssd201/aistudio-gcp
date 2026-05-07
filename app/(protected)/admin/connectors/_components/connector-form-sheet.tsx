@@ -328,12 +328,15 @@ export function ConnectorFormSheet({ server, onSuccess }: Props) {
         </>
       )}
 
+      {/* cognito_passthrough: historical enum value preserved for DB/migration
+           compatibility — semantically "session passthrough". TODO: rename to
+           session_passthrough in a follow-up migration (no behaviour change). */}
       {authType === "cognito_passthrough" && (
         <div className="rounded-md border border-border bg-muted/50 p-3">
           <p className="text-xs text-muted-foreground">
-            The user&apos;s Cognito ID token is forwarded as a Bearer token.
+            The user&apos;s Google ID token is forwarded as a Bearer token.
             No per-user token storage needed — the token comes from the active session.
-            The MCP server must trust this Cognito pool&apos;s JWKS for JWT validation.
+            The MCP server must trust the Google OIDC provider&apos;s JWKS for JWT validation.
           </p>
         </div>
       )}

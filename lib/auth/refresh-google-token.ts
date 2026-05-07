@@ -75,28 +75,26 @@ export async function refreshGoogleToken(token: JWT): Promise<JWT | null> {
     return existing
   }
 
-  // Safety cap: if the map grows unexpectedly large (e.g. in a pathological
-  // horizontal-scaling scenario where many tokens expire simultaneously), clear
-  // it rather than letting memory grow without bound. In normal operation the
-  // map holds at most a handful of entries at any given instant.
-  //
-  // Note on the dedup gap: clear() evicts in-flight Promises without cancelling
-  // their underlying fetches. Any request that immediately follows the clear will
-  // not find an existing entry and will start a new fetch — potentially racing
-  // with the orphaned in-flight one. This is the dedup gap, not the horizontal-
-  // scaling load itself. The risk is theoretical at the 500-entry threshold but
-  // worth knowing: prefer deletion of settled entries over a full clear if this
-  // branch fires in practice (filed for future hardening).
-  if (activeRefreshes.size > 500) {
-    log.warn("activeRefreshes map exceeded 500 entries — clearing as safety measure", {
+  // Safety cap: if the map grows unexpectedly large (500+ distinct subs all
+  // refreshing simultaneously — theoretical but not impossible in horizontal-
+  // scaling scenarios), bypass dedup for this call rather than clearing the
+  // whole map.  Clearing would evict in-flight Promises without aborting the
+  // underlying fetches, creating a dedup gap where a follow-up call could race
+  // the orphaned fetch.  Bypassing dedup is safer: the in-flight entries are
+  // left intact, no race is introduced, and the extra refresh for this one sub
+  // is the only cost.  At 500 entries the dedup benefit is already marginal.
+  if (activeRefreshes.size >= 500) {
+    log.warn("activeRefreshes map at capacity (≥500 entries) — bypassing dedup for this call", {
       size: activeRefreshes.size,
+      sub,
     })
-    activeRefreshes.clear()
+    return doRefresh(token, log)
   }
 
-  // Use an identity check rather than a plain delete so that if the safety-cap
-  // clear() fires and a NEW promise is inserted for the same sub before this
-  // .finally() runs, the new promise is not evicted prematurely.
+  // Use an identity check rather than a plain delete so that a future safety-
+  // cap eviction (or a concurrent insertion) cannot accidentally remove a new
+  // promise inserted for the same sub between the .finally() binding and when
+  // it fires.
   const promise = doRefresh(token, log).finally(() => {
     if (activeRefreshes.get(sub) === promise) {
       activeRefreshes.delete(sub)

@@ -39,7 +39,11 @@ const ENV_VARS: EnvVar[] = [
   { name: 'DB_NAME', required: false, description: 'Database name (defaults to aistudio)' },
   { name: 'DB_SSL', required: false, description: 'Enable SSL for TCP connections (defaults to true)' },
 
-  // GCS / Storage
+  // GCP / Storage
+  // required:false — only needed when MCP connectors use Secret Manager;
+  // getRequiredEnv('GCP_PROJECT_ID') in connector-service.ts fails-loud at
+  // request time if MCP is attempted without it.
+  { name: 'GCP_PROJECT_ID', required: false, description: 'GCP project ID (required for MCP connector Secret Manager access)' },
   { name: 'GCS_BUCKET', required: true, description: 'GCS bucket for document storage' },
 
   // AI Services

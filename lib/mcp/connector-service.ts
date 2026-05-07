@@ -15,6 +15,7 @@
 import { createMCPClient } from "@ai-sdk/mcp"
 import { eq, and, or, sql } from "drizzle-orm"
 import { createLogger, generateRequestId, startTimer } from "@/lib/logger"
+import { getRequiredEnv } from "@/lib/env-validation"
 import { executeQuery, executeTransaction } from "@/lib/db/drizzle-client"
 import {
   nexusMcpServers,
@@ -794,8 +795,10 @@ export async function loadOAuthCredentials(
     return cached.value
   }
 
-  // GCP Secret Manager: convert DB key path to GCP secret name format
-  const gcpSecretName = `projects/${process.env.GCP_PROJECT_ID || 'your-project'}/secrets/${credentialsKey.replace("/", "-")}/versions/latest`
+  // GCP Secret Manager: convert DB key path to GCP secret name format.
+  // Fail-loud: a missing GCP_PROJECT_ID would silently target 'your-project'
+  // and surface as a confusing "secret not found" error at request time.
+  const gcpSecretName = `projects/${getRequiredEnv('GCP_PROJECT_ID')}/secrets/${credentialsKey.replace("/", "-")}/versions/latest`
   const [version] = await getSecretsClient().accessSecretVersion({ name: gcpSecretName })
   if (!version?.payload?.data) {
     // version not available; JSON.parse("") will throw below
