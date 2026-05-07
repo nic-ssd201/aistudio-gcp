@@ -1,25 +1,24 @@
 /**
- * Unit tests for refreshGoogleToken (auth.ts)
+ * Unit tests for refreshGoogleToken (lib/auth/refresh-google-token.ts)
  *
  * Tests the Google OAuth2 refresh-token grant path in isolation by mocking
  * the global `fetch`. Covers the paths identified in the PR #5 code review:
  * - Happy path: token fields updated correctly
  * - Refresh-token rotation: new refresh_token preserved when Google returns one
- * - Missing expires_in: floor at 60 s, not the old expired timestamp
+ * - Missing expires_in: default to 1 hour, not the old expired timestamp
  * - expires_in = 0: floor prevents immediate re-refresh loop
  * - Error response from Google (invalid_grant): returns null
  * - Missing AUTH_GOOGLE_SECRET at refresh time: returns null with error log
  */
 
-// Pull in refreshGoogleToken via a helper that re-exports it for testing.
-// Because auth.ts does module-level env checks we isolate it carefully.
+import { refreshGoogleToken } from "@/lib/auth/refresh-google-token"
 
 const MOCK_REFRESH_TOKEN = "mock-refresh-token-value"
 const MOCK_ACCESS_TOKEN = "mock-access-token-new"
 const MOCK_ID_TOKEN = "mock-id-token-new"
 const MOCK_NEW_REFRESH_TOKEN = "mock-rotated-refresh-token"
 
-// Stub out edge-logger so auth.ts doesn't need Next.js internals
+// Stub out edge-logger so the module doesn't need Next.js internals
 jest.mock("@/lib/auth/edge-logger", () => ({
   createLogger: () => ({
     info: jest.fn(),
@@ -33,7 +32,7 @@ jest.mock("@/lib/auth/edge-logger", () => ({
 function makeToken(overrides: Record<string, unknown> = {}) {
   return {
     sub: "user-123",
-    provider: "google",
+    provider: "google" as const,
     refreshToken: MOCK_REFRESH_TOKEN,
     expiresAt: Date.now() - 1000, // already expired
     ...overrides,
@@ -47,52 +46,6 @@ function mockGoogleTokenResponse(body: Record<string, unknown>, ok = true) {
     json: jest.fn().mockResolvedValueOnce(body),
   } as unknown as Response)
 }
-
-// We import refreshGoogleToken by reaching into the module. Because it's not
-// exported we test it through a thin wrapper added only in test env.
-// Alternatively, test the jwt() callback. Here we test the effect on the
-// token object returned by the callback when provider === 'google'.
-
-// To avoid importing auth.ts (which throws if env vars differ), we duplicate
-// the function logic under test. This is acceptable for fast-unit-test purposes
-// and keeps the test self-contained.
-
-// ── inline copy of refreshGoogleToken under test ──────────────────────────────
-// Keep in sync with auth.ts:refreshGoogleToken if the implementation changes.
-async function refreshGoogleToken(token: Record<string, unknown>) {
-  if (!token.refreshToken) return null
-  if (!process.env.AUTH_GOOGLE_SECRET) return null
-  try {
-    const response = await fetch("https://oauth2.googleapis.com/token", {
-      method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body: new URLSearchParams({
-        grant_type: "refresh_token",
-        client_id: process.env.AUTH_GOOGLE_ID ?? "",
-        client_secret: process.env.AUTH_GOOGLE_SECRET,
-        refresh_token: token.refreshToken as string,
-      }),
-    })
-    const tokens = (await response.json()) as {
-      access_token?: string
-      id_token?: string
-      refresh_token?: string
-      expires_in?: number
-      error?: string
-    }
-    if (!response.ok || tokens.error) return null
-    return {
-      ...token,
-      accessToken: tokens.access_token,
-      idToken: tokens.id_token,
-      refreshToken: tokens.refresh_token ?? (token.refreshToken as string),
-      expiresAt: Date.now() + Math.max(tokens.expires_in ?? 3600, 60) * 1000,
-    }
-  } catch {
-    return null
-  }
-}
-// ─────────────────────────────────────────────────────────────────────────────
 
 describe("refreshGoogleToken", () => {
   const ORIG_ENV = process.env
@@ -167,8 +120,10 @@ describe("refreshGoogleToken", () => {
 
     const result = await refreshGoogleToken(makeToken())
 
-    // Must be at least 60 s in the future
+    // Must be at least 60 s in the future (the floor)
     expect(result!.expiresAt).toBeGreaterThanOrEqual(before + 60 * 1000)
+    // Must NOT be ~1 hour — confirming the floor, not the default
+    expect(result!.expiresAt).toBeLessThan(before + 3600 * 1000)
   })
 
   it("returns null on Google error response (invalid_grant)", async () => {

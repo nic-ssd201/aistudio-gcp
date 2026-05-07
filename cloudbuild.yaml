@@ -60,7 +60,7 @@ steps:
     waitFor:
       - validate-substitutions
 
-  # ── 3. Build Docker image ────────────────────────────────────────────────────
+  # ── 2. Build Docker image ────────────────────────────────────────────────────
   - name: gcr.io/cloud-builders/docker
     id: build
     args:
@@ -79,7 +79,7 @@ steps:
     waitFor:
       - validate
 
-  # ── 4. Push image to Artifact Registry ──────────────────────────────────────
+  # ── 3. Push image to Artifact Registry ──────────────────────────────────────
   - name: gcr.io/cloud-builders/docker
     id: push
     args:
@@ -89,7 +89,7 @@ steps:
     waitFor:
       - build
 
-  # ── 5. Deploy to Cloud Run ───────────────────────────────────────────────────
+  # ── 4. Deploy to Cloud Run ───────────────────────────────────────────────────
   # Uses --update-env-vars / --update-secrets so only the declared variables are
   # changed; all other runtime config set via console or Terraform is preserved.
   #

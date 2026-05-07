@@ -10,7 +10,6 @@
  * Uses jest.resetModules() + require() to get a fresh module per test so the
  * pgClient singleton doesn't bleed between test cases.
  */
-// @ts-nocheck — require() calls needed for jest.resetModules() singleton isolation
 
 // Remove the global mock from jest.setup.js so we can load the real module.
 // jest.setup.js registers jest.mock('@/lib/db/drizzle-client', ...) globally to
@@ -55,7 +54,7 @@ jest.mock("@/lib/logger", () => ({
 
 // rds-error-handler stub
 jest.mock("@/lib/db/rds-error-handler", () => ({
-  executeWithRetry: jest.fn((fn) => fn()),
+  executeWithRetry: jest.fn((fn: () => unknown) => fn()),
   getCircuitBreakerState: jest.fn(() => ({ state: "CLOSED" })),
   resetCircuitBreaker: jest.fn(),
 }))
@@ -66,7 +65,8 @@ jest.mock("@/lib/db/schema", () => ({}))
 /** Load a fresh drizzle-client module so the pgClient singleton starts null. */
 function loadFreshModule() {
   jest.resetModules()
-  return require("@/lib/db/drizzle-client")
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  return require("@/lib/db/drizzle-client") as typeof import("@/lib/db/drizzle-client")
 }
 
 describe("drizzle-client Cloud SQL socket path validation", () => {

@@ -5,72 +5,7 @@ import type { NextAuthConfig } from "next-auth"
 import type { JWT } from "next-auth/jwt"
 import { refreshAccessToken, shouldRefreshToken } from "@/lib/auth/token-refresh-client"
 import { createLogger } from "@/lib/auth/edge-logger"
-
-// ─── Google token refresh ────────────────────────────────────────────────────
-// Uses the standard OAuth2 refresh-token grant against Google's token endpoint.
-// Called instead of the Cognito-specific refreshAccessToken when provider=google.
-async function refreshGoogleToken(token: JWT): Promise<JWT | null> {
-  const log = createLogger({ context: "google-token-refresh" })
-  if (!token.refreshToken) {
-    log.warn("No refresh token available for Google token")
-    return null
-  }
-  // Fail loud at call time if the secret is absent — avoids a confusing
-  // `invalid_client` error from Google 12 hours after initial sign-in.
-  if (!process.env.AUTH_GOOGLE_SECRET) {
-    log.error("AUTH_GOOGLE_SECRET is not set — cannot refresh Google token")
-    return null
-  }
-  try {
-    const response = await fetch("https://oauth2.googleapis.com/token", {
-      method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body: new URLSearchParams({
-        grant_type: "refresh_token",
-        client_id: process.env.AUTH_GOOGLE_ID ?? "",
-        client_secret: process.env.AUTH_GOOGLE_SECRET,
-        refresh_token: token.refreshToken as string,
-      }),
-    })
-    const tokens = await response.json() as {
-      access_token?: string;
-      id_token?: string;
-      refresh_token?: string;
-      expires_in?: number;
-      error?: string;
-    }
-    if (!response.ok || tokens.error) {
-      log.warn("Google token refresh failed", { error: tokens.error })
-      return null
-    }
-    const refreshed: JWT = {
-      ...token,
-      accessToken: tokens.access_token,
-      idToken: tokens.id_token,
-      // Google may rotate the refresh token on security events — preserve the
-      // new one when present; fall back to the current token.
-      refreshToken: tokens.refresh_token ?? (token.refreshToken as string),
-      // Use expires_in if provided; floor at 60 s so a zero/missing value from
-      // Google (e.g. during clock-skew incidents) never produces an already-
-      // expired timestamp that triggers an immediate re-refresh loop.
-      expiresAt: Date.now() + Math.max(tokens.expires_in ?? 3600, 60) * 1000,
-    }
-    log.info("Google token refreshed successfully")
-    return refreshed
-  } catch (error) {
-    log.error("Google token refresh threw error", {
-      error: error instanceof Error ? error.message : "Unknown error",
-    })
-    return null
-  }
-}
-
-// Fail loud at module load when Google ID is present without its secret.
-// This surfaces misconfiguration on boot rather than 12 hours later as an
-// opaque `invalid_client` from Google during the first token refresh.
-if (process.env.AUTH_GOOGLE_ID && !process.env.AUTH_GOOGLE_SECRET) {
-  throw new Error("AUTH_GOOGLE_ID is set but AUTH_GOOGLE_SECRET is missing")
-}
+import { refreshGoogleToken } from "@/lib/auth/refresh-google-token"
 
 export const authConfig: NextAuthConfig = {
   providers: [
@@ -103,7 +38,24 @@ export const authConfig: NextAuthConfig = {
     }),
     // GCP migration: Google OIDC provider (SSD201)
     // Enabled when AUTH_GOOGLE_ID / AUTH_GOOGLE_SECRET are both set.
-    // Missing-secret case is caught by the module-level guard above.
+    // Partial config (ID without secret) is caught by validateEnv() at startup.
+    //
+    // INTENTIONAL: No `hd` (hosted-domain) restriction is applied here.
+    // SSD201 is deployed on GCP with an org-level Google Workspace account;
+    // access control is enforced downstream by the existing role/permission
+    // system (hasToolAccess checks in the application layer). If a future
+    // deployment needs to restrict sign-in to a specific domain, add:
+    //   authorization: { params: { hd: "yourdomain.com" } }
+    // and verify `profile.hd` in the profile() callback.
+    //
+    // NOTE on sub-namespace collision: Cognito and Google each issue their own
+    // `sub` values. The current migration plan is Cognito → Google cutover
+    // (not concurrent dual-provider). During cutover the DB user record
+    // `cognito_sub` will be mapped to a `google_sub` via a one-time migration
+    // script (tracked in the GCP migration design doc). Until that script runs,
+    // `session.user.id = token.sub` is provider-scoped, so no collision occurs
+    // in practice. If concurrent dual-provider support is added, namespace with
+    // `${provider}:${sub}` or add a stable internal user ID column.
     ...(process.env.AUTH_GOOGLE_ID && process.env.AUTH_GOOGLE_SECRET
       ? [
           Google({
@@ -194,7 +146,7 @@ export const authConfig: NextAuthConfig = {
           iat: decoded.iat,
           tokenLifetimeMs: tokenLifetimeMs, // Store calculated lifetime for accurate refresh timing
           roleVersion: 0, // Initialize role version
-          provider: account.provider, // Track provider for refresh logic (cognito | google)
+          provider: account.provider as 'cognito' | 'google', // Narrowed from NextAuth's string
         };
 
           log.info("Successfully created initial token", {
@@ -225,7 +177,7 @@ export const authConfig: NextAuthConfig = {
             expiresAt: expiresAt,
             tokenLifetimeMs: tokenLifetimeMs,
             roleVersion: 0,
-            provider: account.provider, // Track provider for refresh logic
+            provider: account.provider as 'cognito' | 'google', // Narrowed from NextAuth's string
           };
 
           log.info("Created fallback token", {
