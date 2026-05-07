@@ -129,6 +129,12 @@ async function loadUpdateUser(opts: {
     }))
 
     // DB mocks
+    jest.doMock('@/lib/db/drizzle', () => ({
+      // getUserIdByCognitoSubAsNumber is imported by deleteUser for the
+      // self-deletion guard; updateUser doesn't call it, but the module-level
+      // import still executes, so it must resolve.
+      getUserIdByCognitoSubAsNumber: jest.fn().mockResolvedValue(null),
+    }))
     jest.doMock('@/lib/db/drizzle-client', () => ({
       executeTransaction: jest.fn((cb: (tx: unknown) => Promise<void>) =>
         cb(makeProxyTx(cognitoSub, roles))
@@ -187,13 +193,18 @@ type DeleteUserFn = (userId: number) => Promise<{ isSuccess: boolean; message: s
 
 /**
  * Load deleteUser with a fresh module registry, mirroring loadUpdateUser.
- * getServerSession returns session.user.id = 999 so userId 42 is never self-deleted.
+ *
+ * @param adminDbId - The numeric DB ID returned for the current admin's sub.
+ *   Defaults to 999, which is different from the test's target userId (42),
+ *   so the self-deletion guard does not fire in the normal path.
+ *   Pass 42 to test the guard itself (self-deletion should be rejected).
  */
 async function loadDeleteUser(opts: {
   cognitoSub: string | null
   onInvalidateUser: jest.Mock
+  adminDbId?: number | null
 }): Promise<DeleteUserFn> {
-  const { cognitoSub, onInvalidateUser } = opts
+  const { cognitoSub, onInvalidateUser, adminDbId = 999 } = opts
   let fn!: DeleteUserFn
 
   jest.isolateModules(() => {
@@ -202,7 +213,6 @@ async function loadDeleteUser(opts: {
       getServerSession: jest.fn().mockResolvedValue({
         sub: 'admin-sub',
         email: 'admin@example.com',
-        user: { id: 999 }, // not the target userId (42) — prevents self-deletion guard
       }),
     }))
     jest.doMock('@/lib/auth/role-helpers', () => ({
@@ -213,6 +223,12 @@ async function loadDeleteUser(opts: {
     }))
 
     // DB mocks
+    jest.doMock('@/lib/db/drizzle', () => ({
+      // Resolves session.sub → numeric DB ID for the self-deletion guard.
+      // adminDbId=999 (default) != target userId 42, so guard doesn't fire.
+      // adminDbId=42 causes the guard to reject the delete (self-deletion test).
+      getUserIdByCognitoSubAsNumber: jest.fn().mockResolvedValue(adminDbId),
+    }))
     jest.doMock('@/lib/db/drizzle-client', () => ({
       executeTransaction: jest.fn((cb: (tx: unknown) => Promise<void>) =>
         cb(makeDeleteProxyTx(cognitoSub))
@@ -319,6 +335,22 @@ describe('deleteUser — pollingSessionCache.invalidateUser wiring', () => {
     const result = await deleteUser(42)
 
     expect(result.isSuccess).toBe(true)
+    expect(mockInvalidateUser).not.toHaveBeenCalled()
+  })
+
+  it('rejects self-deletion when the admin DB id matches the target userId', async () => {
+    const mockInvalidateUser = jest.fn()
+    // adminDbId=42 matches the target userId=42 → guard must fire and reject.
+    const deleteUser = await loadDeleteUser({
+      cognitoSub: STUB_SUB,
+      onInvalidateUser: mockInvalidateUser,
+      adminDbId: 42,
+    })
+
+    const result = await deleteUser(42)
+
+    expect(result.isSuccess).toBe(false)
+    // Guard fires before the transaction, so cache must NOT be invalidated.
     expect(mockInvalidateUser).not.toHaveBeenCalled()
   })
 })

@@ -14,6 +14,7 @@ import {
 import type { ActionState } from "@/types"
 import { getServerSession } from "@/lib/auth/server-session"
 import { requireRole } from "@/lib/auth/role-helpers"
+import { getUserIdByCognitoSubAsNumber } from "@/lib/db/drizzle"
 import { executeQuery, executeTransaction } from "@/lib/db/drizzle-client"
 import { eq, sql, desc, count, inArray, ilike, or, and, type SQL } from "drizzle-orm"
 import { users, userRoles, roles } from "@/lib/db/schema"
@@ -644,14 +645,16 @@ export async function deleteUser(userId: number): Promise<ActionState<void>> {
       throw ErrorFactories.authNoSession()
     }
 
-    // Prevent self-deletion
-    // Type guard: NextAuth types session.user as {}, but it contains id at runtime
-    const sessionUserId =
-      session.user && typeof session.user === "object" && "id" in session.user
-        ? (session.user as { id: number }).id
-        : null
-
-    if (sessionUserId === userId) {
+    // Prevent self-deletion.
+    // session.sub is the Google OIDC sub (a string); userId is a numeric DB row
+    // ID. Comparing them directly (`session.user.id === userId`) is always false
+    // because string !== number — the guard was silently broken.
+    // Fix: resolve sub → numeric DB ID first, then compare.
+    // A null result means the admin's own record is missing (should be impossible
+    // after JIT provisioning), so we allow the delete to proceed rather than
+    // blocking a legitimate operation.
+    const currentAdminDbId = await getUserIdByCognitoSubAsNumber(session.sub)
+    if (currentAdminDbId !== null && currentAdminDbId === userId) {
       throw ErrorFactories.bizInvalidState(
         "deleteUser",
         "self-deletion attempted",

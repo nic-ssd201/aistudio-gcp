@@ -38,6 +38,7 @@ const ENV_VARS: EnvVar[] = [
   { name: 'DB_PASSWORD', required: false, description: 'Database password' },
   { name: 'DB_NAME', required: false, description: 'Database name (defaults to aistudio)' },
   { name: 'DB_SSL', required: false, description: 'Enable SSL for TCP connections (defaults to true)' },
+  { name: 'DB_PREPARE', required: false, description: 'Enable prepared statements (defaults to true; set false for PgBouncer transaction-mode pooling)' },
 
   // GCP / Storage
   // required:false — only needed when MCP connectors use Secret Manager;

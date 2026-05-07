@@ -103,10 +103,11 @@ export async function refreshGoogleToken(token: JWT): Promise<JWT | null> {
     return doRefresh(token, log)
   }
 
-  // Use an identity check rather than a plain delete so that a future safety-
-  // cap eviction (or a concurrent insertion) cannot accidentally remove a new
-  // promise inserted for the same sub between the .finally() binding and when
-  // it fires.
+  // Use an identity check rather than a plain delete so that a concurrent
+  // insertion for the same sub between the .finally() binding and when it fires
+  // cannot accidentally remove the new promise. (The safety cap above bypasses
+  // rather than evicts, so eviction-race is not the threat today — but the
+  // identity check is cheap defense-in-depth for any future change to the cap.)
   const promise = doRefresh(token, log).finally(() => {
     if (activeRefreshes.get(sub) === promise) {
       activeRefreshes.delete(sub)
@@ -187,14 +188,20 @@ async function doRefresh(token: JWT, log: ReturnType<typeof createLogger>): Prom
     }
 
     // Fail-closed on a pathologically small expires_in.
-    // With a 5-minute proactive-refresh threshold (auth.ts:TOKEN_REFRESH_THRESHOLD_MS),
-    // any expires_in < 300 s would trigger a refresh on the very next request.
-    // If the upstream is misbehaving (returning 60 s, 0 s, or absent), we'd
-    // hot-loop hitting Google's token endpoint roughly once per minute per user.
-    // Returning null instead lets auth.ts force a single re-auth rather than
-    // hammering the endpoint indefinitely.
-    // Google's documented access token lifetime is 3600 s; < 300 s is abnormal.
-    const MIN_EXPIRES_IN = 300 // 5 minutes — matches TOKEN_REFRESH_THRESHOLD_MS default
+    // The proactive-refresh threshold in auth.ts defaults to 300 s (5 min) and
+    // is operator-tunable via TOKEN_REFRESH_THRESHOLD_MS (floor: 60 s).  Any
+    // token whose expires_in ≤ threshold would trigger another refresh on the
+    // very next jwt() callback — a misbehaving upstream returning a tiny
+    // expires_in causes a hot-loop against Google's token endpoint.
+    //
+    // MIN_EXPIRES_IN is intentionally hard-coded to the default threshold (300 s)
+    // rather than reading TOKEN_REFRESH_THRESHOLD_MS here.  If an operator raises
+    // the threshold above 300 s (e.g. 600 s), a Google-returned expires_in between
+    // 300–599 s would still hot-loop.  Fixing that correctly requires passing the
+    // configured threshold into doRefresh(), which is a larger refactor tracked as
+    // a follow-up (see issue #8).  For now, 300 s is the safe baseline: Google's
+    // documented access token lifetime is 3600 s and < 300 s is structurally abnormal.
+    const MIN_EXPIRES_IN = 300 // seconds — see note above re: TOKEN_REFRESH_THRESHOLD_MS
     const expiresIn = tokens.expires_in ?? 0
     if (expiresIn < MIN_EXPIRES_IN) {
       log.warn("Google token refresh returned unexpectedly short expires_in — treating as failure", {
