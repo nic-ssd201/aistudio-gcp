@@ -49,15 +49,16 @@ export async function refreshGoogleToken(token: JWT): Promise<JWT | null> {
 
   const sub = token.sub as string | undefined
 
-  // Skip the dedup map when sub is absent. In theory a token without sub but
-  // with a refreshToken could arrive from a malformed JWT; if two such callers
-  // shared a Promise, they'd receive the same rotation-replacing refresh_token
-  // — the second caller's token would be silently clobbered. Bypassing the map
-  // lets each caller go through doRefresh independently (which returns null
-  // quickly when refreshToken is absent anyway).
+  // Fail-closed when sub is absent: return null immediately to force re-auth
+  // rather than routing through doRefresh.  A sub-less JWT is structurally
+  // malformed — sub is required by the OIDC spec — so the safest response is
+  // to treat it like a refresh failure and let the caller trigger a new sign-in.
+  // Keying the dedup map on a synthetic value (e.g. "anonymous") would be
+  // unsafe: two concurrent sub-less callers could share a refresh Promise and
+  // silently clobber each other's rotated refresh_token.
   if (!sub) {
-    log.warn("refreshGoogleToken called with no sub — skipping dedup map")
-    return doRefresh(token, log)
+    log.warn("refreshGoogleToken called with no sub — returning null (fail-closed)")
+    return null
   }
 
   // Keying on sub alone assumes one browser session = one refreshToken per sub,

@@ -19,6 +19,11 @@ declare module "next-auth" {
      *  key on sub+iat and avoid returning a stale role set when a user
      *  re-authenticates within the 5-min TTL window. */
     iat?: number
+    /** Role version counter from the JWT, compared against the DB value by
+     *  /api/auth/refresh-session to detect role changes and trigger re-auth.
+     *  Without propagation sessionRoleVersion is always undefined (→ 0), causing
+     *  needsRefresh=true on every poll after the first role change. */
+    roleVersion?: number
   }
 }
 

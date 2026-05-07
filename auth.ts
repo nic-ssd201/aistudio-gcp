@@ -36,7 +36,8 @@ export const authConfig: NextAuthConfig = {
           //   without a refreshToken) before enabling this in production.
           //
           // Default: "consent" — set AUTH_GOOGLE_FORCE_CONSENT=false to opt out.
-          prompt: process.env.AUTH_GOOGLE_FORCE_CONSENT === 'false' ? 'select_account' : 'consent',
+          // Comparison is case-insensitive so "False" / "FALSE" work as expected.
+          prompt: process.env.AUTH_GOOGLE_FORCE_CONSENT?.toLowerCase() === 'false' ? 'select_account' : 'consent',
         },
       },
       checks: ["pkce", "state", "nonce"],
@@ -86,6 +87,8 @@ export const authConfig: NextAuthConfig = {
           // SECURITY NOTE: This JWT parsing is safe here because the id_token comes directly
           // from the OAuth provider (Google) during the callback flow and has already
           // been validated by NextAuth — signature verified via JWKS before reaching this callback.
+          // @see https://authjs.dev/reference/core/providers#provider-callbacks (NextAuth v5 docs)
+          //      confirming that the jwt() callback fires after the provider's id_token is verified.
           // DO NOT use this pattern for parsing JWTs from untrusted sources or user input.
           // For untrusted JWTs, always use proper JWT verification libraries like 'jose'.
           const base64Payload = account.id_token.split('.')[1];
@@ -141,9 +144,11 @@ export const authConfig: NextAuthConfig = {
           // Carry given_name / family_name from `user` or `profile` so the
           // session-callback name chain (token.given_name || token.name || …)
           // has the same fields available on the fallback path as on the happy path.
-          // Note: `iat` and `preferred_username` are intentionally omitted here
-          // because they come from the id_token payload that failed to parse —
-          // using account.providerAccountId as sub is already a best-effort fallback.
+          // Note: `preferred_username` is intentionally omitted — it comes from the
+          // id_token payload that failed to parse.
+          // `iat` falls back to Math.floor(Date.now()/1000) so each fallback session
+          // gets a distinct cache key (session:sub:iat) rather than the default
+          // session:sub:0 that all sub-less fallback sessions would otherwise share.
           // Cast once so the two field accesses below don't repeat the same type annotation.
           const p = profile as { given_name?: string; family_name?: string } | undefined
           const fallbackToken: JWT = {
@@ -156,6 +161,7 @@ export const authConfig: NextAuthConfig = {
             refreshToken: account.refresh_token,
             idToken: account.id_token,
             expiresAt: expiresAt,
+            iat: Math.floor(Date.now() / 1000),
             roleVersion: 0,
             provider: 'google', // Always Google for SSD201
           };
@@ -299,6 +305,11 @@ export const authConfig: NextAuthConfig = {
       // Propagate iat so the polling session cache can key on sub+iat and avoid
       // returning a stale role set when the user re-authenticates within TTL.
       session.iat = typeof token.iat === 'number' ? token.iat : undefined;
+      // Propagate roleVersion so /api/auth/refresh-session can compare against the
+      // DB value and detect role changes.  Without this the sessionRoleVersion is
+      // always undefined (→ 0), which causes needsRefresh=true on every poll as
+      // soon as dbRoleVersion reaches 1 after the first role change.
+      session.roleVersion = typeof token.roleVersion === 'number' ? token.roleVersion : undefined;
 
       log.debug("Session created successfully", {
         userId: session.user.id,

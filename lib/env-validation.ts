@@ -108,8 +108,10 @@ export function validateEnv(): { isValid: boolean; missing: string[]; warnings: 
   }
 
   // AUTH_GOOGLE_FORCE_CONSENT: warn when set to an unrecognised value.
+  // Normalise to lowercase so "False" / "FALSE" are accepted alongside "false".
   const forceConsent = process.env.AUTH_GOOGLE_FORCE_CONSENT;
-  if (forceConsent !== undefined && forceConsent !== '' && forceConsent !== 'true' && forceConsent !== 'false') {
+  const forceConsentNorm = forceConsent?.toLowerCase();
+  if (forceConsentNorm !== undefined && forceConsentNorm !== '' && forceConsentNorm !== 'true' && forceConsentNorm !== 'false') {
     warnings.push(
       `AUTH_GOOGLE_FORCE_CONSENT="${forceConsent}" is not recognised — expected "true" or "false". Defaulting to "true" (consent prompt).`
     );
@@ -135,8 +137,8 @@ export function requireValidEnv(): void {
   }
 
   if (process.env.NODE_ENV === 'development' && warnings.length > 0) {
-    console.warn('Environment validation warnings:');
-    for (const warning of warnings) console.warn(`  - ${warning}`);
+    console.warn('Environment validation warnings:'); // eslint-disable-line no-console -- Edge-runtime compatible; @/lib/logger unavailable here
+    for (const warning of warnings) console.warn(`  - ${warning}`); // eslint-disable-line no-console -- same reason
   }
 }
 
