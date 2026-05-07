@@ -419,11 +419,14 @@ describe("session() callback", () => {
     expect(result.user.name).toBe("fallback@example.com")
   })
 
-  it("returns an empty-user sentinel when the token is expired", async () => {
-    // The jwt() callback refreshes tokens before session() is called, so an
-    // expired token here is unusual — but the session callback handles it
-    // defensively by returning a sentinel object with empty strings so
-    // downstream `if (session?.user?.id)` checks correctly evaluate to false.
+  it("builds a normal session even when token.expiresAt is in the past", async () => {
+    // The expired-token sentinel branch was removed (CLAUDE.md: don't add
+    // unreachable error handling). jwt() is solely responsible for intercepting
+    // expired tokens — it returns null, which causes NextAuth to clear the
+    // session cookie before session() ever runs.  If session() somehow receives
+    // a token with a past expiresAt, it falls through to the normal build path
+    // rather than synthesising an empty sentinel (which was a footgun: any
+    // `if (session?.user)` check would have happily proceeded with id="").
     const token: JWT = {
       sub: "s",
       email: "user@example.com",
@@ -437,11 +440,12 @@ describe("session() callback", () => {
       newSession: undefined,
       trigger: "update",
     })) as AnyAccount
-    // Sentinel: all identity fields are empty strings so auth guards fail closed.
-    expect(result.user.id).toBe("")
-    expect(result.user.email).toBe("")
-    expect(result.accessToken).toBe("")
-    expect(result.idToken).toBe("")
+    // session() builds normally — the sub is propagated as the user id.
+    // The token having a past expiresAt is irrelevant here; jwt() already
+    // ran and did not return null (simulated by the test passing the token
+    // directly), so session() just maps the claims as usual.
+    expect(result.user.id).toBe("s")
+    expect(result.user.email).toBe("user@example.com")
   })
 })
 
