@@ -42,5 +42,9 @@ declare module "next-auth/jwt" {
     /** Auth provider — always 'google' for SSD201 GCP deployment. */
     provider?: 'google'
     roleVersion?: number
+    /** JWT issued-at (seconds since epoch). NextAuth's default JWT type includes
+     *  this, but it is declared here explicitly so the augmentation contract is
+     *  self-documenting: auth.ts reads token.iat to propagate it to Session. */
+    iat?: number
   }
 }

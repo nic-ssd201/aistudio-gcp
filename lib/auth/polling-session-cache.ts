@@ -125,6 +125,19 @@ export class PollingSessionCache {
    *
    * Also handles the legacy `session:${sub}` (no iat) format in case any
    * entries were cached before the key format was updated.
+   *
+   * **Complexity:** O(N) where N is the total number of cached entries (up to
+   * `maxEntries`, default 500). This is acceptable for an admin-triggered
+   * operation that runs at most once per role-change event.  Do not call from
+   * a hot path (e.g. per-request middleware).
+   *
+   * **Multi-instance note:** this method only flushes the in-process cache of
+   * the instance that handles the role-change request.  On Cloud Run (or any
+   * deployment with N > 1 instances), the other N-1 instances continue serving
+   * stale roles for up to 5 minutes (the TTL).  This is the accepted trade-off
+   * for the polling-auth perf improvement; a cross-instance invalidation signal
+   * (e.g. Pub/Sub or a shared Redis cache) would eliminate the window if
+   * sub-5-minute revocation propagation becomes a hard requirement.
    */
   invalidateUser(sub: string): void {
     const prefix = `session:${sub}:`;

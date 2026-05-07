@@ -250,7 +250,13 @@ export const authConfig: NextAuthConfig = {
         return session; // Return empty session instead of null
       }
 
-      // Check if token is expired (shouldn't happen after JWT callback refresh logic)
+      // Defensive guard: return an empty session when the token reports itself as expired.
+      // In normal flow this branch is unreachable — jwt() returns null for expired
+      // tokens that cannot be refreshed, which causes NextAuth to clear the session
+      // cookie before session() ever runs.  The check is kept as a belt-and-braces
+      // sentinel so that any downstream `if (session?.user?.id)` guard fails closed
+      // rather than receiving a stale token, in case a future NextAuth upgrade or
+      // a test harness bypasses the normal null-return path in jwt().
       if (token.expiresAt && Date.now() > (token.expiresAt as number)) {
         log.warn("Session callback received expired token - returning empty session", {
           expiresAt: new Date(token.expiresAt as number).toISOString(),
@@ -351,8 +357,12 @@ export const authConfig: NextAuthConfig = {
         // Mask the local-part before logging — email is PII even in warn logs.
         // Capture only the first character so short local-parts (≤3 chars) are
         // also masked (e.g. "abc@x.com" → "a***@x.com" not "abc***@x.com").
+        // Fail-closed: emails without '@' do not match the regex; the fallback
+        // '***' prevents a raw malformed address from appearing in logs.
         const maskedEmail = profile?.email
-          ? profile.email.replace(/^(.).*(@.*)$/, '$1***$2')
+          ? (profile.email.includes('@')
+              ? profile.email.replace(/^(.).*(@.*)$/, '$1***$2')
+              : '***')
           : undefined
         log.warn("Sign-in rejected: Google email not verified", {
           email: maskedEmail,

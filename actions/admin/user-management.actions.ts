@@ -488,11 +488,18 @@ export async function updateUser(
       throw ErrorFactories.missingRequiredField("roles")
     }
 
-    // Update user and role assignments in a transaction
-    // All validation happens inside transaction to prevent race conditions
+    // Update user and role assignments in a transaction.
+    // All validation happens inside the transaction to prevent race conditions.
+    // cognitoSub (the Google OIDC sub) is read from .returning() here so that
+    // the post-commit cache invalidation does not need a second round-trip — and
+    // cannot mask a successful commit as a failure if the extra query were to throw.
+    let subForCacheInvalidation: string | null = null;
+
     await executeTransaction(
       async (tx) => {
-        // Update user basic info - verify user exists
+        // Update user basic info - verify user exists.
+        // Include cognitoSub in .returning() so it is available post-commit for
+        // pollingSessionCache.invalidateUser() without an additional DB query.
         const result = await tx
           .update(users)
           .set({
@@ -500,12 +507,14 @@ export async function updateUser(
             lastName: data.lastName.trim(),
           })
           .where(eq(users.id, userId))
-          .returning({ id: users.id })
+          .returning({ id: users.id, cognitoSub: users.cognitoSub })
 
         // Throw if user doesn't exist
         if (result.length === 0) {
           throw ErrorFactories.dbRecordNotFound("users", userId)
         }
+
+        subForCacheInvalidation = result[0].cognitoSub ?? null;
 
         // Get role IDs from role names (inside transaction to prevent race condition)
         const roleList = await tx
@@ -568,14 +577,17 @@ export async function updateUser(
 
     // Flush polling cache for this user so role changes propagate immediately
     // to polling endpoints rather than waiting up to 5 minutes for TTL expiry.
-    // We look up cognitoSub (the Google sub) which is the polling cache's user identity.
-    const userRow = await executeQuery(
-      (db) => db.select({ cognitoSub: users.cognitoSub }).from(users).where(eq(users.id, userId)).limit(1),
-      "updateUser-lookupSubForCacheInvalidation"
-    )
-    if (userRow[0]?.cognitoSub) {
-      pollingSessionCache.invalidateUser(userRow[0].cognitoSub)
-      log.info("Polling cache flushed after role update", { userId, sub: userRow[0].cognitoSub })
+    // subForCacheInvalidation was captured inside the transaction via .returning()
+    // so no extra DB query is needed here and a post-commit query failure cannot
+    // mask a successful commit as an error.
+    // NOTE: only the current process's in-process cache is flushed. On Cloud Run
+    // (or any multi-instance deployment), the other N-1 instances continue serving
+    // stale roles for up to 5 minutes (the TTL).  This is the accepted trade-off
+    // for the polling-auth perf improvement; a cross-instance signal (Pub/Sub,
+    // Redis invalidation) would eliminate the window but is out of scope here.
+    if (subForCacheInvalidation) {
+      pollingSessionCache.invalidateUser(subForCacheInvalidation)
+      log.info("Polling cache flushed after role update", { userId, sub: subForCacheInvalidation })
     }
 
     timer({ status: "success" })
