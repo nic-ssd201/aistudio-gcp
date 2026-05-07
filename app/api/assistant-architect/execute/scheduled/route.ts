@@ -993,5 +993,5 @@ function resolvePath(
 }
 
 // Stub classes for AWS → GCP migration
-class SQSClientStub { constructor(_opts?: any) {} }
-class SendMessageCommandStub { constructor(_opts?: any) {} }
+class _SQSClientStub { constructor(_opts?: Record<string, unknown>) {} }
+class _SendMessageCommandStub { constructor(_opts?: Record<string, unknown>) {} }

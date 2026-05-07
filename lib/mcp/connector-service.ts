@@ -789,6 +789,7 @@ export async function loadOAuthCredentials(
   const gcpSecretName = `projects/${process.env.GCP_PROJECT_ID || 'your-project'}/secrets/${credentialsKey.replace("/", "-")}/versions/latest`
   const [version] = await getSecretsClient().accessSecretVersion({ name: gcpSecretName })
   if (!version?.payload?.data) {
+    // version not available; JSON.parse("") will throw below
   }
   const parsed: unknown = JSON.parse((version.payload?.data?.toString() ?? ""))
   if (

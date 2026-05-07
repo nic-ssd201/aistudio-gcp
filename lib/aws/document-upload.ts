@@ -2,7 +2,7 @@ import { Storage } from '@google-cloud/storage';
 
 import { createLogger } from '@/lib/logger';
 
-const gcsClient = new Storage();
+const _gcsClient = new Storage();
 const log = createLogger({ service: 'document-upload' });
 
 // Environment validation with test environment support

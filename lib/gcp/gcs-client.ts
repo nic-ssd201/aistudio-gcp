@@ -41,7 +41,7 @@ export async function getGCSClient() {
     return gcsClientCache
    }
   
-  const config = await getGCSConfig()
+  await getGCSConfig()
   gcsClientCache = new Storage({
       // Uses Application Default Credentials automatically
       // In production (Cloud Run/ECS), this uses IAM service account credentials

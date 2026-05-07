@@ -3,13 +3,13 @@
 
 // Stub classes for AWS → GCP migration
 // Stub classes for AWS → GCP migration
-class DynamoDBClientStub { constructor(_opts?: any) {} async send(_cmd: any): Promise<any> { return {}; } }
+class DynamoDBClientStub { constructor(_opts?: Record<string, unknown>) {} async send(_cmd: Record<string, unknown>): Promise<Record<string, unknown>> { return {}; } }
 const DynamoDBClient = DynamoDBClientStub;
-async function marshall(_item: any): Promise<any> { return _item; }
-async function unmarshall(_item: any): Promise<any> { return _item; }
-class PutItemCommandStub { constructor(_opts?: any) {} }
+async function marshall(_item: Record<string, unknown>): Promise<Record<string, unknown>> { return _item; }
+async function unmarshall(_item: Record<string, unknown>): Promise<Record<string, unknown>> { return _item; }
+class PutItemCommandStub { constructor(_opts?: Record<string, unknown>) {} }
 const PutItemCommand = PutItemCommandStub;
-class QueryCommandStub { constructor(_opts?: any) {} }
+class QueryCommandStub { constructor(_opts?: Record<string, unknown>) {} }
 const QueryCommand = QueryCommandStub;
 
 import { createLogger, generateRequestId } from '@/lib/logger';
@@ -423,7 +423,7 @@ export async function getJobsByStatus(
 // Helper function to fetch result from S3 if stored there
 export async function fetchResultFromS3(s3Key: string): Promise<Record<string, unknown>> {
   try {
-    const { Storage } = await import('@google-cloud/storage');
+    const { Storage: _Storage } = await import('@google-cloud/storage');
     const s3Client = new S3Client({});
     
     const bucketName = process.env.DOCUMENTS_BUCKET_NAME;

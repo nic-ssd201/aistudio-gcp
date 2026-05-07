@@ -10,7 +10,7 @@
  * - Cloud Audit Logs on all signing operations (when GCP KMS is configured)
  */
 
-import { randomBytes, createSign, verify, createPublicKey, generateKeyPairSync } from "node:crypto"
+import { createSign, createPublicKey, generateKeyPairSync } from "node:crypto"
 import { createLogger } from "@/lib/logger"
 
 // ============================================

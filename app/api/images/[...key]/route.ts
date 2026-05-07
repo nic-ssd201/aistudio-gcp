@@ -1,9 +1,9 @@
-import { NextRequest, NextResponse } from 'next/server';
+import { NextRequest } from 'next/server';
 import { getServerSession } from '@/lib/auth/server-session';
 import { getCurrentUserAction } from '@/actions/db/get-current-user-action';
 import { createLogger, generateRequestId, startTimer } from '@/lib/logger';
 import { getConversationById } from '@/lib/db/drizzle';
-import { getObjectStream, getActiveStorageBucketName, getDocumentSignedUrl } from '@/lib/services/document-storage-service';
+import { getActiveStorageBucketName, getDocumentSignedUrl } from '@/lib/services/document-storage-service';
 
 /**
  * Secure Image Proxy API

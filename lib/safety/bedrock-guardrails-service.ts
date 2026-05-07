@@ -338,7 +338,7 @@ export class BedrockGuardrailsService {
     content: string,
     source: 'INPUT' | 'OUTPUT'
   ): Promise<GuardrailCheckResult> {
-    const input: any = {
+    const input: Record<string, unknown> = {
       guardrailIdentifier: this.config.guardrailId,
       guardrailVersion: this.config.guardrailVersion,
       source,
@@ -395,13 +395,15 @@ export class BedrockGuardrailsService {
       // confidence levels, and topic triggers.
       // Note: raw matched words are NOT logged — they come from user/AI content
       // and could contain profane or offensive terms. Log type and count instead.
+      type WordItem = { action: string; match?: string; type?: string };
+      type FilterItem = { action: string; type?: string; confidence?: string };
       const wordMatches = [
-        ...(assessment?.wordPolicy?.customWords?.filter((w: any) => w.action === 'BLOCKED').map((w: any) => ({ type: 'custom', matchLength: w.match?.length })) || []),
-        ...(assessment?.wordPolicy?.managedWordLists?.filter((w: any) => w.action === 'BLOCKED').map((w: any) => ({ type: w.type, matchLength: w.match?.length })) || []),
+        ...(assessment?.wordPolicy?.customWords?.filter((w: WordItem) => w.action === 'BLOCKED').map((w: WordItem) => ({ type: 'custom', matchLength: w.match?.length })) || []),
+        ...(assessment?.wordPolicy?.managedWordLists?.filter((w: WordItem) => w.action === 'BLOCKED').map((w: WordItem) => ({ type: w.type, matchLength: w.match?.length })) || []),
       ];
       const filterDetails = assessment?.contentPolicy?.filters
-        ?.filter((f: any) => f.action === 'BLOCKED')
-        .map((f: any) => ({ type: f.type, confidence: f.confidence })) || [];
+        ?.filter((f: FilterItem) => f.action === 'BLOCKED')
+        .map((f: FilterItem) => ({ type: f.type, confidence: f.confidence })) || [];
 
       this.log.warn('Guardrail intervened', {
         source,
@@ -430,7 +432,7 @@ export class BedrockGuardrailsService {
   /**
    * Extract blocked category names from guardrail assessment
    */
-  private extractBlockedCategories(assessment?: any): string[] {
+  private extractBlockedCategories(assessment?: Record<string, unknown>): string[] {
     const categories: string[] = [];
 
     // Content policy filters (hate, violence, etc.)
@@ -486,7 +488,7 @@ export class BedrockGuardrailsService {
    * in the assessment. The topic action will be 'NONE' instead of 'BLOCKED'.
    * We extract these for logging and monitoring to learn what triggers false positives.
    */
-  private extractDetectedTopics(assessment?: any): string[] {
+  private extractDetectedTopics(assessment?: Record<string, unknown>): string[] {
     const detected: string[] = [];
 
     if (assessment?.topicPolicy?.topics) {
@@ -509,7 +511,7 @@ export class BedrockGuardrailsService {
    * The filter action will be 'NONE' instead of 'BLOCKED'.
    * We extract these for logging and monitoring to learn what triggers false positives.
    */
-  private extractDetectedFilters(assessment?: any): string[] {
+  private extractDetectedFilters(assessment?: Record<string, unknown>): string[] {
     const detected: string[] = [];
 
     if (assessment?.contentPolicy?.filters) {
@@ -614,7 +616,7 @@ export class BedrockGuardrailsService {
     }
 
     try {
-      const message = {
+      const _message = {
         timestamp: violation.timestamp,
         violationId: violation.violationId,
         source: violation.source,
@@ -701,24 +703,24 @@ export function resetBedrockGuardrailsService(): void {
 // TODO: Replace actual implementations with Vertex AI Content Safety and Cloud Pub/Sub.
 
 // Global mock override for testing — set via setBedrockMockResponse()
-let _bedrockMockResponse: any = null;
-export function setBedrockMockResponse(response: any) { _bedrockMockResponse = response; }
+let _bedrockMockResponse: unknown = null;
+export function setBedrockMockResponse(response: unknown) { _bedrockMockResponse = response; }
 export function clearBedrockMockResponse() { _bedrockMockResponse = null; }
 
 class BedrockRuntimeClientStub {
-  constructor(_opts?: any) {}
-  async send(_cmd: any): Promise<any> {
+  constructor(_opts?: Record<string, unknown>) {}
+  async send(_cmd: Record<string, unknown>): Promise<unknown> {
     if (_bedrockMockResponse !== null) return _bedrockMockResponse;
     return { Assessments: [] };
   }
 }
 
 class SNSClientStub {
-  constructor(_opts?: any) {}
-  async send(_cmd: any): Promise<any> { return {}; }
+  constructor(_opts?: Record<string, unknown>) {}
+  async send(_cmd: Record<string, unknown>): Promise<unknown> { return {}; }
 }
 
 // Command stubs — not used at runtime, only for type compatibility
-class ApplyGuardrailCommandStub {}
-class PublishCommandStub {}
+class _ApplyGuardrailCommandStub {}
+class _PublishCommandStub {}
 

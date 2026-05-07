@@ -1,4 +1,3 @@
-import { getActiveStorageBucketName, getStorageProvider, uploadDocument, generateUploadPresignedUrl } from '@/lib/services/document-storage-service';
 import { v4 as uuidv4 } from 'uuid';
 import { Storage } from '@google-cloud/storage';
 import { PubSub } from '@google-cloud/pubsub';
@@ -62,7 +61,7 @@ export async function generateMultipartUploadUrls(
   fileName: string,
   contentType: string,
   repositoryId: number,
-  parts: number
+  _parts: number
 ): Promise<{
   uploadId: string;
   fileKey: string;

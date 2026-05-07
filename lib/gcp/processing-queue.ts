@@ -71,13 +71,13 @@ export async function sendToProcessingQueue(
   message: ProcessingJobMessage,
 ): Promise<void> {
   try {
-    const queueUrl = getProcessingQueueUrl()
+    const _queueUrl = getProcessingQueueUrl()
 
     // Determine which queue to use based on file size (same logic as SQS)
-    const targetQueue =
+    const _targetQueue =
       message.fileSize > 50 * 1024 * 1024 // 50MB threshold
         ? getHighMemoryQueueUrl()
-        : queueUrl
+        : _queueUrl
 
     log.info("Queued processing task", {
       jobId: message.jobId,
@@ -110,7 +110,7 @@ export async function triggerLambdaProcessing(
   options?: { priority?: boolean },
 ): Promise<void> {
   try {
-    const queueUrl = getProcessingQueueUrl()
+    const _queueUrl = getProcessingQueueUrl()
 
     log.info("Triggered processing task", {
       jobId,

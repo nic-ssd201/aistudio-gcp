@@ -10,7 +10,7 @@ const log = createLogger({ service: 'attachment-storage' });
 
 type StorageProvider = 'gcs';
 
-function getStorageProvider(): StorageProvider {
+function _getStorageProvider(): StorageProvider {
   return 'gcs';
 }
 

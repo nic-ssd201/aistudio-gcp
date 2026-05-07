@@ -22,7 +22,6 @@ import type {
   PIIEntity,
   TokenMapping,
   TokenizationResult,
-  PIITokenDynamoDBItem,
   GuardrailsConfig,
 } from './types';
 import { K12_PII_TYPES, CUSTOM_PII_PATTERNS, type ComprehendPIIType } from './types';
@@ -84,7 +83,7 @@ export class PIITokenizationService {
     * Detect PII entities in text using Vertex AI Text API (TODO: wire up)
     * For now, falls back to custom regex patterns only.
     */
-  async detectPII(text: string): Promise<PIIEntity[]> {
+  async detectPII(_text: string): Promise<PIIEntity[]> {
       // TODO: Wire up to Vertex AI Text API for PII detection
       // For now, fall back to custom regex patterns only
     this.log.debug('Vertex AI PII detection not yet configured — using custom patterns only');
