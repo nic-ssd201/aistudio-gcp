@@ -72,9 +72,17 @@ async function doRefresh(token: JWT, log: ReturnType<typeof createLogger>): Prom
     return null
   }
 
-  // Return null (not throw) when the secret is absent — the misconfiguration
+  // Return null (not throw) when credentials are absent — the misconfiguration
   // is already surfaced by validateEnv() at startup and flagged in auth.ts at
-  // initial sign-in time (no Google provider is registered without the secret).
+  // initial sign-in time (no Google provider is registered without both vars).
+  // Sending an empty string to Google would produce a misleading "invalid_client"
+  // error; early-returning null lets auth.ts handle the failure path cleanly.
+  const clientId = process.env.AUTH_GOOGLE_ID
+  if (!clientId) {
+    log.error("AUTH_GOOGLE_ID is not set — cannot refresh Google token")
+    return null
+  }
+
   const secret = process.env.AUTH_GOOGLE_SECRET
   if (!secret) {
     log.error("AUTH_GOOGLE_SECRET is not set — cannot refresh Google token")
@@ -87,7 +95,7 @@ async function doRefresh(token: JWT, log: ReturnType<typeof createLogger>): Prom
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
       body: new URLSearchParams({
         grant_type: "refresh_token",
-        client_id: process.env.AUTH_GOOGLE_ID ?? "",
+        client_id: clientId,
         client_secret: secret,
         refresh_token: token.refreshToken as string,
       }),

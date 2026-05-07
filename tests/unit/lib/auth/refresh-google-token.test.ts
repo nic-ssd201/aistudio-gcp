@@ -8,7 +8,8 @@
  * - Missing expires_in: default to 1 hour, not the old expired timestamp
  * - expires_in = 0: floor prevents immediate re-refresh loop
  * - Error response from Google (invalid_grant): returns null
- * - Missing AUTH_GOOGLE_SECRET at refresh time: returns null with error log
+ * - Missing AUTH_GOOGLE_ID at refresh time: returns null with error log (no fetch)
+ * - Missing AUTH_GOOGLE_SECRET at refresh time: returns null with error log (no fetch)
  */
 
 import { refreshGoogleToken } from "@/lib/auth/refresh-google-token"
@@ -152,6 +153,16 @@ describe("refreshGoogleToken", () => {
 
   it("returns null when refreshToken is absent on the JWT", async () => {
     const result = await refreshGoogleToken({ sub: "user-123", provider: "google" })
+
+    expect(result).toBeNull()
+    expect(global.fetch).not.toHaveBeenCalled()
+  })
+
+  it("returns null when AUTH_GOOGLE_ID is missing", async () => {
+    delete process.env.AUTH_GOOGLE_ID
+    global.fetch = jest.fn()
+
+    const result = await refreshGoogleToken(makeToken())
 
     expect(result).toBeNull()
     expect(global.fetch).not.toHaveBeenCalled()
