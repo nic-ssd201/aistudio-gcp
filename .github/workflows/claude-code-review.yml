@@ -17,8 +17,9 @@ jobs:
     #   github.event.pull_request.user.login == 'external-contributor' ||
     #   github.event.pull_request.user.login == 'new-developer' ||
     #   github.event.pull_request.author_association == 'FIRST_TIME_CONTRIBUTOR'
-    
+
     runs-on: ubuntu-latest
+    continue-on-error: true  # Non-blocking: review is informational, requires CLAUDE_CODE_OAUTH_TOKEN secret
     permissions:
       contents: read
       pull-requests: read
