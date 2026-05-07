@@ -58,7 +58,8 @@ export function getActiveRefreshCount(): number {
 export async function refreshGoogleToken(token: JWT): Promise<JWT | null> {
   const log = createLogger({ context: "google-token-refresh" })
 
-  const sub = token.sub as string | undefined
+  // JWT['sub'] is already string | undefined — no cast needed.
+  const sub = token.sub
 
   // Fail-closed when sub is absent: return null immediately to force re-auth
   // rather than routing through doRefresh.  A sub-less JWT is structurally

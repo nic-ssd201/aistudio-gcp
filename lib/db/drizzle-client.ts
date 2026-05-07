@@ -27,6 +27,9 @@ import {
 import { createLogger, generateRequestId, startTimer } from "@/lib/logger";
 import * as schema from "./schema";
 
+// Module-level logger for connection-lifecycle and PostgreSQL notice events.
+const dbLog = createLogger({ module: 'drizzle-client' })
+
 // ============================================
 // PostgreSQL Connection Configuration
 // ============================================
@@ -101,8 +104,22 @@ function getPgClient(): ReturnType<typeof postgres> {
       idle_timeout: Number.parseInt(process.env.DB_IDLE_TIMEOUT || "20", 10),
       connect_timeout: Number.parseInt(process.env.DB_CONNECT_TIMEOUT || "10", 10),
       max_lifetime: 60 * 60, // 1 hour - forces reconnection for credential rotation
-      prepare: true, // Enable prepared statements for performance
-      onnotice: (): void => {}, // Suppress PostgreSQL notices
+      // prepare: true improves performance via server-side prepared statements,
+      // but is INCOMPATIBLE with PgBouncer in `transaction` pooling mode.
+      // Direct Cloud SQL connections (socket or TCP) are fine; if the deployment
+      // ever moves behind PgBouncer in transaction mode, change to `prepare: false`
+      // to avoid `prepared statement "s_X" does not exist` errors.
+      prepare: true,
+      // Route PostgreSQL notices to debug-level logging so they're recoverable
+      // when diagnosing issues (e.g. RAISE NOTICE from triggers, implicit casts,
+      // deprecated-feature warnings) without polluting normal output.
+      onnotice: (notice: { message?: string; severity?: string; detail?: string }): void => {
+        dbLog.debug('PostgreSQL notice', {
+          message: notice.message,
+          severity: notice.severity,
+          detail: notice.detail,
+        })
+      },
       debug: sqlLoggingEnabled, // Opt-in via SQL_LOGGING=true (default: off)
     };
 

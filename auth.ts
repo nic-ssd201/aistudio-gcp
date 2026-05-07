@@ -6,6 +6,20 @@ import { createLogger } from "@/lib/auth/edge-logger"
 import { refreshGoogleToken } from "@/lib/auth/refresh-google-token"
 import { hasVerifiedGoogleEmail } from "@/lib/auth/google-email-guard"
 
+// Log the effective Google prompt mode at module load so operators can confirm
+// what they actually got (consent vs select_account) without reading source code.
+// Edge-logger is safe here — auth.ts runs in both Edge and Node runtimes.
+{
+  const log = createLogger({ context: 'auth-config' })
+  const effectivePrompt =
+    process.env.AUTH_GOOGLE_FORCE_CONSENT?.toLowerCase() === 'false'
+      ? 'select_account'
+      : 'consent'
+  log.info(`Google OAuth prompt mode: "${effectivePrompt}"`, {
+    AUTH_GOOGLE_FORCE_CONSENT: process.env.AUTH_GOOGLE_FORCE_CONSENT ?? '(unset — defaulting to consent)',
+  })
+}
+
 export const authConfig: NextAuthConfig = {
   providers: [
     // Google OIDC — sole auth provider for SSD201 GCP deployment.
@@ -69,6 +83,11 @@ export const authConfig: NextAuthConfig = {
       // `useSession().update()` is not called anywhere. If that ever changes,
       // fail-closed remains the correct behaviour for demotion/revocation —
       // better to re-auth once than to serve a stale high-privilege token.
+      //
+      // GREP GUARD: verify `useSession().update()` is not called before relaxing
+      // this branch. Run: grep -r "useSession" . --include="*.ts" --include="*.tsx" | grep "\.update("
+      // Any hit means a client is calling update() and every such call will silently
+      // log all affected users out. Audit before removing this comment.
       if (trigger === "update") {
         log.info("Session update triggered — forcing re-authentication (fail-closed)")
         return null;
