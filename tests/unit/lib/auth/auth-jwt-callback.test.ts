@@ -363,4 +363,14 @@ describe("redirect() callback — URL handling", () => {
     const result = await callbacks.redirect!({ url: "not-a-url", baseUrl })
     expect(result).toBe(`${baseUrl}/dashboard`)
   })
+
+  it("matches correctly when baseUrl has a trailing slash", async () => {
+    // Both sides normalised to .origin so trailing-slash AUTH_URL still matches.
+    const baseUrlWithSlash = "https://app.example.com/"
+    const result = await callbacks.redirect!({
+      url: "https://app.example.com/chat",
+      baseUrl: baseUrlWithSlash,
+    })
+    expect(result).toBe("https://app.example.com/chat")
+  })
 })

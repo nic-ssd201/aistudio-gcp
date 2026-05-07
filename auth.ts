@@ -300,12 +300,13 @@ export const authConfig: NextAuthConfig = {
     async redirect({ url, baseUrl }) {
       // Allows relative callback URLs
       if (url.startsWith("/")) return `${baseUrl}${url}`
-      // Allows callback URLs on the same origin. Wrapped in try/catch because
-      // new URL() throws on malformed strings (e.g. "javascript:alert(1)").
-      // Any such string falls through to the safe /dashboard default rather
-      // than surfacing an unhandled exception to the auth layer.
+      // Allows callback URLs on the same origin. Both sides are normalised to
+      // .origin so a trailing-slash AUTH_URL (e.g. "https://app.example.com/")
+      // still matches correctly. Wrapped in try/catch because new URL() throws
+      // on malformed strings (e.g. "not-a-url", "javascript:alert(1)") — any
+      // such string falls through to the safe /dashboard default.
       try {
-        if (new URL(url).origin === baseUrl) return url
+        if (new URL(url).origin === new URL(baseUrl).origin) return url
       } catch {
         // Malformed URL — fall through to safe default below.
       }
