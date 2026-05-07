@@ -56,7 +56,7 @@ AUTH_GOOGLE_ID=your-google-client-id
 AUTH_GOOGLE_SECRET=your-google-client-secret
 
 # Storage — Google Cloud Storage
-GCS_BUCKET_NAME=your-dev-bucket-name
+GCS_BUCKET=your-dev-bucket-name
 
 # AI Providers (optional — fallback if not set in admin DB)
 OPENAI_API_KEY=sk-...

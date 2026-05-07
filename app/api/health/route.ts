@@ -151,7 +151,7 @@ export async function GET() {
   if (isDev && !allHealthy) {
     const hints: string[] = []
     if (envStatus !== 'healthy') {
-      hints.push("Check env vars: AUTH_URL, AUTH_SECRET, AUTH_GOOGLE_ID, AUTH_GOOGLE_SECRET, GCS_BUCKET_NAME, and one of DATABASE_URL / DB_HOST / CLOUD_SQL_SOCKET_PATH.")
+      hints.push("Check env vars: AUTH_URL, AUTH_SECRET, AUTH_GOOGLE_ID, AUTH_GOOGLE_SECRET, GCS_BUCKET, and one of DATABASE_URL / DB_HOST / CLOUD_SQL_SOCKET_PATH.")
     }
     if (authStatus !== 'healthy') {
       hints.push("AUTH_SECRET and both AUTH_GOOGLE_ID / AUTH_GOOGLE_SECRET must be set.")

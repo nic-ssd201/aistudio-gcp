@@ -51,7 +51,7 @@ Optional tuning:
 
 | Variable | Description | Example | Required |
 |----------|-------------|---------|----------|
-| `GCS_BUCKET_NAME` | GCS bucket for document/file storage | `aistudio-dev-documents` | ✅ |
+| `GCS_BUCKET` | GCS bucket for document/file storage | `aistudio-dev-documents` | ✅ |
 | `GCS_REGION` | Bucket region | `us-central1` | ❌ |
 
 ### Session
@@ -96,7 +96,7 @@ AUTH_URL=http://localhost:3000
 AUTH_SECRET=dev-secret-change-in-prod
 AUTH_GOOGLE_ID=<your-google-client-id>
 AUTH_GOOGLE_SECRET=<your-google-client-secret>
-GCS_BUCKET_NAME=<your-gcs-bucket>
+GCS_BUCKET=<your-gcs-bucket>
 ```
 
 ---
@@ -114,7 +114,7 @@ AUTH_URL=https://app.yourdomain.com
 AUTH_SECRET=<from Secret Manager>
 AUTH_GOOGLE_ID=<from Secret Manager>
 AUTH_GOOGLE_SECRET=<from Secret Manager>
-GCS_BUCKET_NAME=aistudio-prod-documents
+GCS_BUCKET=aistudio-prod-documents
 ```
 
 ---

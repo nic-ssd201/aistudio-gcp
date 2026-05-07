@@ -5,7 +5,7 @@
  * - Auth: Google OIDC required (both ID + secret), partial config (ID without secret)
  * - Database: DATABASE_URL, TCP (DB_HOST+USER+PASS), socket (CLOUD_SQL+USER+PASS),
  *   none configured (should fail)
- * - Required vars: AUTH_URL, AUTH_SECRET, GCS_BUCKET_NAME
+ * - Required vars: AUTH_URL, AUTH_SECRET, GCS_BUCKET
  */
 
 import { validateEnv } from "@/lib/env-validation"
@@ -21,7 +21,7 @@ const BASE_ENV: NodeJS.ProcessEnv = {
   // Database — DATABASE_URL (local dev)
   DATABASE_URL: "postgresql://user:pass@localhost:5432/aistudio",
   // Storage
-  GCS_BUCKET_NAME: "aistudio-docs",
+  GCS_BUCKET: "aistudio-docs",
   // AI
   ANTHROPIC_API_KEY: "sk-ant-test",
 }
@@ -143,12 +143,12 @@ describe("validateEnv()", () => {
     expect(missing).toContain("AUTH_SECRET")
   })
 
-  it("fails when GCS_BUCKET_NAME is missing", () => {
-    delete process.env.GCS_BUCKET_NAME
+  it("fails when GCS_BUCKET is missing", () => {
+    delete process.env.GCS_BUCKET
 
     const { isValid, missing } = validateEnv()
     expect(isValid).toBe(false)
-    expect(missing).toContain("GCS_BUCKET_NAME")
+    expect(missing).toContain("GCS_BUCKET")
   })
 
   // ── AI API keys warning ───────────────────────────────────────────────────

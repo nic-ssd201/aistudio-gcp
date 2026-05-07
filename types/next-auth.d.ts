@@ -15,9 +15,11 @@ declare module "next-auth" {
     // not in the client-visible session object.
     accessToken?: string
     idToken?: string
-    /** JWT issued-at (seconds since epoch). Propagated so the polling cache can
-     *  key on sub+iat and avoid returning a stale role set when a user
-     *  re-authenticates within the 5-min TTL window. */
+    /** Login-time issued-at (seconds since epoch). Propagated from token.loginIat
+     *  so the polling cache can key on sub+iat and avoid returning a stale role
+     *  set when a user re-authenticates within the 5-min TTL window.
+     *  NOTE: populated from token.loginIat (not token.iat) because NextAuth's
+     *  jose.EncryptJWT resets the standard iat claim on every re-encode. */
     iat?: number
     /** Role version counter from the JWT, compared against the DB value by
      *  /api/auth/refresh-session to detect role changes and trigger re-auth.
@@ -42,9 +44,11 @@ declare module "next-auth/jwt" {
     /** Auth provider — always 'google' for SSD201 GCP deployment. */
     provider?: 'google'
     roleVersion?: number
-    /** JWT issued-at (seconds since epoch). NextAuth's default JWT type includes
-     *  this, but it is declared here explicitly so the augmentation contract is
-     *  self-documenting: auth.ts reads token.iat to propagate it to Session. */
-    iat?: number
+    /** Stable login-time marker (seconds since epoch). Set once at sign-in from
+     *  the Google OIDC id_token's iat claim and never overwritten by NextAuth's
+     *  internal re-encode step (jose.EncryptJWT.setIssuedAt() only touches the
+     *  standard `iat` claim, not custom fields). Propagated to Session.iat so the
+     *  polling cache can key on sub+loginIat for stable hits. */
+    loginIat?: number
   }
 }

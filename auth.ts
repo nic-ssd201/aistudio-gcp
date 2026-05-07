@@ -116,7 +116,14 @@ export const authConfig: NextAuthConfig = {
             refreshToken: account.refresh_token,
             idToken: account.id_token,
             expiresAt: expiresAt,
-            iat: decoded.iat,
+            // loginIat is our stable login-time marker.  NextAuth's jose.EncryptJWT
+            // calls .setIssuedAt() on every encode which overwrites the standard `iat`
+            // claim to the current timestamp.  Keying the polling cache on `iat` would
+            // therefore produce a fresh cache key on every re-encode (permanent miss).
+            // loginIat is a custom claim that NextAuth never touches, so it stays
+            // constant for the lifetime of the login session and gives the cache a
+            // stable key to hit.  See lib/auth/polling-session-cache.ts.
+            loginIat: decoded.iat || Math.floor(Date.now() / 1000),
             roleVersion: 0, // Initialize role version
             provider: 'google', // Always Google for SSD201
           }
@@ -161,7 +168,7 @@ export const authConfig: NextAuthConfig = {
             refreshToken: account.refresh_token,
             idToken: account.id_token,
             expiresAt: expiresAt,
-            iat: Math.floor(Date.now() / 1000),
+            loginIat: Math.floor(Date.now() / 1000), // stable login-time marker (see happy-path comment)
             roleVersion: 0,
             provider: 'google', // Always Google for SSD201
           };
@@ -281,9 +288,13 @@ export const authConfig: NextAuthConfig = {
       // - Never log or expose these tokens in client-side code
       session.accessToken = token.accessToken as string;
       session.idToken = token.idToken as string;
-      // Propagate iat so the polling session cache can key on sub+iat and avoid
-      // returning a stale role set when the user re-authenticates within TTL.
-      session.iat = typeof token.iat === 'number' ? token.iat : undefined;
+      // Propagate loginIat (our stable login-time marker) as session.iat so the
+      // polling session cache can key on sub+loginIat and avoid returning a stale
+      // role set when the user re-authenticates within the 5-min TTL window.
+      // token.loginIat is a custom JWT claim that NextAuth never overwrites; the
+      // standard token.iat is reset to Date.now() on every re-encode by jose's
+      // .setIssuedAt() and would therefore produce a fresh cache key per request.
+      session.iat = typeof token.loginIat === 'number' ? token.loginIat : undefined;
       // Propagate roleVersion so /api/auth/refresh-session can compare against the
       // DB value and detect role changes.  Without this the sessionRoleVersion is
       // always undefined (→ 0), which causes needsRefresh=true on every poll as
