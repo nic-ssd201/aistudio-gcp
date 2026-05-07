@@ -3,8 +3,8 @@
 
 /* Define custom theme colors using Tailwind CSS v4 syntax */
 @theme {
-  /* Sea Foam - hsl(43 27% 91%) */
-  --color-background: oklch(0.926 0.024 89.88);
+  /* Warm brick-tinted cream — pale terracotta, replaces Sea Foam */
+  --color-background: oklch(0.94 0.025 40);
   /* Pacific - hsl(200 34% 22%) */
   --color-foreground: oklch(0.362 0.056 237.37);
   
@@ -17,15 +17,15 @@
   
   /* Whulge - hsl(202 41% 35%) */
   --color-primary: oklch(0.47 0.089 237.66);
-  /* Skylight - hsl(45 100% 96%) */
-  --color-primary-foreground: oklch(0.975 0.039 95.76);
+  /* Warm near-white for on-primary text */
+  --color-primary-foreground: oklch(0.975 0.02 40);
   
-  /* Driftwood - hsl(41 24% 80%) */
-  --color-secondary: oklch(0.855 0.034 87.83);
+  /* Terracotta - dusty brick, warm muted clay */
+  --color-secondary: oklch(0.78 0.07 35);
   --color-secondary-foreground: oklch(0.362 0.056 237.37);
-  
-  /* Driftwood */
-  --color-muted: oklch(0.855 0.034 87.83);
+
+  /* Terracotta */
+  --color-muted: oklch(0.78 0.07 35);
   /* Cedar - hsl(151 20% 34%) */
   --color-muted-foreground: oklch(0.487 0.056 170.15);
   
@@ -37,9 +37,9 @@
   --color-destructive: oklch(0.637 0.237 25.34);
   --color-destructive-foreground: oklch(1 0 0);
   
-  /* Slightly lighter Driftwood for borders - hsl(41 24% 85%) */
-  --color-border: oklch(0.892 0.023 87.83);
-  --color-input: oklch(0.892 0.023 87.83);
+  /* Lighter terracotta for borders */
+  --color-border: oklch(0.85 0.04 35);
+  --color-input: oklch(0.85 0.04 35);
   --color-ring: oklch(0.47 0.089 237.66);
 }
 
@@ -63,8 +63,8 @@ body {
 .dark body {
   /* Pacific - hsl(200 34% 22%) background */
   background-color: oklch(0.362 0.056 237.37);
-  /* Sea Foam - hsl(43 27% 91%) text */
-  color: oklch(0.926 0.024 89.88);
+  /* Warm cream text on dark */
+  color: oklch(0.94 0.025 40);
 }
 
 .dark * {
