@@ -52,22 +52,24 @@ export async function resolveUserId(
   }
 
   // Slow path: provision the user
-  log.info("User not found by Cognito sub — provisioning", {
-    cognitoSub: sanitizeForLogging(session.sub),
+  log.info("User not found by OIDC sub — provisioning", {
+    // Note: the DB column is still named cognito_sub; rename tracked in follow-up
+    sub: sanitizeForLogging(session.sub),
     hasEmail: !!session.email,
   })
 
-  // Check by email (migration from old auth — link the new cognitoSub to
-  // the existing record rather than creating a duplicate row)
+  // Check by email (migration path — link the OIDC sub to the existing record
+  // rather than creating a duplicate row)
   if (session.email) {
     try {
       const byEmail = await getUserByEmail(session.email)
       if (byEmail) {
-        log.info("User found by email, linking Cognito sub", {
+        log.info("User found by email, linking OIDC sub", {
           userId: byEmail.id,
         })
-        // MUST explicitly update cognitoSub — createUser UPSERT conflicts on
-        // cognitoSub, not email. Without this call a duplicate row is inserted.
+        // MUST explicitly update cognitoSub column — createUser UPSERT conflicts on
+        // that column, not email. Without this call a duplicate row is inserted.
+        // Column rename to oidc_sub / auth_sub is tracked as a follow-up migration.
         // Mirrors getCurrentUserAction.ts:100
         await updateUser(byEmail.id, { cognitoSub: session.sub })
         return byEmail.id
@@ -92,7 +94,7 @@ export async function resolveUserId(
   // bad data in the users table and break downstream notification delivery.
   if (!session.email) {
     log.warn("Cannot provision user: session has no email address", {
-      cognitoSub: sanitizeForLogging(session.sub),
+      sub: sanitizeForLogging(session.sub),
     })
     throw ErrorFactories.missingRequiredField("email")
   }
@@ -115,7 +117,7 @@ export async function resolveUserId(
   if (!userId || typeof userId !== "number" || userId <= 0) {
     throw ErrorFactories.dbQueryFailed(
       "createUser UPSERT",
-      new Error(`Returned no valid ID for cognitoSub: ${sanitizeForLogging(session.sub)}`)
+      new Error(`Returned no valid ID for sub: ${sanitizeForLogging(session.sub)}`)
     )
   }
 

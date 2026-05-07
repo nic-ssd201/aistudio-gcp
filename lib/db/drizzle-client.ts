@@ -65,16 +65,16 @@ function getDatabaseUrl(): string {
 /**
  * Lazy-initialized postgres.js client instance with connection pooling
  *
- * Connection Pool Sizing Calculation:
- * - Aurora Serverless v2 max_connections: ~600 (for 2 ACU in dev), ~1200+ in prod
- * - Expected ECS tasks: 2-10 (dev) to 4-20 (prod) with auto-scaling
- * - Max connections per task: 20 (configurable via DB_MAX_CONNECTIONS)
- * - Total fleet connections: 40-400 (well within Aurora limits)
+ * Connection Pool Sizing Calculation (GCP / Cloud Run):
+ * - Cloud SQL max_connections: typically 100–1000 depending on instance tier
+ * - Expected Cloud Run instances: 1-10 (scales to zero when idle)
+ * - Max connections per instance: 20 (configurable via DB_MAX_CONNECTIONS)
+ * - Total fleet connections: 20-200 (well within Cloud SQL limits)
  *
  * Timeouts:
  * - idle_timeout: 20s (aggressive cleanup for cost optimization in serverless)
- * - max_lifetime: 3600s (1 hour, supports Aurora credential rotation)
- * - connect_timeout: 10s (fail fast on network issues)
+ * - max_lifetime: 3600s (1 hour — reasonable ceiling for long-lived containers)
+ * - connect_timeout: 10s (fail fast on network/socket issues)
  *
  * Lazy initialization is required because Next.js builds pages statically
  * and the database client should only be created at runtime.
@@ -85,8 +85,8 @@ let pgClient: ReturnType<typeof postgres> | null = null;
 
 function getPgClient(): ReturnType<typeof postgres> {
   if (!pgClient) {
-    // SSL configuration: required for AWS Aurora, optional for local development
-    // Set DB_SSL=false for local PostgreSQL without SSL certificates
+    // SSL configuration: required for Cloud SQL TCP connections; set DB_SSL=false
+    // for local PostgreSQL without SSL certificates or Cloud SQL socket mode
     const sslEnabled = process.env.DB_SSL !== "false";
 
     // SQL_LOGGING enables verbose query logging (opt-in for security)
@@ -694,7 +694,7 @@ export async function validateDatabaseConnection(): Promise<{
 /**
  * Close database connection pool
  *
- * Call this during graceful shutdown (e.g., ECS SIGTERM) to ensure
+ * Call this during graceful shutdown (e.g., Cloud Run SIGTERM) to ensure
  * all connections are properly closed before the process exits.
  *
  * @example

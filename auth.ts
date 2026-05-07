@@ -47,9 +47,13 @@ export const authConfig: NextAuthConfig = {
 
       // Handle session update trigger (when roles change)
       if (trigger === "update") {
-        log.info("Session update triggered - forcing re-authentication")
-        // Force token refresh by returning null
-        // This will cause the user to re-authenticate
+        // Intentionally fail-closed: returning null forces full re-authentication
+        // rather than serving a potentially stale token after a role change.
+        // This is correct for demotion/revocation — the user's next request will
+        // get a fresh token with current roles. If the roleVersion bumping approach
+        // in get-current-user-action.ts is preferred, remove this null return and
+        // instead return { ...token, roleVersion: (token.roleVersion as number ?? 0) + 1 }.
+        log.info("Session update triggered — forcing re-authentication (fail-closed)")
         return null;
       }
 
@@ -152,9 +156,12 @@ export const authConfig: NextAuthConfig = {
       const now = Date.now()
       const isExpired = now > expiresAt
 
-      // Proactively refresh when less than 5 minutes remain (avoids mid-request expiry)
-      const fiveMinutes = 5 * 60 * 1000
-      const shouldRefresh = (expiresAt - now) < fiveMinutes
+      // Proactively refresh when less than REFRESH_THRESHOLD_MS remain.
+      // 5 minutes is conservative for normal web requests; long-running paths
+      // (assistant-architect streaming, scheduled execution) are typically
+      // ≤2 min per request, so this window covers them comfortably.
+      const REFRESH_THRESHOLD_MS = 5 * 60 * 1000
+      const shouldRefresh = (expiresAt - now) < REFRESH_THRESHOLD_MS
 
       log.debug("Token status check", {
         isExpired,
@@ -282,10 +289,16 @@ export const authConfig: NextAuthConfig = {
     },
     async signIn({ account, profile }) {
       // Reject sign-ins from Google accounts with unverified emails.
-      // Without this check, an unverified Google account could match an
-      // existing user record by email via resolveUserId's email-fallback
-      // path, potentially allowing account takeover through email collision.
-      if (account?.provider === 'google' && profile?.email_verified === false) {
+      // Using `!== true` (not `=== false`) so a missing/malformed claim is
+      // also rejected — defense-in-depth against a future provider that omits
+      // the field. Without this check, an unverified account could collide with
+      // an existing user record via resolveUserId's email-fallback path.
+      if (account?.provider === 'google' && profile?.email_verified !== true) {
+        const log = createLogger({ context: "auth-signin-callback" })
+        log.warn("Sign-in rejected: Google email not verified", {
+          email: profile?.email,
+          emailVerified: profile?.email_verified,
+        })
         return false;
       }
       return true;

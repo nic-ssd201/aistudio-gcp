@@ -58,7 +58,6 @@
     "@assistant-ui/react-markdown": "^0.12.5",
     "@aws-sdk/client-bedrock-runtime": "^3.982.0",
     "@aws-sdk/client-cloudwatch-logs": "^3.982.0",
-    "@aws-sdk/client-cognito-identity-provider": "^3.982.0",
     "@aws-sdk/client-comprehend": "^3.982.0",
     "@aws-sdk/client-dynamodb": "^3.982.0",
     "@aws-sdk/client-kms": "^3.982.0",
