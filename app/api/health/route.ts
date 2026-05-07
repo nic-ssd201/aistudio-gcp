@@ -18,10 +18,11 @@ import { validateEnv } from "@/lib/env-validation"
  * unauthenticated probers cannot enumerate which credentials are missing or
  * infer the infrastructure topology from the response body.
  *
- * - All environments: `{status, timestamp, checks: {<name>: {status}}}` +
- *   `hasSession` (boolean — never the session user's email).
- * - Non-production only: `missingVariables[]`, per-check `connectionType`,
- *   and `diagnostics.hints[]` are included to ease local debugging.
+ * - All environments: `{status, timestamp, checks: {<name>: {status}}}`.
+ * - Non-production only: `hasSession` (boolean), `missingVariables[]`,
+ *   per-check `connectionType`, and `diagnostics.hints[]` are included to ease
+ *   local debugging. `hasSession` is omitted in production — probes need only
+ *   the HTTP status code; the boolean adds no value over the `status` field.
  */
 export async function GET() {
   const requestId = generateRequestId();
@@ -129,8 +130,10 @@ export async function GET() {
       },
       authentication: {
         status: authStatus,
-        // Boolean only — never expose session user identity in probe response.
-        hasSession: sessionCheck?.hasSession ?? false,
+        // hasSession exposed in dev only — probes need only the HTTP status
+        // code; the boolean doesn't add information beyond the status field
+        // and is omitted from production to keep the surface minimal.
+        ...(isDev ? { hasSession: sessionCheck?.hasSession ?? false } : {}),
       },
       database: {
         status: dbStatus,

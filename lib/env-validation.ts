@@ -20,7 +20,10 @@ const ENV_VARS: EnvVar[] = [
   { name: 'AUTH_URL', required: true, description: 'NextAuth base URL' },
   { name: 'AUTH_SECRET', required: true, description: 'NextAuth secret for JWT signing' },
 
-  // Google OIDC — required; validated dynamically below as a pair
+  // Google OIDC — both are required, but `required: false` here is intentional:
+  // pair-level validation is handled as a group below (see "Google OIDC" block
+  // in validateEnv) so the per-field loop does not add them individually to
+  // `missing[]` before the pair check runs (which would produce duplicate entries).
   { name: 'AUTH_GOOGLE_ID', required: false, description: 'Google OAuth client ID' },
   { name: 'AUTH_GOOGLE_SECRET', required: false, description: 'Google OAuth client secret' },
 

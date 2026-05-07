@@ -84,7 +84,7 @@ export const authConfig: NextAuthConfig = {
           // DO NOT use this pattern for parsing JWTs from untrusted sources or user input.
           // For untrusted JWTs, always use proper JWT verification libraries like 'jose'.
           const base64Payload = account.id_token.split('.')[1];
-          const payload = Buffer.from(base64Payload, 'base64').toString('utf-8');
+          const payload = Buffer.from(base64Payload, 'base64url').toString('utf-8');
           const decoded = JSON.parse(payload);
 
           const issuedAt = decoded.iat ? decoded.iat * 1000 : Date.now()

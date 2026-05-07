@@ -11,6 +11,8 @@
  *   missing expires_at → 1-hour default
  * - jwt() proactive refresh: expiresAt < REFRESH_THRESHOLD_MS → refresh called;
  *   expiresAt > threshold → not called
+ * - jwt() TOKEN_REFRESH_THRESHOLD_MS env override: custom value respected when
+ *   >= 60 000 ms; values below the 60 s floor fall back to the 5-min default
  * - signIn() integration: returns false when hasVerifiedGoogleEmail fails
  * - redirect() hardening: malformed URL falls through to safe /dashboard default
  */
@@ -438,6 +440,55 @@ describe("session() callback", () => {
     expect(result.user.email).toBe("")
     expect(result.accessToken).toBe("")
     expect(result.idToken).toBe("")
+  })
+})
+
+// ── jwt() — TOKEN_REFRESH_THRESHOLD_MS env override ──────────────────────────
+
+describe("jwt() callback — TOKEN_REFRESH_THRESHOLD_MS env override", () => {
+  const originalThreshold = process.env.TOKEN_REFRESH_THRESHOLD_MS
+
+  afterEach(() => {
+    // Restore original value (or delete if it was never set)
+    if (originalThreshold === undefined) {
+      delete process.env.TOKEN_REFRESH_THRESHOLD_MS
+    } else {
+      process.env.TOKEN_REFRESH_THRESHOLD_MS = originalThreshold
+    }
+  })
+
+  it("respects TOKEN_REFRESH_THRESHOLD_MS when >= 60 000 ms (2-min override)", async () => {
+    process.env.TOKEN_REFRESH_THRESHOLD_MS = "120000" // 2 minutes
+    // Token expires in 90 seconds — inside the 2-min custom threshold.
+    const token = makeExistingToken({ expiresAt: Date.now() + 90 * 1000 })
+    mockRefreshGoogleToken.mockResolvedValue({ ...token, expiresAt: Date.now() + 3600 * 1000 })
+
+    await callbacks.jwt!({
+      token,
+      account: null,
+      user: { id: "", email: "", emailVerified: null },
+      session: undefined,
+    })
+
+    expect(mockRefreshGoogleToken).toHaveBeenCalledTimes(1)
+  })
+
+  it("enforces 60 s floor: values < 60 000 ms fall back to the 5-min default", async () => {
+    process.env.TOKEN_REFRESH_THRESHOLD_MS = "30000" // 30 s — below the 60 s floor
+    // With the floor enforced, effective threshold remains 5 minutes.
+    // Token expires in 4 minutes — inside the 5-min default, so refresh fires.
+    const token = makeExistingToken({ expiresAt: Date.now() + 4 * 60 * 1000 })
+    mockRefreshGoogleToken.mockResolvedValue({ ...token, expiresAt: Date.now() + 3600 * 1000 })
+
+    await callbacks.jwt!({
+      token,
+      account: null,
+      user: { id: "", email: "", emailVerified: null },
+      session: undefined,
+    })
+
+    // 30 s is below the 60 s floor → falls back to 5 min → 4-min token triggers refresh
+    expect(mockRefreshGoogleToken).toHaveBeenCalledTimes(1)
   })
 })
 
