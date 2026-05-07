@@ -14,17 +14,18 @@ jobs:
       id-token: write
     env:
       REVIEW_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
 
     steps:
       - name: Check if review token is configured
         id: check-token
         run: |
-          if [ -n "$REVIEW_TOKEN" ]; then
+          if [ -n "$REVIEW_TOKEN" ] || [ -n "$ANTHROPIC_API_KEY" ]; then
             echo "available=true" >> $GITHUB_OUTPUT
           else
             echo "available=false" >> $GITHUB_OUTPUT
-            echo "CLAUDE_CODE_OAUTH_TOKEN secret not configured — skipping automated review."
-            echo "To enable: add CLAUDE_CODE_OAUTH_TOKEN to repo Settings > Secrets > Actions."
+            echo "No Anthropic token configured — skipping automated review."
+            echo "To enable: add ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN to repo Settings > Secrets > Actions."
           fi
 
       - name: Checkout repository
