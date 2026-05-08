@@ -11,6 +11,7 @@ import { withActionState, unauthorized } from '@/lib/api-utils'
 import { handleError } from '@/lib/error-utils'
 import { type ActionState } from '@/types/actions-types'
 import { getMaxFileSize, formatFileSize } from '@/lib/file-validation'
+import { isSafeStorageKey } from '@/lib/utils/path-safety'
 
 // Ensure this route is built for the Node.js runtime
 export const runtime = "nodejs"
@@ -77,24 +78,40 @@ export async function POST(request: NextRequest) {
 
     const { key, fileName, fileSize, conversationId } = validation.data
 
+    // Path-safety + ownership checks run BEFORE the DB-hitting size check —
+    // they're pure CPU and the most attacker-correlated, so failing closed
+    // here costs the smallest amount of work for hostile input.
+
+    // Reject keys with `..`, `.`, empty, or escape segments. Without this a key
+    // like `<userId>/../<victim-userId>/file.pdf` passes the userId-prefix check
+    // below; the storage SDK then resolves the `..` and serves another user's
+    // document.
+    if (!isSafeStorageKey(key)) {
+      log.warn("Rejected document key with unsafe segments", { key, userId });
+      timer({ status: "error", reason: "unsafe_key" });
+      return { isSuccess: false, message: 'Unauthorized access to document' }
+    }
+
+    // Verify the storage key belongs to this user (after path-safety check above —
+    // both checks are required: prefix proves you own the top-level prefix,
+    // path-safety proves you can't escape it via `..`).
+    if (!key.startsWith(`${userId}/`)) {
+      log.warn("Unauthorized access attempt to storage key", { key, userId });
+      timer({ status: "error", reason: "unauthorized_access" });
+      return {
+        isSuccess: false,
+        message: 'Unauthorized access to document'
+      }
+    }
+
     // Verify file size is within limits
     const maxFileSize = await getMaxFileSize()
     if (fileSize > maxFileSize) {
       log.warn("File size exceeds limit", { fileSize, maxFileSize });
       timer({ status: "error", reason: "file_too_large" });
-      return { 
-        isSuccess: false, 
-        message: `File size must be less than ${formatFileSize(maxFileSize)}` 
-      }
-    }
-
-    // Verify the S3 key belongs to this user
-    if (!key.startsWith(`${userId}/`)) {
-      log.error("Unauthorized access attempt to S3 key", { key, userId });
-      timer({ status: "error", reason: "unauthorized_access" });
-      return { 
-        isSuccess: false, 
-        message: 'Unauthorized access to document' 
+      return {
+        isSuccess: false,
+        message: `File size must be less than ${formatFileSize(maxFileSize)}`
       }
     }
 

@@ -4,6 +4,7 @@ import { getCurrentUserAction } from '@/actions/db/get-current-user-action';
 import { createLogger, generateRequestId, startTimer } from '@/lib/logger';
 import { getConversationById } from '@/lib/db/drizzle';
 import { getActiveStorageBucketName, getDocumentSignedUrl } from '@/lib/services/document-storage-service';
+import { areSafeStorageSegments } from '@/lib/utils/path-safety';
 
 /**
  * Secure Image Proxy API
@@ -21,10 +22,31 @@ export async function GET(
   const log = createLogger({ requestId, route: 'api.images.get' });
   
   const { key: keyParts } = await params;
+
+  // Reject path-traversal segments (`..`, `.`, empty, embedded slashes) BEFORE
+  // joining or doing any DB work. Without this, a key like
+  //   v2/generated-images/<own-uuid>/../<victim-uuid>/file.png
+  // passes the prefix + UUID + ownership checks below (because pathParts[2]
+  // is your own UUID) and then GCS resolves the `..` server-side, signing a
+  // URL for another user's object.
+  if (!areSafeStorageSegments(keyParts)) {
+    log.warn('Rejected image path with unsafe segments', { keyParts });
+    return new Response('Not Found', { status: 404 });
+  }
+
+  // Path format: v2/generated-images/{conversationId}/{filename} — exactly 4 segments.
+  if (
+    keyParts.length !== 4 ||
+    keyParts[0] !== 'v2' ||
+    keyParts[1] !== 'generated-images'
+  ) {
+    log.warn('Invalid image path format', { keyParts });
+    return new Response('Not Found', { status: 404 });
+  }
+
   const gcsKey = keyParts.join('/');
-  
   log.info('Image request received', { gcsKey });
-  
+
   try {
     // 1. Authenticate user
     const session = await getServerSession();
@@ -33,29 +55,15 @@ export async function GET(
       timer({ status: 'error', reason: 'unauthorized' });
       return new Response('Unauthorized', { status: 401 });
     }
-    
+
     // 2. Get current user
     const currentUser = await getCurrentUserAction();
     if (!currentUser.isSuccess) {
       log.error('Failed to get current user', { gcsKey });
       return new Response('Unauthorized', { status: 401 });
     }
-    
-    // 3. Validate that this is an AI-generated image path
-    if (!gcsKey.startsWith('v2/generated-images/')) {
-      log.warn('Invalid image path - not AI generated', { gcsKey, userId: currentUser.data.user.id });
-      return new Response('Not Found', { status: 404 });
-    }
 
-    // 4. Extract conversation ID from path for ownership validation
-    // Path format: v2/generated-images/{conversationId}/{filename}
-    const pathParts = gcsKey.split('/');
-    if (pathParts.length < 4) {
-      log.warn('Invalid image path format', { gcsKey, pathParts });
-      return new Response('Not Found', { status: 404 });
-    }
-
-    const conversationId = pathParts[2];
+    const conversationId = keyParts[2];
 
     // Validate UUID format before database query
     const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
