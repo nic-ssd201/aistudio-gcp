@@ -201,6 +201,18 @@ export function validateEnv(): { isValid: boolean; missing: string[]; warnings: 
       `AUTH_GOOGLE_FORCE_CONSENT="${forceConsent}" is not recognised — expected "true" or "false". Defaulting to "true" (consent prompt).`
     );
   }
+  // Warn in production when consent prompt is disabled — this is the most common
+  // cause of silent session failures (Google skips returning refresh_token on repeat
+  // sign-ins when select_account mode is active and offline_access was previously
+  // granted, silently ending sessions at access-token expiry with no visible error).
+  if (forceConsentNorm === 'false' && process.env.NODE_ENV === 'production') {
+    warnings.push(
+      'AUTH_GOOGLE_FORCE_CONSENT=false in production: Google may not return a refresh_token on ' +
+      'repeat sign-ins, causing sessions to end silently at access-token expiry (~1 hour). ' +
+      'Set AUTH_GOOGLE_FORCE_CONSENT=true (or unset it) unless you have confirmed offline_access ' +
+      'grants are always issued.'
+    );
+  }
 
   // AI: warn if no keys configured.
   if (!process.env.ANTHROPIC_API_KEY && !process.env.OPENAI_API_KEY) {

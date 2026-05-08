@@ -547,6 +547,10 @@ export async function updateUser(
           .set({
             firstName: data.firstName.trim(),
             lastName: data.lastName.trim(),
+            // updatedAt must be set explicitly — the users table has no ON UPDATE
+            // PostgreSQL trigger (unlike user_roles which has one from migration 017).
+            // Without this, updatedAt stays frozen at row-creation time on every edit.
+            updatedAt: new Date(),
             // Conditional bump: only when roles actually differ.
             // Without this bump on role changes, the multi-instance stale-role
             // fallback (/api/auth/refresh-session) never fires — the in-process

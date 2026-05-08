@@ -459,8 +459,12 @@ export const authConfig: NextAuthConfig = {
       // - accessToken: JWT-only — no server or client code reads session.accessToken;
       //   keeping it off the session reduces the attack surface if a future bug
       //   accidentally serializes session fields to a client response.
-      // - idToken: propagated because MCP connector-service.ts uses it as a Bearer
-      //   token for cognito_passthrough (now session-passthrough) auth type.
+      // - idToken: the ONLY token credential consciously placed on the session.
+      //   Required by lib/mcp/connector-service.ts which forwards it as a Bearer
+      //   token for the session-passthrough (formerly cognito_passthrough) auth type.
+      //   Any future addition of a token field to the session should be deliberate
+      //   and documented here — session fields are more broadly accessible than JWT
+      //   fields and increasing this surface should be an explicit decision.
       // `?? undefined` rather than `as string`: token fields are string | undefined
       // in next-auth.d.ts, so `as string` would silently assign undefined to a
       // string-typed slot when the token lacks the field.

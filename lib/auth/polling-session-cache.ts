@@ -270,12 +270,14 @@ export class PollingSessionCache {
   }
 
   private estimateMemoryUsage(): string {
-    // 500 B/entry is a conservative lower-bound estimate for a CachedSession that
-    // carries a UserSession (sub + email + iat), a userId, a userRoles string[],
-    // and the cachedAt/expiresAt/requestCount numbers.  A session with a long
-    // roles array or long email addresses can exceed this.  Treat the returned
-    // value as an order-of-magnitude indicator, not a precise accounting.
-    const avgEntrySize = 500; // bytes — see comment above
+    // 2 048 B/entry (~2 KB) is a rough mid-point estimate for a CachedSession.
+    // A Google OIDC id_token alone is typically 1–2 KB (three base64url segments);
+    // adding sub (~30 B), email (~30 B), loginIat/roleVersion numbers, userId,
+    // a 1–5 string userRoles array, and the cachedAt/expiresAt/requestCount
+    // numbers brings a realistic entry to 1.5–3 KB.  At 500 entries × 2 KB ≈ 1 MB —
+    // acceptable, and the displayed value is intentionally an approximation.
+    // Treat the returned value as an order-of-magnitude indicator, not accounting.
+    const avgEntrySize = 2048; // bytes — see comment above
     const totalBytes = this.cache.size * avgEntrySize;
 
     if (totalBytes < 1024) return `${totalBytes}B`;
