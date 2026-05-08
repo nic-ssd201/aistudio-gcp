@@ -449,6 +449,55 @@ describe("session() callback", () => {
     expect(result.user.id).toBe("s")
     expect(result.user.email).toBe("user@example.com")
   })
+
+  // Regression pin for the loginIat propagation chain:
+  //   decoded.iat → token.loginIat (jwt callback, initial sign-in)
+  //   → session.iat (session callback)
+  //   → UserSession.iat (getServerSession projection)
+  //   → generateSessionCacheKey (polling cache key)
+  // Each link is unit-tested at its own layer; this test pins the
+  // session-callback step (token.loginIat → session.iat) so a future
+  // change to the session callback cannot silently break the chain.
+  it("propagates token.loginIat to session.iat", async () => {
+    const loginIat = 1_700_000_000 // stable login-time marker
+    const token: JWT = {
+      sub: "google-sub-iat",
+      email: "iat@example.com",
+      loginIat,
+      expiresAt: Date.now() + 3600 * 1000,
+      provider: "google",
+    }
+    const result = (await callbacks.session!({
+      session: makeSession() as AnyAccount,
+      token,
+      user: { id: "", email: "", emailVerified: null },
+      newSession: undefined,
+      trigger: "update",
+    })) as AnyAccount
+    expect(result.iat).toBe(loginIat)
+  })
+
+  it("does not set session.iat when token.loginIat is absent (stale pre-deploy cookie)", async () => {
+    // Stale JWTs issued before loginIat was added should skip the cache
+    // (generateSessionCacheKey returns null), not collide under session:sub:0.
+    const token: JWT = {
+      sub: "google-sub-no-iat",
+      email: "noiat@example.com",
+      // loginIat intentionally absent
+      expiresAt: Date.now() + 3600 * 1000,
+      provider: "google",
+    }
+    const result = (await callbacks.session!({
+      session: makeSession() as AnyAccount,
+      token,
+      user: { id: "", email: "", emailVerified: null },
+      newSession: undefined,
+      trigger: "update",
+    })) as AnyAccount
+    // session.iat should be absent (not 0, not undefined via assignment —
+    // auth.ts uses `delete session.iat` for type-safety reasons).
+    expect(result.iat).toBeUndefined()
+  })
 })
 
 // ── jwt() — TOKEN_REFRESH_THRESHOLD_MS env override ──────────────────────────

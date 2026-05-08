@@ -32,6 +32,13 @@ const FLOOR_MS = 60_000
  *   3. Falls back to 300 000 ms (5 min) when the value is absent or rejected
  *
  * @returns Effective threshold in milliseconds (always ≥ 60 000).
+ *
+ * **Upstream constraint**: `refresh-google-token.ts` converts this value to
+ * seconds and uses it as `MIN_EXPIRES_IN = min(1800, max(300, threshold_s))`.
+ * Values ≥ 1 800 000 ms (30 min) push MIN_EXPIRES_IN toward 1 800 s, causing
+ * every standard Google `expires_in: 3600` response to barely pass.  The
+ * startup warning in `lib/env-validation.ts` flags values ≥ 1 800 000 ms and
+ * recommends ≤ 1 500 000 ms for a healthy margin.
  */
 export function getRefreshThresholdMs(): number {
   const raw = process.env.TOKEN_REFRESH_THRESHOLD_MS

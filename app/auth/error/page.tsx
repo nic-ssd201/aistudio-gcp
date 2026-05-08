@@ -17,8 +17,11 @@ function AuthErrorContent() {
                         error?.toLowerCase().includes('callback');
   
   const handleClearSession = () => {
-    // Redirect to home page to clear session
-    window.location.href = '/';
+    // Navigate to /signout so NextAuth's signOut() POSTs to /api/auth/signout
+    // and explicitly clears the session cookie.  A bare redirect to '/' would
+    // do a hard navigation home without clearing the cookie — the stale JWT
+    // would persist until it expires or middleware rejects it on the next request.
+    window.location.href = '/signout';
   };
   
   return (
