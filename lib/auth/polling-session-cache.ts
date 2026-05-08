@@ -294,6 +294,12 @@ export class PollingSessionCache {
       this.cleanupTimer = undefined;
     }
     this.cache.clear();
+    // Clear the globalThis anchor so a subsequent import (e.g. in a test that
+    // calls destroy() then re-imports) gets a fresh instance rather than the
+    // already-destroyed one (cleared cache, no cleanup timer).
+    if (globalThis.__pollingSessionCache__ === this) {
+      globalThis.__pollingSessionCache__ = undefined;
+    }
     log.info('Session cache destroyed');
   }
 }

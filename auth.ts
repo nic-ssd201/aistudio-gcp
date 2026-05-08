@@ -173,8 +173,12 @@ export const authConfig: NextAuthConfig = {
           // payload is never 3-short because base64 encodes 3 bytes → 4 chars).
           const b64 = parts[1].replace(/-/g, '+').replace(/_/g, '/');
           const base64Payload = b64 + '='.repeat((4 - b64.length % 4) % 4);
-          const payload = atob(base64Payload);
-          const decoded = JSON.parse(payload);
+          // atob() returns a Latin-1 binary string; for multi-byte UTF-8 values
+          // (e.g. kanji in given_name/family_name) a direct JSON.parse() produces
+          // mojibake.  Re-interpret through TextDecoder to recover the original
+          // UTF-8 bytes before parsing so non-ASCII display names are preserved.
+          const bytes = Uint8Array.from(atob(base64Payload), c => c.charCodeAt(0));
+          const decoded = JSON.parse(new TextDecoder().decode(bytes));
 
           // Use `??` (not `?`) so iat=0 (Unix epoch) is treated as present — consistent
           // with `loginIat: decoded.iat ?? …` below.  A truthiness check (`?`) would
@@ -706,8 +710,7 @@ export function createAuth() {
 // approach is to move the Google() provider construction out of the module-level
 // authConfig literal and into createAuth() so that middlewareAuth can be constructed
 // with an empty providers list (JWT-decode-only; no provider creds needed).
-const middlewareAuth = NextAuth(authConfig)
-export const { auth: authMiddleware } = middlewareAuth
+export const { auth: authMiddleware } = NextAuth(authConfig)
 
 // Export auth handlers for route.ts files
 // These need to be created per-request in the route handlers

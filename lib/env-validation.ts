@@ -13,6 +13,10 @@ interface EnvVar {
   name: string;
   required: boolean;
   description?: string;
+  /** Skip the generic "Optional variable … is not set" warning; used for vars
+   *  validated as a pair/group below so the per-field loop doesn't emit a
+   *  contradictory optional-warning alongside the pair-level required-error. */
+  skipWarning?: boolean;
 }
 
 const ENV_VARS: EnvVar[] = [
@@ -20,12 +24,12 @@ const ENV_VARS: EnvVar[] = [
   { name: 'AUTH_URL', required: true, description: 'NextAuth base URL' },
   { name: 'AUTH_SECRET', required: true, description: 'NextAuth secret for JWT signing' },
 
-  // Google OIDC — both are required, but `required: false` here is intentional:
+  // Google OIDC — both are required, but `required: false` + `skipWarning: true` here:
   // pair-level validation is handled as a group below (see "Google OIDC" block
-  // in validateEnv) so the per-field loop does not add them individually to
-  // `missing[]` before the pair check runs (which would produce duplicate entries).
-  { name: 'AUTH_GOOGLE_ID', required: false, description: 'Google OAuth client ID' },
-  { name: 'AUTH_GOOGLE_SECRET', required: false, description: 'Google OAuth client secret' },
+  // in validateEnv) so the per-field loop must not add them individually to either
+  // `missing[]` (would duplicate) or `warnings[]` (would contradict the pair error).
+  { name: 'AUTH_GOOGLE_ID', required: false, skipWarning: true, description: 'Google OAuth client ID' },
+  { name: 'AUTH_GOOGLE_SECRET', required: false, skipWarning: true, description: 'Google OAuth client secret' },
   // Optional: restrict sign-in to a specific Google Workspace domain at the IdP level.
   // When set, Google rejects non-domain accounts before the OAuth code exchange.
   // When unset, any Google account can sign in (access control is enforced by roles).
@@ -83,7 +87,7 @@ export function validateEnv(): { isValid: boolean; missing: string[]; warnings: 
     const value = process.env[envVar.name];
     if (envVar.required && !value) {
       missing.push(envVar.name);
-    } else if (!envVar.required && !value) {
+    } else if (!envVar.required && !value && !envVar.skipWarning) {
       warnings.push(`Optional variable ${envVar.name} is not set${envVar.description ? ` (${envVar.description})` : ''}`);
     }
   }
