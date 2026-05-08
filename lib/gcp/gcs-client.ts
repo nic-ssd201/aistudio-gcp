@@ -68,6 +68,7 @@ export interface UploadDocumentParams {
 export interface DocumentUrlParams {
   key: string
   expiresIn?: number // seconds, default 3600 (1 hour)
+  responseDisposition?: string
 }
 
 export interface PresignedUploadUrlParams {
@@ -166,19 +167,21 @@ export async function uploadDocument({
 export async function getDocumentSignedUrl({
   key,
   expiresIn = 3600,
+  responseDisposition,
 }: DocumentUrlParams): Promise<string> {
   const gcsClient = await getGCSClient()
   const config = await getGCSConfig()
   const bucketName = config.bucket!
-  
+
   try {
     const bucket = gcsClient.bucket(bucketName)
     const file = bucket.file(key)
-    
+
     const [url] = await file.getSignedUrl({
       action: "read",
       version: "v4",
       expires: Date.now() + expiresIn * 1000,
+      ...(responseDisposition ? { responseDisposition } : {}),
      })
     return url
    } catch (error) {
