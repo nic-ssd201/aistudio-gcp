@@ -24,9 +24,10 @@ export function isSafeStorageSegment(segment: string): boolean {
   return true;
 }
 
-/** True iff every segment in `parts` is safe. */
+/** True iff `parts` is non-empty and every segment is safe. Empty input is rejected so
+ *  callers that forget to gate on length still fail closed. */
 export function areSafeStorageSegments(parts: readonly string[]): boolean {
-  return parts.every(isSafeStorageSegment);
+  return parts.length > 0 && parts.every(isSafeStorageSegment);
 }
 
 /**

@@ -54,8 +54,8 @@ describe("areSafeStorageSegments", () => {
     expect(areSafeStorageSegments(["a", "", "b"])).toBe(false);
   });
 
-  it("rejects empty array", () => {
-    expect(areSafeStorageSegments([])).toBe(true); // vacuous; callers gate on length separately
+  it("rejects empty array (fail-closed for forgotten length checks)", () => {
+    expect(areSafeStorageSegments([])).toBe(false);
   });
 });
 

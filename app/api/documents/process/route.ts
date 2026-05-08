@@ -78,16 +78,9 @@ export async function POST(request: NextRequest) {
 
     const { key, fileName, fileSize, conversationId } = validation.data
 
-    // Verify file size is within limits
-    const maxFileSize = await getMaxFileSize()
-    if (fileSize > maxFileSize) {
-      log.warn("File size exceeds limit", { fileSize, maxFileSize });
-      timer({ status: "error", reason: "file_too_large" });
-      return { 
-        isSuccess: false, 
-        message: `File size must be less than ${formatFileSize(maxFileSize)}` 
-      }
-    }
+    // Path-safety + ownership checks run BEFORE the DB-hitting size check —
+    // they're pure CPU and the most attacker-correlated, so failing closed
+    // here costs the smallest amount of work for hostile input.
 
     // Reject keys with `..`, `.`, empty, or escape segments. Without this a key
     // like `<userId>/../<victim-userId>/file.pdf` passes the userId-prefix check
@@ -103,11 +96,22 @@ export async function POST(request: NextRequest) {
     // both checks are required: prefix proves you own the top-level prefix,
     // path-safety proves you can't escape it via `..`).
     if (!key.startsWith(`${userId}/`)) {
-      log.error("Unauthorized access attempt to storage key", { key, userId });
+      log.warn("Unauthorized access attempt to storage key", { key, userId });
       timer({ status: "error", reason: "unauthorized_access" });
       return {
         isSuccess: false,
         message: 'Unauthorized access to document'
+      }
+    }
+
+    // Verify file size is within limits
+    const maxFileSize = await getMaxFileSize()
+    if (fileSize > maxFileSize) {
+      log.warn("File size exceeds limit", { fileSize, maxFileSize });
+      timer({ status: "error", reason: "file_too_large" });
+      return {
+        isSuccess: false,
+        message: `File size must be less than ${formatFileSize(maxFileSize)}`
       }
     }
 
