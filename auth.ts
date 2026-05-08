@@ -261,6 +261,10 @@ export const authConfig: NextAuthConfig = {
           // Note: `preferred_username` is intentionally omitted — it comes from the
           // id_token payload that failed to parse.
           // Cast to the exported GoogleProfile type (not an ad-hoc structural type).
+          // Safe: the signIn() callback default-denies every non-Google provider, so
+          // `profile` here is always a GoogleProfile (or undefined if NextAuth omitted
+          // it).  The cast hides that invariant — if a second provider is ever added,
+          // the signIn() guard must be updated before this cast remains valid.
           const p = profile as GoogleProfile | undefined
           const fallbackToken: JWT = {
             sub: account.providerAccountId,
