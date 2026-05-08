@@ -36,70 +36,21 @@ if (!globalThis.__authConfigLogged__) {
   })
 }
 
+// Base NextAuth config — providers intentionally empty.
+//
+// The Google provider is injected by createAuth() (the OAuth code-exchange path)
+// so that assertGoogleCreds() runs before Google({ clientId, clientSecret }) is
+// ever constructed.  authMiddleware (JWT-decode-only) uses this provider-free
+// config so it never silently constructs Google({ clientId: undefined as string })
+// on a misconfigured instance — closing the visibility gap tracked in issue #7.
+//
+// All callbacks, pages, and session config live here so that:
+//   a) authConfig.callbacks is importable by tests (auth-jwt-callback.test.ts)
+//      without triggering provider construction or credential guards.
+//   b) createAuth() spreads authConfig and overrides only `providers`, keeping
+//      the two code paths in sync automatically.
 export const authConfig: NextAuthConfig = {
-  providers: [
-    // Google OIDC — sole auth provider for SSD201 GCP deployment.
-    // access_type: "offline" gets a refresh_token so sessions outlive the
-    // initial 1-hour access token. prompt: "consent" ensures Google always
-    // returns a refresh_token (even on repeat sign-ins).
-    //
-    // Hosted-domain restriction (hd): required in production (env-validation.ts).
-    // Set to a Google Workspace domain (e.g. "psd401.net") to restrict sign-in
-    // at the IdP level — Google rejects non-domain accounts before the OAuth
-    // code exchange.  Set to the sentinel "OPEN" to explicitly allow any Google
-    // account (JIT-provisions all sign-ins via resolve-user.ts).
-    Google({
-      clientId: process.env.AUTH_GOOGLE_ID!,
-      clientSecret: process.env.AUTH_GOOGLE_SECRET!,
-      authorization: {
-        params: {
-          scope: "openid email profile",
-          access_type: "offline",
-          // Conditionally gate sign-in to a specific Google Workspace domain.
-          // When AUTH_GOOGLE_HD is a real domain, Google rejects accounts outside
-          // that domain before the OAuth code exchange — fail-closed at the IdP level.
-          // The sentinel value "OPEN" (set by operators who explicitly allow any
-          // Google account) is intentionally excluded so Google never sees "hd=OPEN".
-          // env-validation.ts requires AUTH_GOOGLE_HD in production; a missing value
-          // is a startup error rather than a silent open-access misconfiguration.
-          ...(() => {
-            const hd = process.env.AUTH_GOOGLE_HD?.trim();
-            // Case-fold before comparing so "open" / "Open" / "OPEN" all act as the sentinel.
-            // AUTH_GOOGLE_FORCE_CONSENT uses the same .toLowerCase() normalization pattern.
-            return (hd && hd.toUpperCase() !== 'OPEN') ? { hd } : {};
-          })(),
-          // `prompt` controls whether Google shows the consent screen on repeat sign-ins.
-          //
-          // "consent" (default when AUTH_GOOGLE_FORCE_CONSENT=true or unset):
-          //   Google always returns a refresh_token. Users see the consent dialog on
-          //   every sign-in — a UX cost, but guarantees long-lived sessions.
-          //
-          // "select_account" (when AUTH_GOOGLE_FORCE_CONSENT=false):
-          //   Google shows an account-picker but re-uses an existing grant, so it
-          //   may not return a refresh_token on repeat logins. Handle the missing
-          //   refresh_token case (e.g. redirect to re-auth when expiresAt nears
-          //   without a refreshToken) before enabling this in production.
-          //
-          // Default: "consent" — set AUTH_GOOGLE_FORCE_CONSENT=false to opt out.
-          // Comparison is case-insensitive; see getForceConsent() at module top.
-          prompt: getForceConsent() ? 'consent' : 'select_account',
-        },
-      },
-      checks: ["pkce", "state", "nonce"],
-      profile(profile) {
-        return {
-          id: profile.sub,
-          // `||` collapses empty-string `name` values to `given_name`/`family_name`.
-          // Intentional: Google occasionally returns `name: ""` for service accounts.
-          name: profile.name || profile.given_name || profile.family_name,
-          email: profile.email,
-          image: profile.picture,
-          given_name: profile.given_name,
-          family_name: profile.family_name,
-        }
-      },
-    }),
-  ],
+  providers: [], // Google provider injected in createAuth() — see comment above
   callbacks: {
     async jwt({ token, account, profile, user, trigger }) {
       const log = createLogger({
@@ -675,43 +626,99 @@ function assertGoogleCreds(): void {
   }
 }
 
-// Factory function — returns a NextAuth instance bound to authConfig.
+// Factory function — returns a NextAuth instance with the Google provider injected.
+//
 // NextAuth route modules (app/api/auth/[...nextauth]/route.ts) are module-level
 // singletons in Next.js, so createAuth() is called once at module load, not
-// per-request. The function exists to keep authConfig private and allow tests
-// to call createAuth() with a fresh NextAuth instance per test file via jest.resetModules().
+// per-request.  The function exists to:
+//   a) Run assertGoogleCreds() before Google({ clientId, clientSecret }) is
+//      constructed — surfaces missing credentials immediately rather than
+//      silently passing `undefined` to the OAuth flow.
+//   b) Allow tests to call createAuth() with a fresh NextAuth instance per test
+//      file via jest.resetModules().
 export function createAuth() {
   assertGoogleCreds()
-  return NextAuth(authConfig)
+  return NextAuth({
+    ...authConfig,
+    providers: [
+      // Google OIDC — sole auth provider for SSD201 GCP deployment.
+      // access_type: "offline" gets a refresh_token so sessions outlive the
+      // initial 1-hour access token. prompt: "consent" ensures Google always
+      // returns a refresh_token (even on repeat sign-ins).
+      //
+      // Hosted-domain restriction (hd): required in production (env-validation.ts).
+      // Set to a Google Workspace domain (e.g. "psd401.net") to restrict sign-in
+      // at the IdP level — Google rejects non-domain accounts before the OAuth
+      // code exchange.  Set to the sentinel "OPEN" to explicitly allow any Google
+      // account (JIT-provisions all sign-ins via resolve-user.ts).
+      Google({
+        clientId: process.env.AUTH_GOOGLE_ID!,
+        clientSecret: process.env.AUTH_GOOGLE_SECRET!,
+        authorization: {
+          params: {
+            scope: "openid email profile",
+            access_type: "offline",
+            // Conditionally gate sign-in to a specific Google Workspace domain.
+            // When AUTH_GOOGLE_HD is a real domain, Google rejects accounts outside
+            // that domain before the OAuth code exchange — fail-closed at the IdP level.
+            // The sentinel value "OPEN" (set by operators who explicitly allow any
+            // Google account) is intentionally excluded so Google never sees "hd=OPEN".
+            // env-validation.ts requires AUTH_GOOGLE_HD in production; a missing value
+            // is a startup error rather than a silent open-access misconfiguration.
+            ...(() => {
+              const hd = process.env.AUTH_GOOGLE_HD?.trim();
+              // Case-fold before comparing so "open" / "Open" / "OPEN" all act as the sentinel.
+              // AUTH_GOOGLE_FORCE_CONSENT uses the same .toLowerCase() normalization pattern.
+              return (hd && hd.toUpperCase() !== 'OPEN') ? { hd } : {};
+            })(),
+            // `prompt` controls whether Google shows the consent screen on repeat sign-ins.
+            //
+            // "consent" (default when AUTH_GOOGLE_FORCE_CONSENT=true or unset):
+            //   Google always returns a refresh_token. Users see the consent dialog on
+            //   every sign-in — a UX cost, but guarantees long-lived sessions.
+            //
+            // "select_account" (when AUTH_GOOGLE_FORCE_CONSENT=false):
+            //   Google shows an account-picker but re-uses an existing grant, so it
+            //   may not return a refresh_token on repeat logins. Handle the missing
+            //   refresh_token case (e.g. redirect to re-auth when expiresAt nears
+            //   without a refreshToken) before enabling this in production.
+            //
+            // Default: "consent" — set AUTH_GOOGLE_FORCE_CONSENT=false to opt out.
+            // Comparison is case-insensitive; see getForceConsent() at module top.
+            prompt: getForceConsent() ? 'consent' : 'select_account',
+          },
+        },
+        checks: ["pkce", "state", "nonce"],
+        profile(profile) {
+          return {
+            id: profile.sub,
+            // `||` collapses empty-string `name` values to `given_name`/`family_name`.
+            // Intentional: Google occasionally returns `name: ""` for service accounts.
+            name: profile.name || profile.given_name || profile.family_name,
+            email: profile.email,
+            image: profile.picture,
+            given_name: profile.given_name,
+            family_name: profile.family_name,
+          }
+        },
+      }),
+    ],
+  })
 }
 
-// Middleware auth — constructed at module load for Next.js middleware compatibility.
+// Middleware auth — JWT-decode-only, constructed at module load for Next.js
+// middleware compatibility.
 //
-// The credential guard in createAuth() (above) is NOT duplicated here.  This is
-// intentional: authMiddleware is used exclusively for JWT verification in
-// Next.js middleware (lib/middleware.ts), which only decodes the signed session
-// cookie — it never initiates an OAuth code exchange that would use clientId or
-// clientSecret.  NextAuth does not validate provider credentials at construction
-// time; they are only exercised during the /api/auth/callback/google flow, which
-// goes through createAuth(), where the guard does fire.
+// Uses the provider-free authConfig (providers: []) intentionally: JWT decoding
+// only needs AUTH_SECRET (to verify the session cookie signature), not provider
+// credentials.  The Google provider is never exercised on this path — it is only
+// needed during the /api/auth/callback/google OAuth code exchange, which goes
+// through createAuth() where assertGoogleCreds() also fires.
 //
-// Known gap: if AUTH_GOOGLE_ID / AUTH_GOOGLE_SECRET are absent, the module-level
-// Google({ clientId: undefined as string }) call is silent rather than loud.
-// requireValidEnv() in instrumentation.ts already logs an error for missing creds
-// at startup; that log line is the authoritative startup signal.
-//
-// This gap is **not exploitable at the request level**: on a misconfigured
-// instance where AUTH_GOOGLE_ID/SECRET are absent, the Google provider cannot
-// complete an OAuth code exchange (invalid_client), and the signIn() callback
-// above rejects all sign-ins in production when AUTH_GOOGLE_HD is absent.
-// The gap is a misconfiguration-visibility issue (silent startup), not an
-// auth bypass.
-//
-// TODO(nic-ssd201/aistudio-gcp#7): implement lazy authMiddleware so assertGoogleCreds()
-// runs before the first JWT decode rather than being silently skipped.  The cleanest
-// approach is to move the Google() provider construction out of the module-level
-// authConfig literal and into createAuth() so that middlewareAuth can be constructed
-// with an empty providers list (JWT-decode-only; no provider creds needed).
+// With providers: [] here, a misconfigured instance (missing AUTH_GOOGLE_ID /
+// AUTH_GOOGLE_SECRET) no longer silently constructs Google({ clientId: undefined })
+// at module load.  The first sign-in attempt will hit createAuth() and throw a
+// clear error from assertGoogleCreds() instead.  Closes issue #7.
 export const { auth: authMiddleware } = NextAuth(authConfig)
 
 // Export auth handlers for route.ts files
