@@ -41,10 +41,6 @@ export interface ExecutionEvent<K extends SSEEventType = SSEEventType> {
  * - Post-execution analysis
  * - Future real-time SSE streaming
  *
- * CRITICAL: Drizzle's AWS Data API driver doesn't properly serialize JSONB.
- * Must use raw SQL with db.execute() to bypass broken parameter binding.
- * See: Issue #599, https://github.com/drizzle-team/drizzle-orm/issues/724
- *
  * @param executionId - The tool execution ID
  * @param eventType - The type of event
  * @param eventData - The event data payload
