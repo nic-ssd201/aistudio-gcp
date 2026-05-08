@@ -498,9 +498,20 @@ export const authConfig: NextAuthConfig = {
       //                   https://evil.com when concatenated with baseUrl.
       //   '/\evil.com'  — some browsers normalize '\' → '/' during URL parsing,
       //                   turning this into '//evil.com'.
-      // Both are cheap defense-in-depth for the redirect callback.
-      if (url.startsWith("/") && !url.startsWith("//") && !url.startsWith("/\\"))
-        return `${baseUrl}${url}`
+      // Defense-in-depth: also resolve the relative path against baseUrl and
+      // compare origins.  A URL-encoded backslash like '/%5Cevil.com' passes
+      // the literal-string checks above but decodes to '/\evil.com' inside
+      // WHATWG URL parsing — some parsers then treat it as '//evil.com' with a
+      // different host.  Verifying the resolved origin catches this class of
+      // encoding-based bypass.
+      if (url.startsWith("/") && !url.startsWith("//") && !url.startsWith("/\\")) {
+        try {
+          if (new URL(url, baseUrl).origin === new URL(baseUrl).origin)
+            return `${baseUrl}${url}`
+        } catch {
+          // Malformed relative path — fall through to safe default below.
+        }
+      }
       // Allows callback URLs on the same origin. Both sides are normalised to
       // .origin so a trailing-slash AUTH_URL (e.g. "https://app.example.com/")
       // still matches correctly. Wrapped in try/catch because new URL() throws
