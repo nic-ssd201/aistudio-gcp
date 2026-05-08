@@ -18,6 +18,27 @@ import { PermissionBoundaryConstruct } from '../lib/constructs/security';
 import { AccessAnalyzerStack } from '../lib/stacks/access-analyzer-stack';
 import { EnvironmentConfig } from '../lib/constructs/config/environment-config';
 
+// SSD201 FORK — INFRASTRUCTURE STATUS
+//
+// This fork replaces AWS Cognito with Google OIDC (NextAuth v5) for authentication.
+// The COMPUTE and DATA infrastructure remains on AWS for now:
+//
+//   ✅ STILL DEPLOYED ON AWS:
+//     - FrontendStackEcs   — ECS Fargate (Next.js SSR)
+//     - DatabaseStack      — Aurora Serverless v2 (PostgreSQL)
+//     - StorageStack       — S3 (document storage)
+//     - ProcessingStack, DocumentProcessingStack — Lambda document processing
+//     - AgentPlatformStack — Bedrock (AI model inference)
+//     - MonitoringStack, SchedulerStack, SecretsManagerStack, etc. — supporting infra
+//
+//   ❌ DEAD CODE (gated behind --context legacy=true):
+//     - AuthStack          — Cognito User Pool (replaced by Google OIDC in auth.ts)
+//
+// Only AuthStack is gated because it's the only stack whose CDK definition is valuable
+// to preserve for upstream cherry-pick surface. The compute/data stacks are genuinely
+// deployed; gating them would break production deployments.
+// Full Cognito deletion tracked in nic-ssd201/aistudio-gcp#8.
+
 const app = new cdk.App();
 
 // Standard tags for cost allocation

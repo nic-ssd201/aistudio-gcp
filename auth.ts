@@ -328,12 +328,36 @@ export const authConfig: NextAuthConfig = {
               newExpiresAt: refreshed.expiresAt ? new Date(refreshed.expiresAt).toISOString() : 'unknown',
             })
             return refreshed
-          } else {
-            log.warn("Token refresh failed - forcing re-authentication")
-            return null
           }
+
+          // Refresh failed. If the token is still valid (proactive refresh,
+          // not yet expired), return the existing token so the user is not
+          // forced to re-authenticate due to a transient Google outage or
+          // network blip. The next jwt() callback will retry.
+          // If the token is genuinely expired, there is no valid token to fall
+          // back to — force re-auth immediately.
+          if (!isExpired) {
+            log.warn("Proactive refresh failed but token still valid — returning existing token; next callback will retry", {
+              expiresAt: new Date(expiresAt).toISOString(),
+              minutesRemaining: Math.round((expiresAt - now) / (1000 * 60)),
+            })
+            return token
+          }
+
+          log.warn("Token refresh failed and token is expired — forcing re-authentication")
+          return null
         } catch (error) {
-          log.error("Token refresh threw error - forcing re-authentication", {
+          // Unexpected throw from refreshGoogleToken (e.g. programmer error).
+          // Apply the same proactive-vs-expired distinction: don't force
+          // re-auth if the token is still usable.
+          if (!isExpired) {
+            log.warn("Proactive refresh threw unexpectedly but token still valid — returning existing token", {
+              error: error instanceof Error ? error.message : 'Unknown error',
+              minutesRemaining: Math.round((expiresAt - now) / (1000 * 60)),
+            })
+            return token
+          }
+          log.error("Token refresh threw error and token is expired — forcing re-authentication", {
             error: error instanceof Error ? error.message : 'Unknown error'
           })
           return null

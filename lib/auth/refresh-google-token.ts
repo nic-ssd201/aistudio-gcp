@@ -39,9 +39,13 @@ import { getRefreshThresholdMs, POLLING_CACHE_MAX_ENTRIES } from "@/lib/auth/tok
  * Bound analysis: entries are deleted in `.finally()` when the Promise settles.
  * `fetch` always eventually settles (Node's HTTP agent enforces socket timeouts),
  * so the map is effectively bounded by concurrent users whose tokens expire at
- * the same instant — negligible in practice. An explicit 500-entry safety cap
- * is applied before each insertion as a defense-in-depth measure against
- * unexpected horizontal-scaling scenarios (see guard below).
+ * the same instant — negligible in practice.
+ *
+ * Soft cap: when the map reaches POLLING_CACHE_MAX_ENTRIES, new callers bypass
+ * dedup entirely (still call doRefresh) rather than evicting in-flight Promises.
+ * The map can momentarily exceed the cap if many bypassing callers insert between
+ * the size check and the `.finally()` cleanup — the cap is a circuit breaker, not
+ * a hard bound (see "Safety cap" guard below).
  */
 const activeRefreshes = new Map<string, Promise<JWT | null>>()
 
