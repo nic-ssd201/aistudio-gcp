@@ -57,8 +57,15 @@ export function getRefreshThresholdMs(): number {
  *
  * Both maps share this ceiling so the two magic `500`s can't drift apart
  * independently.  500 entries covers ~500 concurrent active-polling users per
- * Cloud Run instance; at maxEntries the cache evicts oldest-first (FIFO) and
- * the dedup map bypasses dedup rather than evicting in-flight Promises.
+ * Cloud Run instance.
+ *
+ * The two consumers enforce the cap differently:
+ * - `PollingSessionCache` (hard cap): evicts the oldest entry (FIFO) before
+ *   inserting a new one, so size never exceeds POLLING_CACHE_MAX_ENTRIES.
+ * - `activeRefreshes` dedup map (soft cap): emits a throttled warn at capacity
+ *   but still inserts the new session's Promise so per-session dedup is preserved.
+ *   The map can briefly exceed POLLING_CACHE_MAX_ENTRIES by one entry per
+ *   concurrent new session; `.finally()` cleanup shrinks it back as Promises settle.
  */
 export const POLLING_CACHE_MAX_ENTRIES = 500
 

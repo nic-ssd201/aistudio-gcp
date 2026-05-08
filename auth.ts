@@ -509,6 +509,7 @@ export const authConfig: NextAuthConfig = {
       return session
     },
     async redirect({ url, baseUrl }) {
+      const redirectLog = createLogger({ context: "auth-redirect-callback" })
       // Allows relative callback URLs that start with '/' but NOT '//' or '/\':
       //   '//evil.com'  — protocol-relative URL; some runtimes resolve it as
       //                   https://evil.com when concatenated with baseUrl.
@@ -525,7 +526,10 @@ export const authConfig: NextAuthConfig = {
           if (new URL(url, baseUrl).origin === new URL(baseUrl).origin)
             return `${baseUrl}${url}`
         } catch {
-          // Malformed relative path — fall through to safe default below.
+          // Malformed relative path — fall through to safe default.
+          // Logged as warn: a spike here may indicate active probing for
+          // open-redirect bypasses and is worth surfacing in telemetry.
+          redirectLog.warn("Malformed relative redirect URL — falling back to /dashboard", { url })
         }
       }
       // Allows callback URLs on the same origin. Both sides are normalised to
@@ -537,7 +541,8 @@ export const authConfig: NextAuthConfig = {
       try {
         if (new URL(url).origin === new URL(baseUrl).origin) return url
       } catch {
-        // Malformed URL — fall through to safe default below.
+        // Malformed absolute URL — fall through to safe default.
+        redirectLog.warn("Malformed absolute redirect URL — falling back to /dashboard", { url })
       }
       return baseUrl + "/dashboard"
     },
@@ -561,7 +566,11 @@ export const authConfig: NextAuthConfig = {
       //
       // Not applied in development (NODE_ENV !== 'production'): local dev often runs
       // without AUTH_GOOGLE_HD, and the env-validation startup warning is sufficient.
-      if (process.env.NODE_ENV === 'production' && !process.env.AUTH_GOOGLE_HD) {
+      // .trim() is required: `AUTH_GOOGLE_HD="   "` is truthy (passes !x check) but
+      // produces an empty string after .trim(), which the IIFE at auth.ts:66 would
+      // silently drop — Google receives no hd param and any Google account can sign in.
+      // The OAuth-param IIFE already calls .trim() (auth.ts:66); this guard must match.
+      if (process.env.NODE_ENV === 'production' && !process.env.AUTH_GOOGLE_HD?.trim()) {
         log.error(
           "AUTH_GOOGLE_HD is not set in production — rejecting sign-in (fail-closed). " +
           "Set AUTH_GOOGLE_HD to a Workspace domain or the sentinel 'OPEN' to allow any Google account.",

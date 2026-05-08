@@ -27,6 +27,9 @@ export interface UserSession {
    * re-authenticates within the 5-minute TTL window (a fresh login produces a new
    * loginIat; NextAuth's own `iat` is unsuitable because jose.EncryptJWT resets it
    * on every re-encode).
+   *
+   * Intentionally optional — may be absent on stale cookies that predate the loginIat
+   * field (rolling deploy window) or on the fallback id_token-parse path.
    */
   loginIat?: number;
   /**
@@ -41,17 +44,34 @@ export interface UserSession {
   roleVersion?: number;
 }
 
-
-// Module-level singleton — constructing this once avoids re-running the
-// credential guard and the NextAuth(authConfig) constructor on every
-// getServerSession() call.  In production the module is loaded once per
-// process; in development HMR may reload it, but credential validation
-// runs at most once per reload (acceptable).
+// Lazy singleton — initialized on first call to getServerAuth() rather than at
+// module load.  This ensures that importing server-session.ts never throws, even
+// when AUTH_GOOGLE_ID / AUTH_GOOGLE_SECRET are absent (e.g. a misconfigured Cloud
+// Run revision that should still respond to health probes before auth is needed).
+//
+// Without lazy init, any module that transitively imports server-session.ts
+// (most of app/) would explode on first import — Next.js would fail to boot,
+// defeating instrumentation.ts's startup-tolerance intent.
+//
+// The credential guard (assertGoogleCreds) still fires on the first call to
+// getServerSession(), so an unconfigured instance fails loudly the moment a
+// request actually requires auth — not silently.
+//
+// Thread-safety: Node.js is single-threaded. There is no race between two
+// concurrent calls both seeing _serverAuth === null and both calling createAuth()
+// before the assignment — one call runs to completion before the other starts.
 //
 // jest.mock('@/auth') is babel-hoisted above any module-level code, so tests
 // that mock createAuth() will see their mock here — the credential guard
 // inside createAuth() never fires against real env vars during unit tests.
-const { auth: _serverAuth } = createAuth();
+let _serverAuth: ReturnType<typeof createAuth>['auth'] | null = null;
+
+function getServerAuth(): ReturnType<typeof createAuth>['auth'] {
+  if (!_serverAuth) {
+    _serverAuth = createAuth().auth;
+  }
+  return _serverAuth;
+}
 
 /**
  * Gets the current authenticated session using NextAuth v5.
@@ -61,7 +81,7 @@ export async function getServerSession(): Promise<UserSession | null> {
   const context = await createRequestContext();
 
   try {
-    const session = await _serverAuth();
+    const session = await getServerAuth()();
 
     if (!session?.user?.id) {
       return null;
