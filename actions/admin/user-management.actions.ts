@@ -523,6 +523,11 @@ export async function updateUser(
         // bump on a name-only edit triggers /api/auth/refresh-session fleet-wide
         // (every instance whose JWT carries an older roleVersion will force re-auth
         // for that user) — disruptive for a purely cosmetic change.
+        //
+        // Safety: other code paths that mutate roles without going through updateUser
+        // (e.g. lib/db/user-roles.ts assignRole / removeRole / replaceRoles) bump
+        // roleVersion themselves inside their own transactions, so skipping the bump
+        // here on a name-only edit does not create a gap — roles aren't changing.
         const result = await tx
           .update(users)
           .set({

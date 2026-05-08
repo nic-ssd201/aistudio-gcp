@@ -219,9 +219,13 @@ async function doRefresh(token: JWT, log: ReturnType<typeof createLogger>): Prom
     // their custom threshold.
     const expiresIn = tokens.expires_in ?? 0
     if (expiresIn < MIN_EXPIRES_IN) {
+      // Production telemetry: filter on alert="short_expires_in" in Cloud Logging
+      // to detect Google returning sub-threshold tokens.  Each occurrence forces a
+      // user re-auth; a spike here indicates Google token-endpoint misbehavior.
       log.warn("Google token refresh returned unexpectedly short expires_in — treating as failure", {
         expiresIn,
         minExpected: MIN_EXPIRES_IN,
+        alert: "short_expires_in",
       })
       return null
     }
