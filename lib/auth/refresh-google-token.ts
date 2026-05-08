@@ -41,19 +41,27 @@ import { getRefreshThresholdMs, POLLING_CACHE_MAX_ENTRIES } from "@/lib/auth/tok
  * so the map is effectively bounded by concurrent users whose tokens expire at
  * the same instant — negligible in practice.
  *
+ * Key: `sub:loginIat` (or just `sub` for legacy JWTs without loginIat).  Keying
+ * on loginIat prevents cross-device clobber: two browsers signed into the same
+ * Google account with distinct JWTs share the same `sub` but have different
+ * `loginIat` values; without loginIat in the key, the second browser would join
+ * the first's Promise and receive a JWT spread from the wrong token, silently
+ * overwriting its loginIat — breaking the polling-session-cache key on every
+ * subsequent request for that session.
+ *
  * Soft cap: when the map reaches POLLING_CACHE_MAX_ENTRIES (500), a throttled
  * warn is emitted and the caller still falls through to the normal dedup path —
- * the new sub's Promise is inserted and cleaned up in `.finally()` exactly like
- * any other entry.  Per-sub deduplication is **always active**, even at capacity.
- * The map can temporarily exceed 500 by one entry per distinct sub that enters
- * the cap branch concurrently; `.finally()` shrinks it back as Promises settle.
- * The cap is a circuit-breaker signal (500 distinct subs refreshing simultaneously
- * is anomalous), not a hard bound on map size (see "Safety cap" guard below).
+ * the new session's Promise is inserted and cleaned up in `.finally()` exactly
+ * like any other entry.  Per-session deduplication is **always active**, even at
+ * capacity.  The map can temporarily exceed 500 by one entry per distinct session
+ * that enters the cap branch concurrently; `.finally()` shrinks it back as
+ * Promises settle.  The cap is a circuit-breaker signal (500 distinct sessions
+ * refreshing simultaneously is anomalous), not a hard bound on map size.
  */
 const activeRefreshes = new Map<string, Promise<JWT | null>>()
 
 // Throttle the at-capacity warn to at most once per minute so a sustained burst
-// (500+ concurrent distinct subs) doesn't flood telemetry with redundant lines.
+// (500+ concurrent distinct sessions) doesn't flood telemetry with redundant lines.
 let lastCapWarnAt = 0
 const CAP_WARN_THROTTLE_MS = 60_000
 
@@ -86,54 +94,69 @@ export async function refreshGoogleToken(token: JWT): Promise<JWT | null> {
     return null
   }
 
-  // Keying on sub alone: within a single browser session all callers share the
-  // same JWT cookie, so only one refreshToken exists per sub at a time.
-  // Cross-device concurrency (same Google account signed in on two browsers or
-  // two tabs with distinct cookies) could produce two concurrent refreshes for
-  // the same sub with different JWTs.  In that case the second caller joins the
-  // first's Promise, and the resulting JWT is spread from the first caller's
-  // token — the second caller's `loginIat` (and any other per-session custom
-  // claims) get silently overwritten by the first's.  This is a correctness
-  // edge (loginIat jitter in the polling cache) but not a security issue (both
-  // callers are the same Google identity).  Acceptable today; if cross-device
-  // correctness becomes a hard requirement, key the map on `sub:loginIat` instead.
+  // Dedup key: `sub:loginIat` rather than `sub` alone.
+  //
+  // Within a single browser session, all concurrent callers share the same JWT
+  // cookie (same sub + same loginIat), so they correctly share one Promise.
+  //
+  // Cross-device concurrency (same Google account signed into two browsers, or
+  // two tabs from different sign-in flows with distinct cookies) produces JWTs
+  // with the same `sub` but different `loginIat` values.  Keying on `sub` alone
+  // caused the second caller to join the first's Promise, and the resulting JWT
+  // was spread from the first caller's token — silently overwriting the second
+  // caller's `loginIat` (and any future per-session claims) with the first's.
+  // That loginIat jitter was harmless for security (both callers are the same
+  // Google identity) but correctness-breaking for the polling-session cache, which
+  // uses `sub:loginIat` as its cache key — a refreshed JWT with the wrong loginIat
+  // would miss the cache on every subsequent request for that session.
+  //
+  // Keying on `sub:loginIat` gives each independent browser session its own
+  // in-flight slot, eliminating the cross-session clobber.
+  //
+  // Fallback for JWTs without loginIat (e.g. old cookies during a rolling deploy):
+  // use `sub` alone — same behaviour as before, which is correct for those tokens
+  // because they all have no loginIat and would produce the same polling-cache miss
+  // regardless.
+  const loginIat = token.loginIat
+  const dedupKey = loginIat ? `${sub}:${loginIat}` : sub
 
-  // Deduplicate concurrent refresh calls for the same user.
-  const existing = activeRefreshes.get(sub)
+  // Deduplicate concurrent refresh calls for the same user+session.
+  const existing = activeRefreshes.get(dedupKey)
   if (existing) {
-    log.debug("Joining existing in-flight token refresh", { sub })
+    log.debug("Joining existing in-flight token refresh", { sub, loginIat })
     return existing
   }
 
-  // Safety cap: if the map grows unexpectedly large (500+ distinct subs all
+  // Safety cap: if the map grows unexpectedly large (500+ distinct sessions all
   // refreshing simultaneously), emit a throttled warn.  We still fall through
   // to the normal dedup path below rather than bypassing it, so concurrent
-  // callers for the SAME new sub still share one Promise.
+  // callers for the SAME new session (same dedupKey) still share one Promise.
   //
   // Prior design bypassed dedup entirely at capacity (returning doRefresh()
   // without inserting into the map).  That caused N independent fetches for
-  // the same sub if N callers raced after the map hit 500, each able to race
+  // the same session if N callers raced after the map hit 500, each able to race
   // the prior call's refresh_token rotation.  The fix: let the map grow
-  // briefly past 500 (one entry per new sub — the `.finally()` cleanup shrinks
+  // briefly past 500 (one entry per new session — the `.finally()` cleanup shrinks
   // it back as Promises settle).  The 500-entry circuit breaker is about
-  // distinct-sub growth, not per-sub deduplication.
+  // distinct-session growth, not per-session deduplication.
   if (activeRefreshes.size >= POLLING_CACHE_MAX_ENTRIES) {
     // Throttle to ≤1 warn/minute: sustained capacity under load should produce
     // one signal line per minute, not one per request.
     const now = Date.now()
     if (now - lastCapWarnAt >= CAP_WARN_THROTTLE_MS) {
       lastCapWarnAt = now
-      log.warn("activeRefreshes map at capacity (≥500 entries) — investigate if persistent; per-sub dedup still active", {
+      log.warn("activeRefreshes map at capacity (≥500 entries) — investigate if persistent; per-session dedup still active", {
         size: activeRefreshes.size,
         sub,
+        loginIat,
       })
     }
     // Fall through — don't return early.
   }
 
   // Use an identity check rather than a plain delete so that a concurrent
-  // insertion for the same sub between the .finally() binding and when it fires
-  // cannot accidentally remove the new promise.
+  // insertion for the same session between the .finally() binding and when it
+  // fires cannot accidentally remove the new promise.
   //
   // doRefresh() is fully `async`, so it always returns a Promise (resolving or
   // rejecting) and can never throw synchronously.  The .finally() therefore runs
@@ -144,11 +167,11 @@ export async function refreshGoogleToken(token: JWT): Promise<JWT | null> {
   // captures the binding (not the value at bind-time), so by the time it runs,
   // `promise` is always defined.
   const promise = doRefresh(token, log).finally(() => {
-    if (activeRefreshes.get(sub) === promise) {
-      activeRefreshes.delete(sub)
+    if (activeRefreshes.get(dedupKey) === promise) {
+      activeRefreshes.delete(dedupKey)
     }
   })
-  activeRefreshes.set(sub, promise)
+  activeRefreshes.set(dedupKey, promise)
   return promise
 }
 

@@ -292,15 +292,19 @@ describe("refreshGoogleToken", () => {
     expect(getActiveRefreshCount()).toBe(0)
   })
 
-  it("bypasses dedup (still refreshes) when the activeRefreshes map is at capacity (≥500 entries)", async () => {
+  it("falls through to normal dedup path when the activeRefreshes map is at capacity (≥500 entries)", async () => {
     // Regression pin: when the dedup map holds ≥500 entries, refreshGoogleToken()
-    // must bypass dedup and call doRefresh() directly rather than clearing the map
-    // (clearing would orphan in-flight Promises and create a dedup gap).
+    // emits a throttled warn but still falls through to the normal dedup path —
+    // it inserts the new session's Promise (letting the map briefly exceed 500)
+    // rather than bypassing the map.  Bypassing would let N concurrent callers
+    // for the same session each issue an independent fetch, racing refresh_token
+    // rotation.
 
-    // Seed the map with 500 in-flight Promises.  Each dummy token has a unique sub
-    // (none collide with makeToken()'s sub='user-123').  We use mockRejectedValue so
-    // the fetch calls resolve quickly and the dummy .finally() callbacks can clean
-    // up the map entries after we've made our assertions.
+    // Seed the map with 500 in-flight Promises.  Each dummy token has a unique
+    // dedupKey (sub without loginIat = just 'cap-dummy-N', none collide with
+    // makeToken()'s dedupKey 'user-123').  We use mockRejectedValue so the fetch
+    // calls resolve quickly and the dummy .finally() callbacks can clean up the
+    // map entries after our assertions.
     // Crucially: all 500 fetch() calls are issued SYNCHRONOUSLY before any await,
     // so the map stays full when we check getActiveRefreshCount() below.
     global.fetch = jest.fn().mockRejectedValue(new Error('cap-test dummy'))
@@ -317,7 +321,7 @@ describe("refreshGoogleToken", () => {
       )
     }
 
-    // No await has happened yet — all 500 subs are in the map synchronously.
+    // No await has happened yet — all 500 sessions are in the map synchronously.
     expect(getActiveRefreshCount()).toBe(500)
 
     // Replace fetch so the real token's doRefresh() gets a successful response.
@@ -329,15 +333,86 @@ describe("refreshGoogleToken", () => {
       expires_in: 3600,
     })
 
-    // Map is at capacity → refreshGoogleToken bypasses dedup and calls doRefresh() directly.
-    const result = await refreshGoogleToken(makeToken()) // sub='user-123'
+    // Map is at capacity but 'user-123' is not already there → falls through and
+    // inserts a new entry (map briefly at 501), then doRefresh() runs successfully.
+    const result = await refreshGoogleToken(makeToken()) // dedupKey='user-123'
 
-    // Bypass path called doRefresh() and the real token was refreshed successfully.
+    // Fall-through path called doRefresh() and the real token was refreshed.
     expect(result).not.toBeNull()
     expect(result!.accessToken).toBe(MOCK_ACCESS_TOKEN)
 
     // Settle dummies so their .finally() callbacks clean up the map entries.
     await Promise.allSettled(dummyPromises)
+    expect(getActiveRefreshCount()).toBe(0)
+  })
+
+  it("deduplicates concurrent refreshes for the same sub+loginIat (cross-device isolation)", async () => {
+    // Two sessions from the same Google account (same sub, different loginIat —
+    // e.g. two browsers) each expire at the same instant.  With sub:loginIat
+    // keying they must each get their own Promise and their own fetch().
+    // (If they shared one Promise the second session's loginIat would be overwritten
+    // by the first session's spread — breaking the polling-session-cache key.)
+
+    const SESSION_A_IAT = 1_700_000_000
+    const SESSION_B_IAT = 1_700_001_000
+    const ACCESS_TOKEN_A = "access-token-session-a"
+    const ACCESS_TOKEN_B = "access-token-session-b"
+
+    const tokenA = makeToken({ loginIat: SESSION_A_IAT })
+    const tokenB = makeToken({ loginIat: SESSION_B_IAT })
+
+    // Queue two distinct responses — one for each session's fetch().
+    // mockGoogleTokenResponse replaces fetch entirely each call, so we chain:
+    // first call to fetch → A's response, second call → B's response.
+    global.fetch = jest.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: jest.fn().mockResolvedValueOnce({ access_token: ACCESS_TOKEN_A, id_token: MOCK_ID_TOKEN, expires_in: 3600 }),
+      } as unknown as Response)
+      .mockResolvedValueOnce({
+        ok: true,
+        json: jest.fn().mockResolvedValueOnce({ access_token: ACCESS_TOKEN_B, id_token: MOCK_ID_TOKEN, expires_in: 3600 }),
+      } as unknown as Response)
+
+    const [resultA, resultB] = await Promise.all([
+      refreshGoogleToken(tokenA),
+      refreshGoogleToken(tokenB),
+    ])
+
+    // Both sessions must have hit the network independently.
+    expect(global.fetch).toHaveBeenCalledTimes(2)
+    // Each session gets its own token — no loginIat clobber.
+    expect(resultA).not.toBeNull()
+    expect(resultB).not.toBeNull()
+    expect(resultA!.accessToken).toBe(ACCESS_TOKEN_A)
+    expect(resultB!.accessToken).toBe(ACCESS_TOKEN_B)
+    expect(resultA!.loginIat).toBe(SESSION_A_IAT)
+    expect(resultB!.loginIat).toBe(SESSION_B_IAT)
+    expect(getActiveRefreshCount()).toBe(0)
+  })
+
+  it("deduplicates concurrent refreshes for the same sub+loginIat (same-session dedup still works)", async () => {
+    // Two concurrent refreshes from the SAME session (same sub + same loginIat)
+    // must still share one Promise — only one fetch should be issued.
+    mockGoogleTokenResponse({
+      access_token: MOCK_ACCESS_TOKEN,
+      id_token: MOCK_ID_TOKEN,
+      expires_in: 3600,
+    })
+
+    const SHARED_IAT = 1_700_000_000
+    const token = makeToken({ loginIat: SHARED_IAT })
+
+    const [result1, result2] = await Promise.all([
+      refreshGoogleToken(token),
+      refreshGoogleToken(token),
+    ])
+
+    expect(global.fetch).toHaveBeenCalledTimes(1) // shared Promise → single fetch
+    expect(result1).not.toBeNull()
+    expect(result2).not.toBeNull()
+    expect(result1!.accessToken).toBe(MOCK_ACCESS_TOKEN)
+    expect(result2!.accessToken).toBe(MOCK_ACCESS_TOKEN)
     expect(getActiveRefreshCount()).toBe(0)
   })
 

@@ -3,7 +3,7 @@
  * Reduces auth overhead from ~500ms to ~5ms per request
  */
 
-import { getServerSession } from '@/lib/auth/server-session';
+import { getServerSession, type UserSession } from '@/lib/auth/server-session';
 import { getCurrentUserAction } from '@/actions/db/get-current-user-action';
 import { pollingSessionCache, generateSessionCacheKey } from './polling-session-cache';
 import { authPerformanceMonitor } from '@/lib/monitoring/auth-performance-monitor';
@@ -14,12 +14,17 @@ const log = createLogger({ module: 'optimized-polling-auth' });
 export interface OptimizedAuthResult {
   isAuthorized: boolean;
   userId: number;
-  session: {
-    sub: string;
-    email?: string;
-    givenName?: string | null;
-    familyName?: string | null;
-  };
+  /**
+   * The authenticated session.  On the cache-hit path this is the full
+   * `UserSession` stored at cache-write time (which includes `loginIat`,
+   * `roleVersion`, `idToken`, etc.).  Typed as `UserSession` rather than a
+   * narrower inline shape so callers are not surprised when they access fields
+   * that are present at runtime but absent from the declared type.
+   *
+   * For failed-auth results the value is a minimal sentinel `{ sub: '' }` — not
+   * a real session.  Callers should always check `isAuthorized` before using it.
+   */
+  session: UserSession;
   userRoles: string[];
   authMethod: 'cache' | 'database' | 'failed';
   authTime: number;

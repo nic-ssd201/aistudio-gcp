@@ -7,21 +7,15 @@ import { refreshGoogleToken } from "@/lib/auth/refresh-google-token"
 import { hasVerifiedGoogleEmail } from "@/lib/auth/google-email-guard"
 import { getRefreshThresholdMs, getSessionMaxAgeSecs } from "@/lib/auth/token-refresh-config"
 
-// AUTH_GOOGLE_FORCE_CONSENT: single parse shared by the startup log and the
-// provider prompt selection below.  Three previously-independent reads of the
-// same env var with the same `.toLowerCase() === 'false'` logic are replaced
-// by this one derived value.
-//
-// Trim before lowercasing so a stray-space value like " false" does not silently
-// default to consent mode — consistent with the .trim() applied to Google-creds
-// and DB-config vars in lib/env-validation.ts.
-// Default is true (consent mode) when the var is absent or unrecognised — this
-// is also enforced by the env-validation startup warning in lib/env-validation.ts.
-// Note: evaluated once at module load. Tests that mutate AUTH_GOOGLE_FORCE_CONSENT
-// via process.env between cases must use jest.isolateModules() (or jest.resetModules())
-// to reload auth.ts and pick up the new value — a simple assignment mid-test is
-// not visible here since this const is already bound.
-const googleForceConsent = process.env.AUTH_GOOGLE_FORCE_CONSENT?.trim().toLowerCase() !== 'false'
+// AUTH_GOOGLE_FORCE_CONSENT: evaluated lazily on each call rather than as a
+// module-level constant, so tests that set process.env.AUTH_GOOGLE_FORCE_CONSENT
+// between cases can simply do so without needing jest.isolateModules() to reload
+// the module.  All logic is identical to the previous const: trim before
+// lowercasing (catches stray-space values like " false"), default to true (consent
+// mode) when the var is absent or unrecognised — same as env-validation.ts.
+function getForceConsent(): boolean {
+  return process.env.AUTH_GOOGLE_FORCE_CONSENT?.trim().toLowerCase() !== 'false'
+}
 
 // Log the effective Google prompt mode at module load so operators can confirm
 // what they actually got (consent vs select_account) without reading source code.
@@ -36,7 +30,7 @@ declare global { var __authConfigLogged__: boolean | undefined }
 if (!globalThis.__authConfigLogged__) {
   globalThis.__authConfigLogged__ = true
   const log = createLogger({ context: 'auth-config' })
-  const effectivePrompt = googleForceConsent ? 'consent' : 'select_account'
+  const effectivePrompt = getForceConsent() ? 'consent' : 'select_account'
   log.warn(`Google OAuth prompt mode: "${effectivePrompt}"`, {
     AUTH_GOOGLE_FORCE_CONSENT: process.env.AUTH_GOOGLE_FORCE_CONSENT ?? '(unset — defaulting to consent)',
   })
@@ -85,8 +79,8 @@ export const authConfig: NextAuthConfig = {
           //   without a refreshToken) before enabling this in production.
           //
           // Default: "consent" — set AUTH_GOOGLE_FORCE_CONSENT=false to opt out.
-          // Comparison is case-insensitive; see googleForceConsent at module top.
-          prompt: googleForceConsent ? 'consent' : 'select_account',
+          // Comparison is case-insensitive; see getForceConsent() at module top.
+          prompt: getForceConsent() ? 'consent' : 'select_account',
         },
       },
       checks: ["pkce", "state", "nonce"],
@@ -205,7 +199,7 @@ export const authConfig: NextAuthConfig = {
           if (!account.refresh_token) {
             log.warn("Initial sign-in: no refresh_token returned by Google — session will end at access-token expiry", {
               sub: decoded.sub,
-              prompt: googleForceConsent ? 'consent' : 'select_account',
+              prompt: getForceConsent() ? 'consent' : 'select_account',
             })
           }
 
