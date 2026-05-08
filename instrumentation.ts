@@ -114,6 +114,13 @@ export async function register(): Promise<void> {
       // The missing vars will cause individual request handlers to fail loudly.
       const { createLogger } = await import("@/lib/logger");
       const log = createLogger({ context: "instrumentation", operation: "env-validation" });
+      // ALERT: add a Cloud Logging filter on this log line to catch silent prod
+      // misconfigurations before users do:
+      //   resource.type="cloud_run_revision"
+      //   jsonPayload.message="Environment validation failed at startup*"
+      // A rolling deploy with a misconfigured revision will keep old instances
+      // healthy while routing some requests to the broken one — the filter above
+      // surfaces this before it escalates.
       log.error("Environment validation failed at startup — some features may not work", {
         error: err instanceof Error ? err.message : String(err),
       });

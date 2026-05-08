@@ -54,6 +54,19 @@ Optional tuning:
 | `GCS_BUCKET` | GCS bucket for document/file storage | `aistudio-dev-documents` | ✅ |
 | `GCS_REGION` | Bucket region | `us-central1` | ❌ |
 
+### Google sign-in options
+
+| Variable | Default | Description | Required |
+|----------|---------|-------------|----------|
+| `AUTH_GOOGLE_HD` | — | Google Workspace hosted domain restriction (e.g. `psd401.net`). Set to `OPEN` to explicitly allow any Google account. **Required in production** — the app will refuse to start without it. | ✅ (prod) |
+| `AUTH_GOOGLE_FORCE_CONSENT` | `true` | Set `false` to use `select_account` instead of `consent` prompt. With `false`, Google may not return a `refresh_token` on repeat sign-ins, causing silent session expiry. | ❌ |
+| `AUTH_DEBUG` | `false` | Set `true` to enable NextAuth verbose debug logs. **Never set in production** — it logs token-event details to stdout. | ❌ |
+
+> **⚠️ `AUTH_GOOGLE_FORCE_CONSENT` is evaluated once at module load**, not per-request.
+> Changing it in Cloud Run environment variables requires a **service redeploy** to take effect —
+> updating the env var alone (without deploying a new revision) will not change the prompt behaviour.
+> The same applies to `AUTH_DEBUG` and `AUTH_GOOGLE_HD`.
+
 ### Session
 
 | Variable | Default | Description |

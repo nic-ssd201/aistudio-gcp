@@ -125,6 +125,24 @@ disable the cache entirely, or scale Cloud Run down to 1 instance temporarily.
 The application functions correctly with the cache disabled — only polling
 performance is affected.
 
+**`roleVersion` coverage audit (confirmed)**: all role-mutation code paths bump
+`role_version` atomically inside their transactions — `updateUser` (conditional on
+actual role change), plus `assignRole`, `removeRole`, and `replaceRoles` in
+`lib/db/drizzle/user-roles.ts`. The cross-instance fallback via
+`/api/auth/refresh-session` therefore fires correctly on all role changes.
+
+## Recommended Cloud Logging Alerts
+
+Set up alerts for these log lines in Cloud Logging so production misconfigurations
+surface before users are affected:
+
+| Alert pattern | Significance |
+|---------------|--------------|
+| `"Environment validation failed at startup"` | A Cloud Run revision started with missing required env vars (e.g. `AUTH_GOOGLE_HD`). In a rolling deploy, old healthy instances mask the issue — this alert catches it early. |
+| `"Google token refresh failed"` + `error: "invalid_grant"` | Refresh-token rotation race or revoked grant. A spike correlated with horizontal scaling indicates the cross-browser refresh-token clobber edge case. |
+| `"alert":"short_expires_in"` | Google token endpoint returned an `expires_in` below the minimum floor. Each occurrence forces a user re-auth; a sustained spike indicates Google token-endpoint misbehavior. |
+| `"activeRefreshes map at capacity"` | Concurrent-refresh dedup map hit the 500-entry soft cap. Sustained occurrences burn additional Google API quota (each bypass caller makes an independent fetch). |
+
 ## Disaster Recovery
 - Restore RDS from automated or manual snapshots as needed.
 - S3 versioning allows recovery of deleted/overwritten documents within the retention window.
