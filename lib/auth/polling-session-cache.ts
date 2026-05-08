@@ -101,6 +101,14 @@ export class PollingSessionCache {
       this.evictOldest();
     }
 
+    // Delete-before-set: if sessionId already exists in the Map, Map.set()
+    // updates the value in place but preserves the entry's original insertion
+    // position.  A second session for the same key (e.g. after a cache-miss
+    // on a refreshed session) would therefore appear "older" than entries
+    // inserted after the original, breaking evictOldest()'s FIFO invariant.
+    // Deleting first forces re-insertion at the tail so the entry sorts as
+    // "newest" — consistent with the "just cached" semantics of this call.
+    this.cache.delete(sessionId);
     this.cache.set(sessionId, {
       session,
       userId,

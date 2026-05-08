@@ -43,12 +43,48 @@ const STUB_SUB = 'google-oidc-sub-abc123'
  *   tests that don't care about the diff still work.  Pass a different set
  *   to simulate a real role change (`rolesChanged = true`).
  */
+// Sentinel markers for the schema mock — distinct objects so the Proxy can
+// tell them apart via reference equality when `.from(table)` is intercepted.
+// Named `_schemaName` rather than Symbol so JSON.stringify in logs still works.
+const SCHEMA_SENTINELS = {
+  users:     { _schemaName: 'users' },
+  userRoles: { _schemaName: 'userRoles' },
+  roles:     { _schemaName: 'roles' },
+} as const
+
+/**
+ * Build a Proxy-based `tx` for use inside the updateUser transaction callback.
+ *
+ * The Proxy intercepts Drizzle's fluent API so the action under test can run
+ * against an in-memory stub without a real database.
+ *
+ * ### Why table-keyed, not selectCallCount-keyed
+ *
+ * The previous version keyed SELECT responses on invocation order
+ * (selectCallCount), which silently broke if any future edit reordered the
+ * SQL queries inside the transaction.  This version intercepts `.from(table)`
+ * and maps each schema-sentinel to a fixed response:
+ *
+ *   - `.from(SCHEMA_SENTINELS.userRoles)` → current role assignments
+ *     (`currentRoleNames`); used by the "fetch current roles" and the
+ *     "admin count" SELECTs.
+ *   - `.from(SCHEMA_SENTINELS.roles)`     → role-name validation rows
+ *     (`roleNames`).
+ *   - anything else (e.g. `.from(users)`) → [].
+ *
+ * If the transaction's query order changes, the correct rows are still returned
+ * because dispatch is keyed on what is queried, not when.
+ *
+ * @param currentRoleNames - Roles to return for `.from(userRoles)` SELECTs
+ *   (the user's current assignments before the edit).  Defaults to `roleNames`
+ *   so tests that don't need a diff still work without extra config.
+ */
 function makeProxyTx(
   cognitoSub: string | null,
   roleNames: string[],
   currentRoleNames: string[] = roleNames
 ): unknown {
-  let selectCallCount = 0
+  let lastFromSentinel: { _schemaName: string } | null = null
   let returningCallCount = 0
   const self: Record<string, unknown> = {}
 
@@ -56,11 +92,32 @@ function makeProxyTx(
     get(_target, prop) {
       if (prop === 'then') {
         return (resolve: (v: unknown[]) => void) => {
-          // The first `then` is the "fetch current role assignments" SELECT;
-          // subsequent ones are role-validation, admin-count, etc.
-          const rows = (selectCallCount++ === 0 ? currentRoleNames : roleNames)
-            .map((name, i) => ({ id: i + 1, name, roleName: name, count: 2 }))
+          // Dispatch on which table was queried, not on call count —
+          // robust to any reordering of SQL statements in the transaction.
+          let rows: unknown[]
+          if (lastFromSentinel?._schemaName === 'userRoles') {
+            // "Fetch current role assignments" SELECT and "admin count" SELECT
+            // both query the userRoles table; both get currentRoleNames rows.
+            rows = currentRoleNames.map((name, i) => ({
+              id: i + 1, name, roleName: name, count: 2,
+            }))
+          } else if (lastFromSentinel?._schemaName === 'roles') {
+            // Role-name validation SELECT queries the roles table directly.
+            rows = roleNames.map((name, i) => ({
+              id: i + 1, name, roleName: name, count: 2,
+            }))
+          } else {
+            rows = []
+          }
+          lastFromSentinel = null
           resolve(rows)
+        }
+      }
+      if (prop === 'from') {
+        // Capture which schema sentinel was passed so `then` can dispatch correctly.
+        return (table: { _schemaName?: string }) => {
+          lastFromSentinel = (table && '_schemaName' in table) ? table as { _schemaName: string } : null
+          return proxy
         }
       }
       if (prop === 'returning') {
@@ -158,11 +215,12 @@ async function loadUpdateUser(opts: {
       executeQuery: jest.fn().mockResolvedValue([]),
     }))
 
-    // Schema stubs — just enough for the action's imports to resolve
+    // Schema stubs — use SCHEMA_SENTINELS so the Proxy's .from() interceptor
+    // can distinguish which table is being queried and return the right rows.
     jest.doMock('@/lib/db/schema', () => ({
-      users: {},
-      userRoles: {},
-      roles: {},
+      users:     SCHEMA_SENTINELS.users,
+      userRoles: SCHEMA_SENTINELS.userRoles,
+      roles:     SCHEMA_SENTINELS.roles,
     }))
     jest.doMock('@/lib/db/schema/tables/nexus-conversations', () => ({ nexusConversations: {} }))
     jest.doMock('@/lib/db/schema/tables/prompt-usage-events', () => ({ promptUsageEvents: {} }))

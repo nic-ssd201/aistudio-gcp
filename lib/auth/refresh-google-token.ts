@@ -194,7 +194,7 @@ async function doRefresh(token: JWT, log: ReturnType<typeof createLogger>): Prom
         grant_type: "refresh_token",
         client_id: clientId,
         client_secret: secret,
-        refresh_token: token.refreshToken!, // null-guarded at line 126 above
+        refresh_token: token.refreshToken!, // null-guarded by the early return in doRefresh above
       }),
       signal: controller.signal,
     })
