@@ -84,8 +84,11 @@ export function validateEnv(): { isValid: boolean; missing: string[]; warnings: 
   }
 
   // Google OIDC: both ID and secret must be set together.
-  const hasGoogleId = !!process.env.AUTH_GOOGLE_ID;
-  const hasGoogleSecret = !!process.env.AUTH_GOOGLE_SECRET;
+  // Trim whitespace before the truthiness check: a value of '  ' (stray spaces)
+  // would pass !!value but fail at runtime with an "invalid_client" error from
+  // Google — making the problem harder to debug than a startup validation failure.
+  const hasGoogleId = !!(process.env.AUTH_GOOGLE_ID?.trim());
+  const hasGoogleSecret = !!(process.env.AUTH_GOOGLE_SECRET?.trim());
 
   if (hasGoogleId && !hasGoogleSecret) {
     missing.push('AUTH_GOOGLE_SECRET (required when AUTH_GOOGLE_ID is set)');
@@ -96,9 +99,11 @@ export function validateEnv(): { isValid: boolean; missing: string[]; warnings: 
   }
 
   // Database: one of three connection modes must be configured.
-  const hasDatabaseUrl = !!process.env.DATABASE_URL;
-  const hasTcpConfig = !!process.env.DB_HOST && !!process.env.DB_USER && !!process.env.DB_PASSWORD;
-  const hasSocketConfig = !!process.env.CLOUD_SQL_SOCKET_PATH && !!process.env.DB_USER && !!process.env.DB_PASSWORD;
+  // Trim whitespace for the same reason as the Google credentials above: a
+  // stray-space value passes !!value but would fail at connection time.
+  const hasDatabaseUrl = !!(process.env.DATABASE_URL?.trim());
+  const hasTcpConfig = !!(process.env.DB_HOST?.trim()) && !!(process.env.DB_USER?.trim()) && !!(process.env.DB_PASSWORD?.trim());
+  const hasSocketConfig = !!(process.env.CLOUD_SQL_SOCKET_PATH?.trim()) && !!(process.env.DB_USER?.trim()) && !!(process.env.DB_PASSWORD?.trim());
 
   if (!hasDatabaseUrl && !hasTcpConfig && !hasSocketConfig) {
     missing.push('DATABASE_URL, or DB_HOST+DB_USER+DB_PASSWORD, or CLOUD_SQL_SOCKET_PATH+DB_USER+DB_PASSWORD (database configuration required)');

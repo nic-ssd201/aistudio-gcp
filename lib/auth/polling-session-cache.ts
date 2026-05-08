@@ -228,7 +228,12 @@ export class PollingSessionCache {
   }
 
   private estimateMemoryUsage(): string {
-    const avgEntrySize = 500; // Estimated bytes per cache entry
+    // 500 B/entry is a conservative lower-bound estimate for a CachedSession that
+    // carries a UserSession (sub + email + iat), a userId, a userRoles string[],
+    // and the cachedAt/expiresAt/requestCount numbers.  A session with a long
+    // roles array or long email addresses can exceed this.  Treat the returned
+    // value as an order-of-magnitude indicator, not a precise accounting.
+    const avgEntrySize = 500; // bytes — see comment above
     const totalBytes = this.cache.size * avgEntrySize;
 
     if (totalBytes < 1024) return `${totalBytes}B`;

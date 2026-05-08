@@ -608,9 +608,10 @@ export async function updateUser(
 
     // Flush polling cache for this user so role changes propagate immediately
     // to polling endpoints rather than waiting up to 5 minutes for TTL expiry.
-    // subFromTx was returned from inside the transaction via .returning()
-    // so no extra DB query is needed and a post-commit query failure cannot mask
-    // a successful commit as an error.
+    // subFromTx was captured inside the transaction (via the .select() at the
+    // start of the transaction body) and returned as the transaction result, so
+    // no extra post-commit DB query is needed and a post-commit query failure
+    // cannot mask a successful commit as an error.
     // NOTE: only the current process's in-process cache is flushed. On Cloud Run
     // (or any multi-instance deployment), the other N-1 instances continue serving
     // stale roles for up to 5 minutes (the TTL).  This is the accepted trade-off

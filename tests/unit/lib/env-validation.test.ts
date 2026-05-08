@@ -54,6 +54,19 @@ describe("validateEnv()", () => {
     expect(missing.some((m) => m.includes("AUTH_GOOGLE_ID and AUTH_GOOGLE_SECRET are required"))).toBe(true)
   })
 
+  it("fails when AUTH_GOOGLE_ID is whitespace-only — regression pin for stray-space misconfiguration", () => {
+    // A value of '  ' passes !!value but fails at runtime with a misleading
+    // 'invalid_client' error from Google.  The .trim() check catches this at
+    // startup instead.
+    process.env.AUTH_GOOGLE_ID = "   "
+    delete process.env.AUTH_GOOGLE_SECRET
+
+    const { isValid, missing } = validateEnv()
+    expect(isValid).toBe(false)
+    // Both are absent after trim, so the pair-check fires.
+    expect(missing.some((m) => m.includes("AUTH_GOOGLE_ID and AUTH_GOOGLE_SECRET are required"))).toBe(true)
+  })
+
   it("fails when AUTH_GOOGLE_ID is set without AUTH_GOOGLE_SECRET", () => {
     delete process.env.AUTH_GOOGLE_SECRET
 

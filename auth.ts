@@ -314,13 +314,23 @@ export const authConfig: NextAuthConfig = {
       // Use given_name as display name, with multiple fallbacks
       const displayName = givenName || fullName || preferredUsername || familyName || email;
 
+      // A missing email is theoretically unreachable: hasVerifiedGoogleEmail()
+      // in signIn() rejects any token without a verified email before it can
+      // produce a session.  But if something bypasses signIn() in a future path
+      // (a test fixture, JIT provisioning, etc.), an empty-string email would
+      // silently propagate into the users table — log a warn so the regression
+      // surfaces in production telemetry immediately.
+      if (!email) {
+        log.warn("session callback reached with no email — signIn guard may have been bypassed", {
+          sub: token.sub,
+        })
+      }
+
       session.user = {
         ...session.user,
         id: token.sub as string,
-        // `email` is string | undefined after the cast fix; NextAuth's User type
-        // requires string here.  Use ?? '' as a safe fallback — a missing email
-        // is already rejected by hasVerifiedGoogleEmail() in signIn(), so reaching
-        // the session callback with no email is theoretically unreachable.
+        // `email` is string | undefined per the cast fix; NextAuth's User type
+        // requires string.  Use ?? '' as a safe fallback (see warn above).
         email: email ?? '',
         name: displayName,
         givenName: givenName || null,

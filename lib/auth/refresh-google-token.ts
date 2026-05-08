@@ -97,7 +97,7 @@ export async function refreshGoogleToken(token: JWT): Promise<JWT | null> {
   // left intact, no race is introduced, and the extra refresh for this one sub
   // is the only cost.  At 500 entries the dedup benefit is already marginal.
   if (activeRefreshes.size >= 500) {
-    log.warn("activeRefreshes map at capacity (≥500 entries) — bypassing dedup for this call", {
+    log.warn("activeRefreshes map at capacity (≥500 entries) — bypassing dedup for this call; should be rare in production — investigate if persistent", {
       size: activeRefreshes.size,
       sub,
     })
@@ -224,6 +224,23 @@ async function doRefresh(token: JWT, log: ReturnType<typeof createLogger>): Prom
       // as absent — Google shouldn't return `""`, but `||` is free defense-in-depth.
       refreshToken: tokens.refresh_token || token.refreshToken,
       expiresAt: Date.now() + expiresIn * 1000,
+    }
+
+    // Fail-closed: the `refreshToken: tokens.refresh_token || token.refreshToken`
+    // chain above should always produce a non-empty string (token.refreshToken is
+    // checked for presence at line 122 before reaching doRefresh).  But if both
+    // somehow resolve to undefined / empty-string (e.g. a future refactor removes
+    // the early return), storing an absent refresh token would cause a silent
+    // auth failure on the *next* expiry without any visible error.  Return null
+    // here so the caller forces re-authentication immediately rather than letting
+    // a broken token persist in the cookie.
+    if (!refreshed.refreshToken) {
+      log.warn("Token refresh produced a result with no refreshToken — returning null (fail-closed)", {
+        sub: token.sub,
+        hadOriginalRefreshToken: !!token.refreshToken,
+        googleReturnedRefreshToken: !!tokens.refresh_token,
+      })
+      return null
     }
 
     log.info("Google token refreshed successfully")
