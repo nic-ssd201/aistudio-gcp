@@ -132,7 +132,10 @@ export const authConfig: NextAuthConfig = {
           const payload = atob(base64Payload);
           const decoded = JSON.parse(payload);
 
-          const issuedAt = decoded.iat ? decoded.iat * 1000 : Date.now()
+          // Use `??` (not `?`) so iat=0 (Unix epoch) is treated as present — consistent
+          // with `loginIat: decoded.iat ?? …` below.  A truthiness check (`?`) would
+          // silently fall back to Date.now() for a valid-but-zero iat.
+          const issuedAt = (decoded.iat ?? Math.floor(Date.now() / 1000)) * 1000
           const expiresAt = account.expires_at ? account.expires_at * 1000 : Date.now() + (60 * 60 * 1000) // 1 hour fallback — matches Google's access-token lifetime
 
           log.debug("Token lifetime information", {

@@ -80,7 +80,13 @@ export async function authenticatePollingRequest(): Promise<OptimizedAuthResult>
         };
       }
     } else {
-      log.warn('Skipping polling cache — session.iat absent (loginIat propagation broken?)', {
+      // Downgraded to debug: during a rolling deploy, every in-flight JWT that
+      // predates the loginIat field triggers this path.  At warn level that
+      // produces one log line per poll per user for up to 24 h (the JWT TTL) —
+      // a potential log-volume spike that drowns signal at exactly the worst time.
+      // Debug is sufficient: the condition is expected during the rollout window
+      // and auth.ts already documents the transition behaviour.
+      log.debug('Skipping polling cache — session.iat absent (expected during loginIat rollout)', {
         sub: session.sub,
       });
     }

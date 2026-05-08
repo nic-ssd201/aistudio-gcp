@@ -46,7 +46,7 @@ export class PollingSessionCache {
    * metrics purposes.  The returned object is the live cache entry (not a copy),
    * so callers must not mutate it.
    */
-  getCachedSession(sessionId: string): CachedSession | null {
+  getCachedSession(sessionId: string): Readonly<CachedSession> | null {
     const cached = this.cache.get(sessionId);
 
     if (!cached) {
@@ -200,19 +200,14 @@ export class PollingSessionCache {
   }
 
   private evictOldest(): void {
-    let oldestKey: string | null = null;
-    let oldestTime = Infinity;
-
-    for (const [key, entry] of this.cache.entries()) {
-      if (entry.cachedAt < oldestTime) {
-        oldestTime = entry.cachedAt;
-        oldestKey = key;
-      }
-    }
-
-    // Use !== null rather than truthiness so an empty-string key (unlikely but
-    // theoretically possible) is not skipped.
-    if (oldestKey !== null) {
+    // Map preserves insertion order, so the first key is always the oldest
+    // by creation time — identical semantics to the previous O(N) min-scan
+    // over cachedAt, but O(1) instead.  (setCachedSession always uses
+    // Map.set() which appends new keys; existing-key updates preserve position,
+    // but setCachedSession only calls set() for new sessions after eviction,
+    // so order ≈ insertion order in practice.)
+    const oldestKey = this.cache.keys().next().value;
+    if (oldestKey !== undefined) {
       this.cache.delete(oldestKey);
       log.debug('Evicted oldest cache entry', { sessionId: oldestKey });
     }

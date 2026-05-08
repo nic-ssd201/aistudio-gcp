@@ -54,7 +54,7 @@ export async function resolveUserId(
   // Slow path: provision the user
   log.info("User not found by OIDC sub — provisioning", {
     // Note: the DB column is still named cognito_sub; rename tracked in
-    // nic-ssd201/aistudio-gcp#8 (col rename cognito_sub → auth_sub).
+    // TODO(#8): col rename cognito_sub → auth_sub.
     sub: sanitizeForLogging(session.sub),
     hasEmail: !!session.email,
   })
@@ -70,7 +70,7 @@ export async function resolveUserId(
         })
         // MUST explicitly update cognitoSub column — createUser UPSERT conflicts on
         // that column, not email. Without this call a duplicate row is inserted.
-        // Column rename to auth_sub tracked in nic-ssd201/aistudio-gcp#8.
+        // TODO(#8): col rename cognito_sub → auth_sub.
         // Mirrors getCurrentUserAction.ts:100
         await updateUser(byEmail.id, { cognitoSub: session.sub })
         return byEmail.id
@@ -124,9 +124,18 @@ export async function resolveUserId(
 
   // Assign default role using addUserRole, which runs in a transaction and
   // increments role_version for session cache invalidation.
+  //
   // Numeric username prefix → student (K-12 district convention: student IDs
   // are all-digit numbers, e.g. 123456@psd401.net). Non-numeric → staff.
   // Defaults to least-privilege (student) when username cannot be determined.
+  //
+  // ⚠️  Domain assumption: this heuristic is designed for deployments that
+  // restrict sign-in to a single Google Workspace domain via `hd` in auth.ts.
+  // In an open deployment (no `hd` restriction), any all-digit Google account
+  // local-part (e.g. 2026@gmail.com) would be auto-provisioned as "student".
+  // auth.ts line 42 uses `hd: process.env.AUTH_GOOGLE_HD` — if that env var
+  // is unset, callers from outside the expected domain bypass this check and
+  // receive the wrong default role. Set AUTH_GOOGLE_HD in production.
   const isNumeric = /^\d+$/.test(username) // already false for empty strings
   const defaultRole = isNumeric ? "student" : "staff"
 

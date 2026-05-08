@@ -45,6 +45,11 @@ import { getRefreshThresholdMs } from "@/lib/auth/token-refresh-config"
  */
 const activeRefreshes = new Map<string, Promise<JWT | null>>()
 
+// Throttle the at-capacity warn to at most once per minute so a sustained burst
+// (500+ concurrent distinct subs) doesn't flood telemetry with redundant lines.
+let lastCapWarnAt = 0
+const CAP_WARN_THROTTLE_MS = 60_000
+
 /**
  * Returns the number of in-flight refresh Promises currently tracked by the
  * dedup map.  Exported exclusively for unit-test assertions — call sites in
@@ -74,12 +79,17 @@ export async function refreshGoogleToken(token: JWT): Promise<JWT | null> {
     return null
   }
 
-  // Keying on sub alone assumes one browser session = one refreshToken per sub,
-  // which is true in practice (NextAuth issues one JWT cookie per session, and
-  // Google only rotates the refresh token occasionally). If two concurrent callers
-  // somehow held different refresh tokens for the same sub, the second caller's
-  // token would be silently dropped — but this cannot happen within a single
-  // JWT session since all callers share the same cookie.
+  // Keying on sub alone: within a single browser session all callers share the
+  // same JWT cookie, so only one refreshToken exists per sub at a time.
+  // Cross-device concurrency (same Google account signed in on two browsers or
+  // two tabs with distinct cookies) could produce two concurrent refreshes for
+  // the same sub with different JWTs.  In that case the second caller joins the
+  // first's Promise, and the resulting JWT is spread from the first caller's
+  // token — the second caller's `loginIat` (and any other per-session custom
+  // claims) get silently overwritten by the first's.  This is a correctness
+  // edge (loginIat jitter in the polling cache) but not a security issue (both
+  // callers are the same Google identity).  Acceptable today; if cross-device
+  // correctness becomes a hard requirement, key the map on `sub:loginIat` instead.
 
   // Deduplicate concurrent refresh calls for the same user.
   const existing = activeRefreshes.get(sub)
@@ -100,10 +110,17 @@ export async function refreshGoogleToken(token: JWT): Promise<JWT | null> {
   // refresh_token rotation — an acceptable risk at 500+ subs where the dedup
   // benefit is already marginal.
   if (activeRefreshes.size >= 500) {
-    log.warn("activeRefreshes map at capacity (≥500 entries) — bypassing dedup for this call; should be rare in production — investigate if persistent", {
-      size: activeRefreshes.size,
-      sub,
-    })
+    // Throttle to ≤1 warn/minute: if the map stays at capacity under sustained
+    // load, a warn per request would itself cause a log-volume spike.  One
+    // sample per minute is enough signal for an on-call engineer.
+    const now = Date.now()
+    if (now - lastCapWarnAt >= CAP_WARN_THROTTLE_MS) {
+      lastCapWarnAt = now
+      log.warn("activeRefreshes map at capacity (≥500 entries) — bypassing dedup; should be rare — investigate if persistent", {
+        size: activeRefreshes.size,
+        sub,
+      })
+    }
     return doRefresh(token, log)
   }
 
@@ -162,7 +179,7 @@ async function doRefresh(token: JWT, log: ReturnType<typeof createLogger>): Prom
         grant_type: "refresh_token",
         client_id: clientId,
         client_secret: secret,
-        refresh_token: token.refreshToken as string,
+        refresh_token: token.refreshToken!, // null-guarded at line 126 above
       }),
       signal: controller.signal,
     })

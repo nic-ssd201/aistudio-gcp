@@ -1,13 +1,21 @@
 "use client"
 
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { signOut } from 'next-auth/react';
 
 export default function SignOutPage() {
   const router = useRouter();
+  // Guard against React Strict Mode's double-invocation of effects in development:
+  // without this, two POSTs land on /api/auth/signout — harmless since signOut()
+  // is idempotent, but produces a duplicate console.error on the second call and
+  // is confusing noise in dev tools network panels.
+  const signOutStarted = useRef(false);
 
   useEffect(() => {
+    if (signOutStarted.current) return;
+    signOutStarted.current = true;
+
     // Security dependency: this page relies on middleware.ts setting
     // `X-Frame-Options: DENY` on every response. Without it an attacker could
     // embed this page in an invisible iframe and trigger an unconditional

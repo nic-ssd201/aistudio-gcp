@@ -540,7 +540,7 @@ export async function updateUser(
             ...(rolesChanged ? { roleVersion: sql`${users.roleVersion} + 1` } : {}),
           })
           .where(eq(users.id, userId))
-          // rename pending: users.cognitoSub → users.authSub (issue #8)
+          // TODO(#8): rename users.cognitoSub → users.authSub once the column rename lands
           .returning({ id: users.id, cognitoSub: users.cognitoSub })
 
         // Throw if user doesn't exist
@@ -751,7 +751,7 @@ export async function deleteUser(userId: number): Promise<ActionState<void>> {
         const result = await tx
           .delete(users)
           .where(eq(users.id, userId))
-          // rename pending: users.cognitoSub → users.authSub (issue #8)
+          // TODO(#8): rename users.cognitoSub → users.authSub once the column rename lands
           .returning({ id: users.id, cognitoSub: users.cognitoSub })
 
         if (result.length === 0) {
