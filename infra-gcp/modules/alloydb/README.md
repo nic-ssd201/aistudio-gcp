@@ -25,7 +25,6 @@
 | `cluster_uri` | AlloyDB cluster URI |
 | `primary_instance_uri` | Primary instance URI |
 | `read_pool_instance_uri` | Read pool instance URI (if enabled) |
-| `primary_private_ip` | Primary instance IP |
-| `connection_string` | Sample connection string (sensitive) |
+| `primary_private_ip` | Primary instance IP — wire to `DB_HOST` on consumers |
 
 See spec §3.6.
