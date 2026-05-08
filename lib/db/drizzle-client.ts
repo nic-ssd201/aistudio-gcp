@@ -678,11 +678,18 @@ export async function validateDatabaseConnection(): Promise<{
   try {
     log.info("Validating database connection", { database: config.database });
 
-    // Execute simple query to test connectivity
+    // Execute simple query to test connectivity.
+    // maxRetries: 0 — the health endpoint (and instrumentation warmup) need a
+    // fast-fail result, not a retried one.  With the default maxRetries: 3 and
+    // a connect_timeout of 10 s, a DB outage could hold the health probe for up
+    // to 30 s — well beyond Cloud Run's typical liveness probe timeout of 5–15 s.
+    // A single attempt limits the probe latency to ≤ connect_timeout (10 s max),
+    // which still fits comfortably inside a 15 s Cloud Run probe window.
     // postgres.js returns the result array directly (no .rows property)
     const result = await executeQuery(
       (database) => database.execute(sql`SELECT 1 as test`),
-      "validateConnection"
+      "validateConnection",
+      { maxRetries: 0 }
     );
 
     // postgres.js returns result as an array-like object

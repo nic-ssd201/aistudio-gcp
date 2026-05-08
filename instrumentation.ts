@@ -112,6 +112,13 @@ export async function register(): Promise<void> {
       // (Cloud Run, Docker) the app should start and let the health endpoint
       // surface the missing vars rather than crashing the container immediately.
       // The missing vars will cause individual request handlers to fail loudly.
+      //
+      // Accepted trade-off: a missing AUTH_GOOGLE_HD in production means the app
+      // starts with no Google Workspace domain restriction — any Google account
+      // can sign in until the var is corrected and the service is redeployed.
+      // The Cloud Logging alert on "Environment validation failed at startup" in
+      // docs/operations/OPERATIONS.md is the recommended mitigation for catching
+      // this before it affects users.
       const { createLogger } = await import("@/lib/logger");
       const log = createLogger({ context: "instrumentation", operation: "env-validation" });
       // ALERT: add a Cloud Logging filter on this log line to catch silent prod

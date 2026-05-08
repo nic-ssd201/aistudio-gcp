@@ -603,8 +603,22 @@ export function createAuth() {
   return NextAuth(authConfig)
 }
 
-// For middleware only - stateless operations
-// This is safe because middleware doesn't maintain user-specific state
+// Middleware auth — constructed at module load for Next.js middleware compatibility.
+//
+// The credential guard in createAuth() (above) is NOT duplicated here.  This is
+// intentional: authMiddleware is used exclusively for JWT verification in
+// Next.js middleware (lib/middleware.ts), which only decodes the signed session
+// cookie — it never initiates an OAuth code exchange that would use clientId or
+// clientSecret.  NextAuth does not validate provider credentials at construction
+// time; they are only exercised during the /api/auth/callback/google flow, which
+// goes through createAuth(), where the guard does fire.
+//
+// Known gap: if AUTH_GOOGLE_ID / AUTH_GOOGLE_SECRET are absent, the module-level
+// Google({ clientId: undefined as string }) call is silent rather than loud.
+// requireValidEnv() in instrumentation.ts already logs an error for missing creds
+// at startup; that log line is the authoritative startup signal.  A future
+// refactor that makes authMiddleware lazy (computed on first call) would close
+// this gap cleanly — tracked in follow-up alongside the credential-guard audit.
 const middlewareAuth = NextAuth(authConfig)
 export const { auth: authMiddleware } = middlewareAuth
 
