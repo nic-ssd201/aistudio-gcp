@@ -1,19 +1,18 @@
 /**
- * Shared TOKEN_REFRESH_THRESHOLD_MS parsing helper.
+ * Shared session / token configuration helpers.
  *
- * This module is the single source of truth for reading and validating the
- * TOKEN_REFRESH_THRESHOLD_MS environment variable.  It is imported by:
+ * Single source of truth for parsing TOKEN_REFRESH_THRESHOLD_MS and
+ * SESSION_MAX_AGE environment variables, imported by:
  *
- *   - auth.ts              — REFRESH_THRESHOLD_MS for the proactive jwt() look-ahead
+ *   - auth.ts                 — REFRESH_THRESHOLD_MS (jwt look-ahead) and maxAge
  *   - refresh-google-token.ts — MIN_EXPIRES_IN floor guard
- *   - lib/env-validation.ts   — startup validation warning
+ *   - lib/env-validation.ts   — startup validation warnings (via requireValidEnv)
  *
  * Parsing rules:
  *   - parseInt + isFinite guard (rejects NaN, Infinity, non-numeric strings)
- *   - 60 000 ms floor (prevents accidentally disabling proactive refresh)
- *   - Default: 300 000 ms (5 minutes) when absent, malformed, or below floor
+ *   - per-variable floor / default documented on each function
  *
- * The function reads process.env on every call so it picks up runtime overrides
+ * All functions read process.env on every call so they pick up runtime overrides
  * in tests (jest.resetModules / process.env mutation between test cases).
  */
 
@@ -40,6 +39,29 @@ export function getRefreshThresholdMs(): number {
 
   const parsed = Number.parseInt(raw, 10)
   if (!Number.isFinite(parsed) || parsed < FLOOR_MS) return DEFAULT_THRESHOLD_MS
+
+  return parsed
+}
+
+/** Default session lifetime: 24 hours in seconds. */
+const DEFAULT_SESSION_MAX_AGE_S = 24 * 60 * 60
+
+/**
+ * Returns the configured JWT session lifetime in **seconds**.
+ *
+ * Reads `SESSION_MAX_AGE` from the environment and applies:
+ *   1. `parseInt` + `isFinite` — rejects NaN / Infinity / non-numeric strings
+ *   2. Positive-integer check — zero or negative values are rejected
+ *   3. Falls back to 86 400 s (24 h) when the value is absent or rejected
+ *
+ * @returns Effective session max age in seconds (always > 0).
+ */
+export function getSessionMaxAgeSecs(): number {
+  const raw = process.env.SESSION_MAX_AGE
+  if (raw === undefined || raw === '') return DEFAULT_SESSION_MAX_AGE_S
+
+  const parsed = Number.parseInt(raw, 10)
+  if (!Number.isFinite(parsed) || parsed <= 0) return DEFAULT_SESSION_MAX_AGE_S
 
   return parsed
 }

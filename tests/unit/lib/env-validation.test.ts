@@ -8,7 +8,7 @@
  * - Required vars: AUTH_URL, AUTH_SECRET, GCS_BUCKET
  */
 
-import { validateEnv } from "@/lib/env-validation"
+import { validateEnv, requireValidEnv } from "@/lib/env-validation"
 
 // Minimal valid env that passes all required checks
 const BASE_ENV: NodeJS.ProcessEnv = {
@@ -265,5 +265,84 @@ describe("validateEnv()", () => {
     const { warnings } = validateEnv()
 
     expect(warnings.some((w) => w.includes("AUTH_GOOGLE_FORCE_CONSENT"))).toBe(false)
+  })
+})
+
+// ── requireValidEnv — warnings actually reach console.warn ────────────────────
+//
+// The reviewer (round-46) identified that validateEnv() accumulates warnings
+// but requireValidEnv() — the only function that emits them via console.warn —
+// was never called in the runtime path.  The fix wires requireValidEnv() into
+// instrumentation.ts:register().  These tests pin the warning-emission contract:
+// they verify that the three new warning paths (TOKEN_REFRESH_THRESHOLD_MS floor,
+// SESSION_MAX_AGE invalid, AUTH_GOOGLE_FORCE_CONSENT unrecognised) actually
+// surface via console.warn when requireValidEnv() is called.
+
+describe("requireValidEnv() warning emission", () => {
+  let warnSpy: jest.SpyInstance
+
+  beforeEach(() => {
+    // Restore a known-good env for each test.
+    Object.assign(process.env, BASE_ENV)
+    // requireValidEnv() suppresses console.warn in NODE_ENV=test (to keep Jest
+    // output clean).  Set 'development' here so the warning-emission path is
+    // actually exercised — this is exactly what we're testing.
+    // Cast needed: TypeScript types NODE_ENV as readonly in ProcessEnv, but
+    // jest's process.env shim is mutable at runtime.
+    ;(process.env as Record<string, string>).NODE_ENV = "development"
+    // Capture console.warn calls without polluting Jest output.
+    warnSpy = jest.spyOn(console, "warn").mockImplementation(() => undefined)
+  })
+
+  afterEach(() => {
+    ;(process.env as Record<string, string>).NODE_ENV = "test"
+    warnSpy.mockRestore()
+  })
+
+  it("emits console.warn when TOKEN_REFRESH_THRESHOLD_MS is below the 60 000 ms floor", () => {
+    process.env.TOKEN_REFRESH_THRESHOLD_MS = "5000"
+
+    requireValidEnv()
+
+    const calls = warnSpy.mock.calls.flat().join(" ")
+    expect(calls).toMatch(/TOKEN_REFRESH_THRESHOLD_MS/)
+    expect(calls).toMatch(/floor/)
+  })
+
+  it("emits console.warn when SESSION_MAX_AGE is not a positive integer", () => {
+    process.env.SESSION_MAX_AGE = "abc"
+
+    requireValidEnv()
+
+    const calls = warnSpy.mock.calls.flat().join(" ")
+    expect(calls).toMatch(/SESSION_MAX_AGE/)
+    expect(calls).toMatch(/positive integer/)
+  })
+
+  it("emits console.warn when AUTH_GOOGLE_FORCE_CONSENT has an unrecognised value", () => {
+    process.env.AUTH_GOOGLE_FORCE_CONSENT = "yes"
+
+    requireValidEnv()
+
+    const calls = warnSpy.mock.calls.flat().join(" ")
+    expect(calls).toMatch(/AUTH_GOOGLE_FORCE_CONSENT/)
+  })
+
+  it("does not emit invalid-value warnings when the optional vars are absent", () => {
+    // Ensure none of the warning-triggering vars are set.
+    // Absent optional vars still produce "Optional variable X is not set" notices,
+    // but those are not the invalid-value warnings we're guarding against.
+    delete process.env.TOKEN_REFRESH_THRESHOLD_MS
+    delete process.env.SESSION_MAX_AGE
+    delete process.env.AUTH_GOOGLE_FORCE_CONSENT
+
+    requireValidEnv()
+
+    // The invalid-value warnings include distinctive phrases that never appear
+    // in the generic "Optional variable X is not set" lines.
+    const calls = warnSpy.mock.calls.flat().join(" ")
+    expect(calls).not.toMatch(/floor and will be ignored/)
+    expect(calls).not.toMatch(/not a positive integer/)
+    expect(calls).not.toMatch(/not recognised — expected "true" or "false"/)
   })
 })

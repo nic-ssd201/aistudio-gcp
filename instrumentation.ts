@@ -88,6 +88,29 @@ async function warmupConnectionPool(): Promise<void> {
 export async function register(): Promise<void> {
   // Only run on server runtime, not during build
   if (process.env.NEXT_RUNTIME === "nodejs") {
+    // Validate environment variables at startup so operator misconfiguration
+    // (e.g. TOKEN_REFRESH_THRESHOLD_MS=5000, SESSION_MAX_AGE=abc) is surfaced
+    // in server logs immediately, not silently ignored until a user hits an
+    // affected code path.  requireValidEnv() throws on missing required vars
+    // (hard failure) and emits console.warn for invalid-but-optional vars.
+    // Dynamic import keeps this out of the Edge runtime and build paths.
+    const { requireValidEnv } = await import("@/lib/env-validation");
+    try {
+      requireValidEnv();
+    } catch (err) {
+      // Log the validation error but do not re-throw: Next.js treats an
+      // exception from register() as a fatal startup error and will refuse to
+      // serve requests.  In environments where env vars are injected at runtime
+      // (Cloud Run, Docker) the app should start and let the health endpoint
+      // surface the missing vars rather than crashing the container immediately.
+      // The missing vars will cause individual request handlers to fail loudly.
+      const { createLogger } = await import("@/lib/logger");
+      const log = createLogger({ context: "instrumentation", operation: "env-validation" });
+      log.error("Environment validation failed at startup — some features may not work", {
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+
     // Register shutdown handlers
     // Using once() to prevent multiple registrations in development
     process.once("SIGTERM", () => handleShutdown("SIGTERM"));

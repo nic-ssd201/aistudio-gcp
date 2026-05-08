@@ -5,7 +5,7 @@ import type { JWT } from "next-auth/jwt"
 import { createLogger } from "@/lib/auth/edge-logger"
 import { refreshGoogleToken } from "@/lib/auth/refresh-google-token"
 import { hasVerifiedGoogleEmail } from "@/lib/auth/google-email-guard"
-import { getRefreshThresholdMs } from "@/lib/auth/token-refresh-config"
+import { getRefreshThresholdMs, getSessionMaxAgeSecs } from "@/lib/auth/token-refresh-config"
 
 // AUTH_GOOGLE_FORCE_CONSENT: single parse shared by the startup log and the
 // provider prompt selection below.  Three previously-independent reads of the
@@ -458,11 +458,9 @@ export const authConfig: NextAuthConfig = {
   },
   session: {
     strategy: "jwt",
-    // Session max age in seconds (default: 24 hours)
-    maxAge: (() => {
-      const parsed = Number.parseInt(process.env.SESSION_MAX_AGE ?? '', 10)
-      return Number.isFinite(parsed) && parsed > 0 ? parsed : 24 * 60 * 60
-    })(),
+    // Session max age in seconds (default: 24 hours).
+    // Parsing is centralised in lib/auth/token-refresh-config.ts (getSessionMaxAgeSecs).
+    maxAge: getSessionMaxAgeSecs(),
   },
   // `cookies` block intentionally omitted — NextAuth v5 defaults are used as-is.
   // In production NextAuth automatically uses the `__Secure-` cookie-name prefix
