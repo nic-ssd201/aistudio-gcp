@@ -49,27 +49,35 @@ This guide covers ongoing operations, monitoring, and management for the AWS inf
 - If stack deployment fails due to missing parameters, provide the required client ID(s) with `--parameters`
 - For missing secrets, create them in AWS Secrets Manager as documented in `DEPLOYMENT.md` (in this directory)
 
-## Google Sign-In Domain Restriction — AUTH_GOOGLE_HD (K-12 Deployments)
+## Google Sign-In Domain Restriction — AUTH_GOOGLE_HD (Required in Production)
 
-**For K-12 and other closed deployments, setting `AUTH_GOOGLE_HD` is strongly recommended in production.**
+**`AUTH_GOOGLE_HD` is required in production.** The application will refuse to start without it.
 
-Without `AUTH_GOOGLE_HD`, any Google account (personal Gmail, other Workspace domains, etc.) can
-sign in and will be **automatically provisioned** as a new user via JIT provisioning in
-`lib/auth/resolve-user.ts`. This is the intended behavior for open deployments, but is almost
-certainly wrong for a school district that should only allow district Google Workspace accounts.
+Without domain restriction, any Google account (personal Gmail, other Workspace domains) can sign
+in and will be **automatically provisioned** as a new user via JIT provisioning in
+`lib/auth/resolve-user.ts`. For a K-12 deployment this is a real exposure — `2026@gmail.com`
+and personal accounts would be auto-provisioned with a default student role.
+
+### For Workspace-restricted deployments (recommended for K-12)
 
 ```bash
 # .env (production)
-AUTH_GOOGLE_HD=your-district.k12.us.example.com   # restricts to this Workspace domain at the IdP level
+AUTH_GOOGLE_HD=your-district.k12.example.com   # restricts to this Workspace domain at the IdP level
 ```
 
-**What it does**: Google's OAuth `hd` parameter causes Google to reject sign-in attempts from
-accounts outside the specified hosted domain *before* they reach the application — the user sees
-a Google-side error, not an application error. This is the strongest gate available short of
-allowlisting individual accounts.
+Google's OAuth `hd` parameter causes Google to reject sign-in attempts from accounts outside the
+specified hosted domain *before* they reach the application — the user sees a Google-side error,
+not an application error. This is the strongest gate available.
 
-**Startup warning**: If `AUTH_GOOGLE_HD` is not set in a production environment, the application
-emits a startup warning at deploy time (`validateEnv()`) to surface this policy gap to operators.
+### For explicitly open deployments (any Google account may sign in)
+
+```bash
+# .env (production)
+AUTH_GOOGLE_HD=OPEN   # explicitly allows any Google account (JIT-provisions all sign-ins)
+```
+
+The sentinel value `OPEN` satisfies the startup requirement while making the open-access policy
+visible in configuration. Any Google account will be JIT-provisioned on first sign-in.
 
 **Note**: `AUTH_GOOGLE_HD` restricts sign-in but does not affect users who are already provisioned.
 To remove a provisioned user's access, use the admin user-management UI to delete or deactivate

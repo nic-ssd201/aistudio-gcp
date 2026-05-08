@@ -23,7 +23,15 @@ async function handleShutdown(signal: string): Promise<void> {
 
   try {
     const { closeDatabase } = await import("@/lib/db/drizzle-client");
+    const { pollingSessionCache } = await import("@/lib/auth/polling-session-cache");
+
     await closeDatabase();
+    // Destroy the polling session cache: clears the cleanup interval so
+    // the timer does not hold the event loop open after the DB is closed.
+    // Also ensures any future async teardown added to destroy() participates
+    // in the shutdown window rather than being silently abandoned.
+    pollingSessionCache.destroy();
+
     log.info("Graceful shutdown completed successfully");
     process.exit(0);
   } catch (error) {

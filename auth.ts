@@ -41,11 +41,11 @@ export const authConfig: NextAuthConfig = {
     // initial 1-hour access token. prompt: "consent" ensures Google always
     // returns a refresh_token (even on repeat sign-ins).
     //
-    // Hosted-domain restriction (hd): when AUTH_GOOGLE_HD is set, Google
-    // enforces that the signing-in account belongs to that Workspace domain
-    // (e.g. "psd401.net"). Without hd, any Google account can sign in and
-    // access control is enforced entirely downstream by the role/permission
-    // system. Set AUTH_GOOGLE_HD in production for Workspace-only deployments.
+    // Hosted-domain restriction (hd): required in production (env-validation.ts).
+    // Set to a Google Workspace domain (e.g. "psd401.net") to restrict sign-in
+    // at the IdP level — Google rejects non-domain accounts before the OAuth
+    // code exchange.  Set to the sentinel "OPEN" to explicitly allow any Google
+    // account (JIT-provisions all sign-ins via resolve-user.ts).
     Google({
       clientId: process.env.AUTH_GOOGLE_ID!,
       clientSecret: process.env.AUTH_GOOGLE_SECRET!,
@@ -54,12 +54,16 @@ export const authConfig: NextAuthConfig = {
           scope: "openid email profile",
           access_type: "offline",
           // Conditionally gate sign-in to a specific Google Workspace domain.
-          // When AUTH_GOOGLE_HD is set, Google rejects accounts outside the domain
-          // before the OAuth code exchange, so the signIn() callback never fires
-          // for non-domain accounts — fail-closed at the IdP level.
-          // When unset, any Google account can sign in; role assignment in
-          // resolve-user.ts is the only access-control layer.
-          ...(process.env.AUTH_GOOGLE_HD ? { hd: process.env.AUTH_GOOGLE_HD } : {}),
+          // When AUTH_GOOGLE_HD is a real domain, Google rejects accounts outside
+          // that domain before the OAuth code exchange — fail-closed at the IdP level.
+          // The sentinel value "OPEN" (set by operators who explicitly allow any
+          // Google account) is intentionally excluded so Google never sees "hd=OPEN".
+          // env-validation.ts requires AUTH_GOOGLE_HD in production; a missing value
+          // is a startup error rather than a silent open-access misconfiguration.
+          ...(() => {
+            const hd = process.env.AUTH_GOOGLE_HD?.trim();
+            return (hd && hd !== 'OPEN') ? { hd } : {};
+          })(),
           // `prompt` controls whether Google shows the consent screen on repeat sign-ins.
           //
           // "consent" (default when AUTH_GOOGLE_FORCE_CONSENT=true or unset):
@@ -365,12 +369,6 @@ export const authConfig: NextAuthConfig = {
       // Use given_name as display name, with multiple fallbacks
       const displayName = givenName || fullName || preferredUsername || familyName || email;
 
-      // A missing email is theoretically unreachable: hasVerifiedGoogleEmail()
-      // in signIn() rejects any token without a verified email before it can
-      // produce a session.  But if something bypasses signIn() in a future path
-      // (a test fixture, JIT provisioning, etc.), an empty-string email would
-      // silently propagate into the users table — log a warn so the regression
-      // surfaces in production telemetry immediately.
       // A missing email is theoretically unreachable: hasVerifiedGoogleEmail()
       // in signIn() rejects any token without a verified email before the
       // session callback is reached.  Throw rather than propagating an

@@ -157,19 +157,26 @@ export function validateEnv(): { isValid: boolean; missing: string[]; warnings: 
     }
   }
 
-  // AUTH_GOOGLE_HD: warn in production when unset.
+  // AUTH_GOOGLE_HD: require in production.
   // Without this, any Google account can sign in and will be auto-provisioned by
-  // resolve-user.ts (JIT provisioning).  Setting AUTH_GOOGLE_HD=your-domain.com
-  // restricts sign-in to that Google Workspace domain at the IdP level — the
-  // safest gate for school deployments where only district accounts should access
-  // the application.  This is an intentional policy choice in open deployments
-  // (e.g. a school that allows parent Google accounts), so we warn rather than error.
-  if (process.env.NODE_ENV === 'production' && !process.env.AUTH_GOOGLE_HD?.trim()) {
-    warnings.push(
-      'AUTH_GOOGLE_HD is not set — any Google account can sign in and will be ' +
-      'auto-provisioned by JIT provisioning. Set AUTH_GOOGLE_HD=your-domain.com ' +
-      'to restrict sign-in to a Google Workspace domain at the IdP level.'
-    );
+  // resolve-user.ts JIT provisioning — including personal Gmail accounts.  For a
+  // K-12 deployment this is a meaningful security gap (any 2025@gmail.com can
+  // register).  Treat as a hard requirement in production so the operator must
+  // make an explicit decision: set the var to a Workspace domain, or set it to
+  // the sentinel value "OPEN" to acknowledge the open-deployment policy.
+  //
+  // To run a genuinely open deployment (any Google account may sign in), set:
+  //   AUTH_GOOGLE_HD=OPEN
+  // This suppresses the error while making the choice visible in config.
+  if (process.env.NODE_ENV === 'production') {
+    const hd = process.env.AUTH_GOOGLE_HD?.trim();
+    if (!hd) {
+      missing.push(
+        'AUTH_GOOGLE_HD (required in production — set to your Google Workspace domain, ' +
+        'e.g. your-district.k12.example.com, to restrict sign-in at the IdP level; ' +
+        'set to "OPEN" to explicitly allow any Google account)'
+      );
+    }
   }
 
   // AUTH_GOOGLE_FORCE_CONSENT: warn when set to an unrecognised value.
