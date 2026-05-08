@@ -1,12 +1,5 @@
-const uploadDocumentToS3 = jest.fn();
-const getS3ObjectStream = jest.fn();
 const uploadDocumentToGcs = jest.fn();
 const getGcsObjectStream = jest.fn();
-
-jest.mock('@/lib/aws/s3-client', () => ({
-  uploadDocument: (...args: unknown[]) => uploadDocumentToS3(...args),
-  getObjectStream: (...args: unknown[]) => getS3ObjectStream(...args),
-}));
 
 jest.mock('@/lib/gcp/gcs-client', () => ({
   uploadDocument: (...args: unknown[]) => uploadDocumentToGcs(...args),
@@ -23,8 +16,6 @@ import { getAttachmentFromS3, storeAttachmentInS3 } from '../attachment-storage-
 describe('attachment-storage-service', () => {
   beforeEach(() => {
     delete process.env.STORAGE_PROVIDER;
-    uploadDocumentToS3.mockReset();
-    getS3ObjectStream.mockReset();
     uploadDocumentToGcs.mockReset();
     getGcsObjectStream.mockReset();
   });
@@ -43,7 +34,6 @@ describe('attachment-storage-service', () => {
      }, 0);
 
     expect(uploadDocumentToGcs).toHaveBeenCalledTimes(1);
-    expect(uploadDocumentToS3).not.toHaveBeenCalled();
     expect(result.s3Key).toBe('conversations/123-attachment.json');
    });
 
@@ -62,7 +52,6 @@ describe('attachment-storage-service', () => {
      }, 1);
 
     expect(uploadDocumentToGcs).toHaveBeenCalledTimes(1);
-    expect(uploadDocumentToS3).not.toHaveBeenCalled();
     expect(result.s3Key).toBe('conversations/456-attachment.json');
    });
 
@@ -77,6 +66,5 @@ describe('attachment-storage-service', () => {
      });
 
     expect(getGcsObjectStream).toHaveBeenCalledWith('conversations/456-attachment.json');
-    expect(getS3ObjectStream).not.toHaveBeenCalled();
    });
 });

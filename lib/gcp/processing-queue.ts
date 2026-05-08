@@ -1,11 +1,9 @@
 /**
- * GCP Cloud Tasks — replacement for `lib/aws/lambda-trigger.ts`.
+ * GCP Cloud Tasks — enqueues document-processing jobs on Cloud Run Jobs.
  *
- * Slice E2 deliverable per docs/plans/2026-04-21-gcs-object-storage-slice.md.
- *
- * Every exported function has the same name, parameter shape, and return type as
- * its counterpart in `lambda-trigger.ts`. This makes the import swap a pure
- * find-and-replace at call sites.
+ * Slice E (E5 deliverable) per docs/plans/2026-04-21-gcs-object-storage-slice.md.
+ * The actual task dispatch is currently stubbed; the queue API is present so
+ * call sites are stable while E5 lands the Cloud Run Job + Cloud Tasks wiring.
  *
  * On Cloud Run this uses ADC (runtime service account). Locally set
  * `GOOGLE_APPLICATION_CREDENTIALS` to a service account key with
@@ -63,7 +61,6 @@ export interface ProcessingJobMessage {
 /**
  * Send a message to the Cloud Tasks queue.
  *
- * Mirrors `sendToProcessingQueue` from `lib/aws/lambda-trigger.ts`.
  * The actual task dispatch is deferred to E5 (Cloud Run Job migration).
  * For now this is a no-op stub that logs — it won't break callers.
  */
@@ -103,7 +100,6 @@ export async function sendToProcessingQueue(
 
 /**
  * Send a priority message (immediate processing).
- * Mirrors `triggerLambdaProcessing` from `lib/aws/lambda-trigger.ts`.
  */
 export async function triggerLambdaProcessing(
   jobId: string,

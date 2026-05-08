@@ -1,9 +1,7 @@
 /**
  * Unit tests for lib/gcp/gcs-client.ts.
  *
- * Mocks @google-cloud/storage so tests don't hit a real project. The goal at
- * E1 is to prove the surface (names, shapes, parameter passthrough) matches
- * lib/aws/s3-client.ts so E2's import swap is safe.
+ * Mocks @google-cloud/storage so tests don't hit a real project.
  */
 
 import { Readable } from "node:stream"
