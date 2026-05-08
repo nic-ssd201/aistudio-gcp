@@ -120,8 +120,16 @@ export const authConfig: NextAuthConfig = {
           //      confirming that the jwt() callback fires after the provider's id_token is verified.
           // DO NOT use this pattern for parsing JWTs from untrusted sources or user input.
           // For untrusted JWTs, always use proper JWT verification libraries like 'jose'.
-          const base64Payload = account.id_token.split('.')[1];
-          const payload = Buffer.from(base64Payload, 'base64url').toString('utf-8');
+          //
+          // atob() instead of Buffer.from(): this branch only runs during the OAuth
+          // callback (account is only present on initial sign-in), which is handled
+          // by the /api/auth/callback/* Node.js route — never by Edge middleware.
+          // We use atob() anyway for correctness: it is available in both runtimes
+          // (Node 16+ / all Edge environments), removing any runtime dependency on
+          // the Node-only Buffer API and keeping auth.ts safe to import from Edge.
+          // base64url → base64: replace URL-safe chars before decoding.
+          const base64Payload = account.id_token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/');
+          const payload = atob(base64Payload);
           const decoded = JSON.parse(payload);
 
           const issuedAt = decoded.iat ? decoded.iat * 1000 : Date.now()

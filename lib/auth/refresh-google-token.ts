@@ -46,21 +46,6 @@ import { getRefreshThresholdMs } from "@/lib/auth/token-refresh-config"
 const activeRefreshes = new Map<string, Promise<JWT | null>>()
 
 /**
- * Minimum acceptable `expires_in` (seconds) returned by Google's token endpoint.
- *
- * Computed once at module load so every call to doRefresh() reads a module-level
- * constant rather than re-parsing TOKEN_REFRESH_THRESHOLD_MS on every request.
- * The value is stable for the lifetime of the process (env vars don't change at
- * runtime), so caching is safe.
- *
- * Math.max(300, …) is an absolute lower bound independent of operator config:
- * Google's documented access-token lifetime is 3600 s, so < 300 s is structurally
- * abnormal regardless of the threshold setting.  See the check inside doRefresh()
- * for full rationale.
- */
-const MIN_EXPIRES_IN = Math.max(300, Math.round(getRefreshThresholdMs() / 1000)) // seconds
-
-/**
  * Returns the number of in-flight refresh Promises currently tracked by the
  * dedup map.  Exported exclusively for unit-test assertions — call sites in
  * production code should use refreshGoogleToken() directly.
@@ -212,11 +197,18 @@ async function doRefresh(token: JWT, log: ReturnType<typeof createLogger>): Prom
     // another refresh on the very next jwt() callback — a misbehaving upstream
     // returning a tiny expires_in causes a hot-loop against Google's token endpoint.
     //
-    // MIN_EXPIRES_IN is the module-level constant (cached at load time) derived
-    // from max(300, TOKEN_REFRESH_THRESHOLD_MS / 1000).  An operator who raises
-    // the threshold above the default 300 s still gets the higher value enforced,
-    // preventing the hot-loop for tokens whose expires_in falls between 300 s and
-    // their custom threshold.
+    // Read getRefreshThresholdMs() on every call (not cached at module load) so
+    // tests that mutate TOKEN_REFRESH_THRESHOLD_MS between cases see the updated
+    // value — consistent with the documented contract in token-refresh-config.ts.
+    // The Math.max + parseInt cost is negligible relative to an HTTP round-trip.
+    //
+    // Math.max(300, …) is an absolute lower bound independent of any operator
+    // configuration: Google's documented access-token lifetime is 3600 s and
+    // < 300 s is structurally abnormal regardless of the threshold setting.
+    // An operator who raises the threshold above 300 s gets the higher value
+    // enforced, preventing the hot-loop for tokens whose expires_in falls between
+    // 300 s and their custom threshold.
+    const MIN_EXPIRES_IN = Math.max(300, Math.round(getRefreshThresholdMs() / 1000)) // seconds
     const expiresIn = tokens.expires_in ?? 0
     if (expiresIn < MIN_EXPIRES_IN) {
       // Production telemetry: filter on alert="short_expires_in" in Cloud Logging
