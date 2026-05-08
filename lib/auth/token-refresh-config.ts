@@ -50,6 +50,18 @@ export function getRefreshThresholdMs(): number {
   return parsed
 }
 
+/**
+ * Maximum number of entries in the in-process polling session cache
+ * (`PollingSessionCache`) and the concurrent-refresh deduplication map
+ * (`activeRefreshes` in `refresh-google-token.ts`).
+ *
+ * Both maps share this ceiling so the two magic `500`s can't drift apart
+ * independently.  500 entries covers ~500 concurrent active-polling users per
+ * Cloud Run instance; at maxEntries the cache evicts oldest-first (FIFO) and
+ * the dedup map bypasses dedup rather than evicting in-flight Promises.
+ */
+export const POLLING_CACHE_MAX_ENTRIES = 500
+
 /** Default session lifetime: 24 hours in seconds. */
 const DEFAULT_SESSION_MAX_AGE_S = 24 * 60 * 60
 

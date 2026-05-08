@@ -218,8 +218,12 @@ devSchedulerStack.addDependency(devDbStack);
 cdk.Tags.of(devSchedulerStack).add('Environment', 'Dev');
 Object.entries(standardTags).forEach(([key, value]) => cdk.Tags.of(devSchedulerStack).add(key, value));
 
-// EmailNotificationStack (AWS SES + Lambda) removed — SSD201 fork uses GCP;
-// AWS email notification infrastructure is not deployed. See PR #6.
+// EmailNotificationStack (AWS SES + Lambda) fully removed — not gated like AuthStack.
+// Asymmetry rationale: AuthStack (Cognito) is kept as dead code behind --context legacy=true
+// because upstream auth PRs may touch it and having the CDK file reduces cherry-pick friction.
+// EmailNotificationStack has no GCP analogue and upstream email changes are unlikely to produce
+// merge conflicts we need to resolve here, so full deletion is the cleaner approach.
+// See PR #6; restore from git history if a future upstream cherry-pick requires it.
 
 // Prod environment
 // Permission Boundary Stack - must be deployed first before other stacks
@@ -333,7 +337,7 @@ prodSchedulerStack.addDependency(prodDbStack);
 cdk.Tags.of(prodSchedulerStack).add('Environment', 'Prod');
 Object.entries(standardTags).forEach(([key, value]) => cdk.Tags.of(prodSchedulerStack).add(key, value));
 
-// EmailNotificationStack (AWS SES + Lambda) removed — SSD201 fork uses GCP. See PR #6.
+// EmailNotificationStack (AWS SES + Lambda) fully removed — see dev block above for rationale.
 
 // Frontend stacks - ECS Fargate with ALB for streaming support
 if (baseDomain) {

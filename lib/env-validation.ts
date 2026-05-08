@@ -182,7 +182,10 @@ export function validateEnv(): { isValid: boolean; missing: string[]; warnings: 
   // AUTH_GOOGLE_FORCE_CONSENT: warn when set to an unrecognised value.
   // Normalise to lowercase so "False" / "FALSE" are accepted alongside "false".
   const forceConsent = process.env.AUTH_GOOGLE_FORCE_CONSENT;
-  const forceConsentNorm = forceConsent?.toLowerCase();
+  // Trim whitespace before normalising — consistent with auth.ts which also
+  // calls .trim().toLowerCase() on this value so "  false  " is treated the
+  // same by both the startup validator and the runtime parser.
+  const forceConsentNorm = forceConsent?.trim().toLowerCase();
   if (forceConsentNorm !== undefined && forceConsentNorm !== '' && forceConsentNorm !== 'true' && forceConsentNorm !== 'false') {
     warnings.push(
       `AUTH_GOOGLE_FORCE_CONSENT="${forceConsent}" is not recognised — expected "true" or "false". Defaulting to "true" (consent prompt).`

@@ -17,7 +17,7 @@
 
 import type { JWT } from "next-auth/jwt"
 import { createLogger } from "@/lib/auth/edge-logger"
-import { getRefreshThresholdMs } from "@/lib/auth/token-refresh-config"
+import { getRefreshThresholdMs, POLLING_CACHE_MAX_ENTRIES } from "@/lib/auth/token-refresh-config"
 
 /**
  * In-process deduplication map: sub → in-flight refresh Promise.
@@ -109,7 +109,7 @@ export async function refreshGoogleToken(token: JWT): Promise<JWT | null> {
   // rather than 1), and each subsequent caller races the first one's
   // refresh_token rotation — an acceptable risk at 500+ subs where the dedup
   // benefit is already marginal.
-  if (activeRefreshes.size >= 500) {
+  if (activeRefreshes.size >= POLLING_CACHE_MAX_ENTRIES) {
     // Throttle to ≤1 warn/minute: if the map stays at capacity under sustained
     // load, a warn per request would itself cause a log-volume spike.  One
     // sample per minute is enough signal for an on-call engineer.

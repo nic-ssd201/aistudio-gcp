@@ -423,10 +423,12 @@ export const authConfig: NextAuthConfig = {
         log.debug("loginIat missing on non-initial token — polling cache will be skipped until JWT re-issues", {
           sub: token.sub,
         })
-        // Use `delete` rather than assigning `undefined` to avoid a runtime
-        // type mismatch: the property is optional (number | undefined) in the
-        // session type, but assigning undefined explicitly can confuse some
-        // TypeScript narrowing and serialization paths.
+        // Use `delete` rather than assigning `undefined` so the key is absent
+        // from JSON.stringify output.  Both produce `number | undefined` at the
+        // TypeScript level, but `JSON.stringify({iat: undefined})` → `{}` while
+        // `delete obj.iat` guarantees the key is genuinely missing — keeps the
+        // serialized session minimal and avoids a spurious `"iat":null` entry
+        // if a serializer treats explicit-undefined as null.
         delete session.iat;
       }
       // Propagate roleVersion so /api/auth/refresh-session can compare against the

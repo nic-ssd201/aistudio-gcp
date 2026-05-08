@@ -5,6 +5,7 @@
 
 import { createLogger } from '@/lib/logger';
 import type { UserSession } from '@/lib/auth/server-session';
+import { POLLING_CACHE_MAX_ENTRIES } from '@/lib/auth/token-refresh-config';
 
 const log = createLogger({ module: 'polling-session-cache' });
 
@@ -298,7 +299,7 @@ export const pollingSessionCache: PollingSessionCache =
   globalThis.__pollingSessionCache__ ??
   (globalThis.__pollingSessionCache__ = new PollingSessionCache({
     maxAge: 5 * 60 * 1000, // 5 minutes - longer than typical polling sessions
-    maxEntries: 500, // Reasonable for concurrent users
+    maxEntries: POLLING_CACHE_MAX_ENTRIES, // shared with refresh-google-token.ts dedup cap
     cleanupInterval: 2 * 60 * 1000, // 2 minutes
   }));
 
