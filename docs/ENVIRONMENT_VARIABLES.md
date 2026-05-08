@@ -61,6 +61,34 @@ Optional tuning:
 | `SESSION_MAX_AGE` | `86400` (24 h) | JWT session lifetime in seconds. Must be a positive integer; non-numeric values fall back to the default. |
 | `TOKEN_REFRESH_THRESHOLD_MS` | `300000` (5 min) | How many milliseconds before token expiry to proactively refresh. Minimum 60000 ms. Increase for deployments with long-running streaming paths (>5 min). |
 
+#### Polling auth cache and role-change propagation
+
+The polling auth layer caches authenticated user data (userId, roles) for up to
+5 minutes (`TOKEN_REFRESH_THRESHOLD_MS`) to reduce database hits on polling
+endpoints. When a role change is committed, `pollingSessionCache.invalidateUser()`
+flushes the cache on the **current instance only**.
+
+**Multi-instance staleness window:** On Cloud Run (or any deployment with N > 1
+container instances), the other N−1 instances continue serving the previous role
+set for up to 5 minutes until the cache TTL expires naturally. This is the
+accepted trade-off for the polling-auth performance improvement.
+
+**Operational implications:**
+
+- **Normal role changes** (adding/removing non-privileged roles): the 5-minute
+  window is acceptable for most use cases.
+- **Security-sensitive demotions** (revoking admin access for a compromised
+  account): do not rely on cache expiry alone. Rotate `AUTH_SECRET` to
+  invalidate all active JWT sessions fleet-wide, or scale down to a single
+  instance temporarily to guarantee immediate propagation.
+- **Tracking:** A cross-instance invalidation signal (Pub/Sub-driven cache flush
+  or a shared Redis cache) would eliminate the staleness window. This is tracked
+  in issue #9 as a future improvement.
+
+To monitor the window in practice, watch the `Google token refresh failed` and
+`Skipping polling cache — session.iat absent` warn-rate in Cloud Logging. A
+spike after a role change indicates instances still serving cached sessions.
+
 ---
 
 ## Optional / AI Provider Variables

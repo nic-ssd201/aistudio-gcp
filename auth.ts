@@ -12,10 +12,12 @@ import { getRefreshThresholdMs } from "@/lib/auth/token-refresh-config"
 // same env var with the same `.toLowerCase() === 'false'` logic are replaced
 // by this one derived value.
 //
-// Comparison is case-insensitive ("False" / "FALSE" are accepted alongside "false").
+// Trim before lowercasing so a stray-space value like " false" does not silently
+// default to consent mode — consistent with the .trim() applied to Google-creds
+// and DB-config vars in lib/env-validation.ts.
 // Default is true (consent mode) when the var is absent or unrecognised — this
 // is also enforced by the env-validation startup warning in lib/env-validation.ts.
-const googleForceConsent = process.env.AUTH_GOOGLE_FORCE_CONSENT?.toLowerCase() !== 'false'
+const googleForceConsent = process.env.AUTH_GOOGLE_FORCE_CONSENT?.trim().toLowerCase() !== 'false'
 
 // Log the effective Google prompt mode at module load so operators can confirm
 // what they actually got (consent vs select_account) without reading source code.
@@ -369,7 +371,11 @@ export const authConfig: NextAuthConfig = {
         log.warn("loginIat missing on non-initial token — cache key will fall back to sub:0", {
           sub: token.sub,
         })
-        session.iat = undefined;
+        // Use `delete` rather than assigning `undefined` to avoid a runtime
+        // type mismatch: the property is optional (number | undefined) in the
+        // session type, but assigning undefined explicitly can confuse some
+        // TypeScript narrowing and serialization paths.
+        delete session.iat;
       }
       // Propagate roleVersion so /api/auth/refresh-session can compare against the
       // DB value and detect role changes.  Without this the sessionRoleVersion is
