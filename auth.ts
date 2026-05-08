@@ -414,8 +414,9 @@ export const authConfig: NextAuthConfig = {
       // Allows callback URLs on the same origin. Both sides are normalised to
       // .origin so a trailing-slash AUTH_URL (e.g. "https://app.example.com/")
       // still matches correctly. Wrapped in try/catch because new URL() throws
-      // on malformed strings (e.g. "not-a-url", "javascript:alert(1)") — any
-      // such string falls through to the safe /dashboard default.
+      // on truly malformed strings (e.g. "not-a-url", ":::bad"). Schemes like
+      // javascript: and data: do NOT throw — they produce origin "null", which
+      // fails the equality check below and falls through to the safe default.
       try {
         if (new URL(url).origin === new URL(baseUrl).origin) return url
       } catch {

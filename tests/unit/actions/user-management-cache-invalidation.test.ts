@@ -396,4 +396,20 @@ describe('deleteUser — pollingSessionCache.invalidateUser wiring', () => {
     // Guard fires before the transaction, so cache must NOT be invalidated.
     expect(mockInvalidateUser).not.toHaveBeenCalled()
   })
+
+  it('rejects the delete (fail-closed) when the admin DB id cannot be resolved (null)', async () => {
+    const mockInvalidateUser = jest.fn()
+    // adminDbId=null simulates a DB-connectivity blip or missing JIT record.
+    // The guard must block rather than silently allow the delete.
+    const deleteUser = await loadDeleteUser({
+      cognitoSub: STUB_SUB,
+      onInvalidateUser: mockInvalidateUser,
+      adminDbId: null,
+    })
+
+    const result = await deleteUser(42)
+
+    expect(result.isSuccess).toBe(false)
+    expect(mockInvalidateUser).not.toHaveBeenCalled()
+  })
 })

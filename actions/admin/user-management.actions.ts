@@ -684,11 +684,25 @@ export async function deleteUser(userId: number): Promise<ActionState<void>> {
     // ID. Comparing them directly (`session.user.id === userId`) is always false
     // because string !== number — the guard was silently broken.
     // Fix: resolve sub → numeric DB ID first, then compare.
-    // A null result means the admin's own record is missing (should be impossible
-    // after JIT provisioning), so we allow the delete to proceed rather than
-    // blocking a legitimate operation.
+    //
+    // A null result (admin's own record missing) is treated as a hard block,
+    // not a pass-through.  Allowing the delete when null would mean a
+    // DB-connectivity blip or a JIT failure silently disables the self-deletion
+    // guard — a safer posture is fail-closed: block and log, forcing an operator
+    // to investigate rather than allowing a potentially self-destructive action.
     const currentAdminDbId = await getUserIdByCognitoSubAsNumber(session.sub)
-    if (currentAdminDbId !== null && currentAdminDbId === userId) {
+    if (currentAdminDbId === null) {
+      log.error("deleteUser: could not resolve admin sub to DB id — blocking delete as fail-closed", {
+        adminSub: session.sub,
+        targetUserId: userId,
+      })
+      throw ErrorFactories.bizInvalidState(
+        "deleteUser",
+        "admin record not found",
+        "Unable to verify identity — please try again or contact support"
+      )
+    }
+    if (currentAdminDbId === userId) {
       throw ErrorFactories.bizInvalidState(
         "deleteUser",
         "self-deletion attempted",
