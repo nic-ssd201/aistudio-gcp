@@ -7,6 +7,8 @@ import { createLogger, generateRequestId, startTimer, sanitizeForLogging } from 
 import { getAIModelById } from '@/lib/db/drizzle';
 import { executeQuery } from '@/lib/db/drizzle-client';
 import { sql } from 'drizzle-orm';
+import { promptResults } from '@/lib/db/schema';
+import { safeJsonbStringify } from '@/lib/db/json-utils';
 import { unifiedStreamingService } from '@/lib/streaming/unified-streaming-service';
 import { retrieveKnowledgeForPrompt, formatKnowledgeContext } from '@/lib/assistant-architect/knowledge-retrieval';
 import { hasToolAccess, hasRole } from '@/utils/roles';
@@ -981,24 +983,22 @@ async function executeSinglePromptWithCompletion(
 
               const startedAt = new Date(Date.now() - executionTimeMs);
 
-              // CRITICAL: Drizzle's AWS Data API driver corrupts JSONB values during parameter binding.
-              // Must use sql.raw() to embed stringified JSON directly in SQL, bypassing parameter binding.
-              // See: Issue #599, https://github.com/drizzle-team/drizzle-orm/issues/724
               const promptInputData = {
                 originalContent: prompt.content,
                 processedContent,
                 repositoryContext: repositoryContext ? 'included' : 'none'
               };
-              const inputDataJson = JSON.stringify(promptInputData);
-              // Only escape single quotes for SQL string literal (PostgreSQL treats backslashes literally)
-              const escapedInputJson = inputDataJson.replace(/'/g, "''");
-              // CRITICAL: Use sql.raw() for ENUM values - RDS Data API driver corrupts ENUM parameter binding
-              // See: Issue #599, https://github.com/drizzle-team/drizzle-orm/issues/724
               await executeQuery(
-                (db) => db.execute(sql`
-                  INSERT INTO prompt_results (execution_id, prompt_id, input_data, output_data, status, started_at, completed_at, execution_time_ms)
-                  VALUES (${context.executionId}, ${prompt.id}, ${sql.raw(`'${escapedInputJson}'::jsonb`)}, ${text || ''}, ${sql.raw("'completed'::execution_status")}, ${startedAt.toISOString()}::timestamp, ${new Date().toISOString()}::timestamp, ${executionTimeMs})
-                `),
+                (db) => db.insert(promptResults).values({
+                  executionId: context.executionId,
+                  promptId: prompt.id,
+                  inputData: sql`${safeJsonbStringify(promptInputData)}::jsonb`,
+                  outputData: text || '',
+                  status: 'completed',
+                  startedAt,
+                  completedAt: new Date(),
+                  executionTimeMs,
+                }),
                 'savePromptResult'
               );
 
@@ -1231,21 +1231,19 @@ async function executeSinglePromptWithCompletion(
     }).catch(err => log.error('Failed to store prompt error event', { error: err }));
 
     // Save failed prompt result
-    // CRITICAL: Drizzle's AWS Data API driver corrupts JSONB values during parameter binding.
-    // Must use sql.raw() to embed stringified JSON directly in SQL, bypassing parameter binding.
-    // See: Issue #599, https://github.com/drizzle-team/drizzle-orm/issues/724
     const now = new Date();
-    const failedInputData = { prompt: prompt.content };
-    const failedInputJson = JSON.stringify(failedInputData);
-    // Only escape single quotes for SQL string literal (PostgreSQL treats backslashes literally)
-    const escapedFailedJson = failedInputJson.replace(/'/g, "''");
     const errorMsg = promptError instanceof Error ? promptError.message : String(promptError);
-    // CRITICAL: Use sql.raw() for ENUM values - RDS Data API driver corrupts ENUM parameter binding
     await executeQuery(
-      (db) => db.execute(sql`
-        INSERT INTO prompt_results (execution_id, prompt_id, input_data, output_data, status, error_message, started_at, completed_at)
-        VALUES (${context.executionId}, ${prompt.id}, ${sql.raw(`'${escapedFailedJson}'::jsonb`)}, '', ${sql.raw("'failed'::execution_status")}, ${errorMsg}, ${now.toISOString()}::timestamp, ${now.toISOString()}::timestamp)
-      `),
+      (db) => db.insert(promptResults).values({
+        executionId: context.executionId,
+        promptId: prompt.id,
+        inputData: sql`${safeJsonbStringify({ prompt: prompt.content })}::jsonb`,
+        outputData: '',
+        status: 'failed',
+        errorMessage: errorMsg,
+        startedAt: now,
+        completedAt: now,
+      }),
       'saveFailedPromptResult'
     );
 
