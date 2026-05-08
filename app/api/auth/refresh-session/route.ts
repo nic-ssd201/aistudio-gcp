@@ -89,9 +89,25 @@ export async function POST() {
 
 /**
  * Check if session needs refresh
- * 
- * This can be called to check if the user's role version
- * has changed and they need to refresh their session.
+ *
+ * Compares the JWT's `roleVersion` claim (set at sign-in and propagated through
+ * the session callback) against the live value in the database.  Returns
+ * `{ needsRefresh: true }` when they differ so the client can force a sign-in.
+ *
+ * **Polling-cache bypass** — this handler deliberately uses `getServerSession()`
+ * (which decodes the NextAuth JWT directly) and queries the DB for `roleVersion`
+ * without going through `authenticatePollingRequest()`.  That means:
+ * - `getServerSession()` always reads the live JWT — not the polling cache.
+ * - The `getUserByCognitoSub()` call always hits the database — it is not
+ *   affected by the 5-minute in-process polling-session cache.
+ * - The `roleVersion` comparison (`dbRoleVersion !== sessionRoleVersion`) is
+ *   therefore always fresh, even on instances whose polling cache still holds
+ *   the old roles for up to 5 minutes after a role change.
+ *
+ * This property is load-bearing: it is what makes the polling-session-cache
+ * role-revocation strategy work on multi-instance deployments.  Do NOT switch
+ * this handler to `authenticatePollingRequest()` without also adding explicit
+ * cache-bypass logic for the `roleVersion` comparison.
  */
 export async function GET() {
   const requestId = generateRequestId()

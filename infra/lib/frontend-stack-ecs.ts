@@ -81,6 +81,15 @@ export class FrontendStackEcs extends cdk.Stack {
       ? `${props.customSubdomain}.${baseDomain}`
       : (environment === 'dev' ? `dev.${baseDomain}` : baseDomain);
 
+    // Syntactically-valid placeholder ARN used wherever a real Secrets Manager
+    // ARN is required by CDK construct validation in non-legacy (GCP) mode.
+    // cdk.Lazy.string() defers value resolution so fromSecretCompleteArn()'s
+    // 6-character-suffix check runs at synthesis rather than construct-creation
+    // time — keeping `cdk synth` clean without needing a real ARN.
+    // All uses of this constant are dead code in the GCP fork; see the DEAD CODE
+    // comment on cognitoClientId below.
+    const PLACEHOLDER_SECRET_ARN = 'arn:aws:secretsmanager:us-east-1:000000000000:secret:unused-gcp-migration-aaaaaa';
+
     // ============================================================================
     // Internal API Secret for Scheduled Execution Authentication
     // ============================================================================
@@ -110,7 +119,7 @@ export class FrontendStackEcs extends cdk.Stack {
           });
           return secret.secretArn;
         })()
-      : cdk.Lazy.string({ produce: () => 'arn:aws:secretsmanager:us-east-1:000000000000:secret:unused-gcp-migration-aaaaaa' });
+      : cdk.Lazy.string({ produce: () => PLACEHOLDER_SECRET_ARN });
 
     // ============================================================================
     // MCP Token Encryption Key (AES-256-GCM DEK)
@@ -206,7 +215,7 @@ export class FrontendStackEcs extends cdk.Stack {
       // rather than throwing.
       authSecretArn: props.isLegacyAwsDeploy
         ? cdk.Fn.importValue(`${environment}-AuthSecretArn`)
-        : cdk.Lazy.string({ produce: () => 'arn:aws:secretsmanager:us-east-1:000000000000:secret:unused-gcp-migration-aaaaaa' }),
+        : cdk.Lazy.string({ produce: () => PLACEHOLDER_SECRET_ARN }),
       // Internal API secret (gated above)
       internalApiSecretArn,
       // K-12 Content Safety: Guardrails resources from GuardrailsStack.

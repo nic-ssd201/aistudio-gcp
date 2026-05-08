@@ -525,9 +525,14 @@ describe("session() callback", () => {
       trigger: "update",
     })) as AnyAccount
 
-    // Must not throw. Must return the session with no user.id set so
-    // getServerSession() returns null and middleware redirects to sign-in.
-    expect(result.user?.id).toBeUndefined()
+    // Must not throw. Must return a session whose user.id is falsy so
+    // getServerSession()'s `if (!session?.user?.id)` check treats it as
+    // unauthenticated and returns null — causing middleware to redirect.
+    // makeSession() initialises id: "" (not undefined); the session callback
+    // returns the base session unchanged (no user.id assignment) when email is
+    // absent, so id stays "" — falsy, and functionally identical to undefined
+    // from getServerSession()'s perspective.
+    expect(result.user?.id).toBeFalsy()
   })
 })
 

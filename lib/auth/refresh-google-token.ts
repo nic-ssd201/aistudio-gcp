@@ -103,36 +103,34 @@ export async function refreshGoogleToken(token: JWT): Promise<JWT | null> {
   }
 
   // Safety cap: if the map grows unexpectedly large (500+ distinct subs all
-  // refreshing simultaneously — theoretical but not impossible in horizontal-
-  // scaling scenarios), bypass dedup for this call rather than clearing the
-  // whole map.  Clearing would evict in-flight Promises without aborting the
-  // underlying fetches, creating a dedup gap where a follow-up call could race
-  // the orphaned fetch.  Bypassing dedup is safer: the in-flight entries are
-  // left intact and no race is introduced.  The cost is that N concurrent
-  // callers for the same sub each issue an independent refresh fetch (N fetches
-  // rather than 1), and each subsequent caller races the first one's
-  // refresh_token rotation — an acceptable risk at 500+ subs where the dedup
-  // benefit is already marginal.
+  // refreshing simultaneously), emit a throttled warn.  We still fall through
+  // to the normal dedup path below rather than bypassing it, so concurrent
+  // callers for the SAME new sub still share one Promise.
+  //
+  // Prior design bypassed dedup entirely at capacity (returning doRefresh()
+  // without inserting into the map).  That caused N independent fetches for
+  // the same sub if N callers raced after the map hit 500, each able to race
+  // the prior call's refresh_token rotation.  The fix: let the map grow
+  // briefly past 500 (one entry per new sub — the `.finally()` cleanup shrinks
+  // it back as Promises settle).  The 500-entry circuit breaker is about
+  // distinct-sub growth, not per-sub deduplication.
   if (activeRefreshes.size >= POLLING_CACHE_MAX_ENTRIES) {
-    // Throttle to ≤1 warn/minute: if the map stays at capacity under sustained
-    // load, a warn per request would itself cause a log-volume spike.  One
-    // sample per minute is enough signal for an on-call engineer.
+    // Throttle to ≤1 warn/minute: sustained capacity under load should produce
+    // one signal line per minute, not one per request.
     const now = Date.now()
     if (now - lastCapWarnAt >= CAP_WARN_THROTTLE_MS) {
       lastCapWarnAt = now
-      log.warn("activeRefreshes map at capacity (≥500 entries) — bypassing dedup; should be rare — investigate if persistent", {
+      log.warn("activeRefreshes map at capacity (≥500 entries) — investigate if persistent; per-sub dedup still active", {
         size: activeRefreshes.size,
         sub,
       })
     }
-    return doRefresh(token, log)
+    // Fall through — don't return early.
   }
 
   // Use an identity check rather than a plain delete so that a concurrent
   // insertion for the same sub between the .finally() binding and when it fires
-  // cannot accidentally remove the new promise. (The safety cap above bypasses
-  // rather than evicts, so eviction-race is not the threat today — but the
-  // identity check is cheap defense-in-depth for any future change to the cap.)
+  // cannot accidentally remove the new promise.
   //
   // doRefresh() is fully `async`, so it always returns a Promise (resolving or
   // rejecting) and can never throw synchronously.  The .finally() therefore runs

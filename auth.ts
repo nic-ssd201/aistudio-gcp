@@ -124,7 +124,14 @@ export const authConfig: NextAuthConfig = {
       // Any hit means a client is calling update() and every such call will silently
       // log all affected users out. Audit before removing this comment.
       if (trigger === "update") {
-        log.info("Session update triggered — forcing re-authentication (fail-closed)")
+        // warn (not info): every useSession().update() call logs out the user
+        // immediately.  Today no code path calls update() — pinned by
+        // tests/unit/lib/auth/no-use-session-update.test.ts — but if that ever
+        // changes, this warn surfaces the breakage in production telemetry before
+        // users file tickets.  Filter on context="auth-jwt-callback" +
+        // message="Session update triggered" in Cloud Logging to alert.
+        log.warn("Session update triggered — forcing re-authentication (fail-closed); " +
+          "investigate — no code path should call useSession().update() in this app")
         return null;
       }
 
