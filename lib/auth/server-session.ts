@@ -44,6 +44,25 @@ export interface UserSession {
   roleVersion?: number;
 }
 
+// ── Test reset helper ─────────────────────────────────────────────────────────
+/**
+ * Reset the lazy _serverAuth singleton so the next call to getServerSession()
+ * re-runs createAuth().
+ *
+ * @internal — tests ONLY.  Call this when a test mutates process.env between
+ * cases and needs the next getServerSession() call to pick up new credentials
+ * rather than re-using the previously-initialized instance.
+ *
+ * Note: jest.mock('@/auth') is babel-hoisted and replaces createAuth() globally,
+ * so most tests don't need this.  Only required for tests that control env vars
+ * without replacing the module (e.g. process.env.AUTH_GOOGLE_ID mutation in an
+ * isolateModules() block that does NOT mock '@/auth').
+ */
+export function resetServerAuthForTests(): void {
+  _serverAuth = null;
+}
+
+// ── Lazy singleton ─────────────────────────────────────────────────────────
 // Lazy singleton — initialized on first call to getServerAuth() rather than at
 // module load.  This ensures that importing server-session.ts never throws, even
 // when AUTH_GOOGLE_ID / AUTH_GOOGLE_SECRET are absent (e.g. a misconfigured Cloud
@@ -87,11 +106,17 @@ export async function getServerSession(): Promise<UserSession | null> {
       return null;
     }
 
+    // TypeScript narrows session.user.id to `string` after the early return above
+    // (the optional-chain guard `!session?.user?.id` ensures it is truthy).
+    // `UserSession.sub` is typed as `string` (not optional) so callers of
+    // getServerSession() can treat sub as non-empty without a secondary guard.
+    const userId = session.user.id; // string — narrowed by the !id guard above
+
     // Explicit projection — no spread — so only declared UserSession fields are
     // returned.  Extra NextAuth fields on session.user (e.g. `name`, `image`)
     // are intentionally excluded; callers should not depend on undeclared keys.
     return {
-      sub: session.user.id,
+      sub: userId,
       email: session.user.email || undefined,
       givenName: session.user.givenName || undefined,
       familyName: session.user.familyName || undefined,

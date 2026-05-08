@@ -217,6 +217,52 @@ describe("jwt() callback — initial sign-in", () => {
   })
 })
 
+// ── jwt() — base64url padding edge cases ─────────────────────────────────────
+// The atob() base64url padding formula `(4 - b64.length % 4) % 4` handles three
+// cases: 0, 1, or 2 trailing `=` chars.  These tests exercise each case by
+// crafting id_token payloads whose base64url-encoded form has a length that is
+// 0, 2, or 3 mod 4 (corresponding to 0, 2, or 1 standard base64 `=` chars).
+//
+// Payload byte sizes that produce each case (base64url chars = ceil(bytes/3)*4 - padding):
+//   0 mod 4 (no `=`): bytes divisible by 3
+//   2 mod 4 (2 `=`):  bytes ≡ 1 (mod 3)
+//   3 mod 4 (1 `=`):  bytes ≡ 2 (mod 3)
+describe("jwt() callback — base64url padding edge cases", () => {
+  async function invokeJwtWithClaims(claims: Record<string, unknown>) {
+    const account: AnyAccount = makeAccount({
+      id_token: makeIdToken(claims),
+    })
+    return callbacks.jwt!({
+      token: {} as JWT,
+      account,
+      user: { id: "", email: "", emailVerified: null },
+      session: undefined,
+    }) as Promise<JWT>
+  }
+
+  it("decodes payload correctly when base64url length is 0 mod 4 (no padding needed)", async () => {
+    // Craft sub so JSON byte length is divisible by 3.
+    // `{"sub":"aaa","iat":1}` = 21 bytes → 21%3=0 → 0 padding chars in standard base64
+    const result = await invokeJwtWithClaims({ sub: "aaa", iat: 1 })
+    expect(result.sub).toBe("aaa")
+    expect(result.loginIat).toBe(1)
+  })
+
+  it("decodes payload correctly when base64url length is 2 mod 4 (2 padding chars needed)", async () => {
+    // `{"sub":"a","iat":1}` = 19 bytes → 19%3=1 → 2 padding chars in standard base64
+    const result = await invokeJwtWithClaims({ sub: "a", iat: 1 })
+    expect(result.sub).toBe("a")
+    expect(result.loginIat).toBe(1)
+  })
+
+  it("decodes payload correctly when base64url length is 3 mod 4 (1 padding char needed)", async () => {
+    // `{"sub":"aa","iat":1}` = 20 bytes → 20%3=2 → 1 padding char in standard base64
+    const result = await invokeJwtWithClaims({ sub: "aa", iat: 1 })
+    expect(result.sub).toBe("aa")
+    expect(result.loginIat).toBe(1)
+  })
+})
+
 // ── jwt() — proactive refresh ─────────────────────────────────────────────────
 
 describe("jwt() callback — proactive refresh threshold", () => {

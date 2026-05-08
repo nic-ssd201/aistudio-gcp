@@ -34,6 +34,30 @@ import { getUserByCognitoSub } from "@/lib/db/drizzle"
  * route for actual sign-out.  The dead POST handler is removed to prevent future
  * callers from discovering a broken sign-out path.
  */
+/**
+ * POST /api/auth/refresh-session — 410 Gone (handler removed in SSD201 GCP migration)
+ *
+ * The former POST handler cleared `authjs.session-token`, but in production
+ * NextAuth v5 sets `__Secure-authjs.session-token` (RFC 6265bis prefix), so the
+ * expire-cookie response silently left the real cookie intact — it was a no-op.
+ * No production client calls POST here (`grep` found only doc references).
+ *
+ * Returning 410 Gone (rather than 405 Method Not Allowed) signals that the
+ * endpoint was intentionally retired — any stale client code or automation
+ * polling this path should use `/api/auth/signout` for actual sign-out.
+ *
+ * Remove this stub after one full release cycle.
+ */
+export async function POST() {
+  return NextResponse.json(
+    {
+      isSuccess: false,
+      message: "POST /api/auth/refresh-session has been removed. Use /api/auth/signout to sign out.",
+    },
+    { status: 410 }
+  )
+}
+
 export async function GET() {
   const requestId = generateRequestId()
   const timer = startTimer("api.auth.check-session")
