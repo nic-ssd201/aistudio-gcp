@@ -67,7 +67,7 @@ describe('S3 Upload API Integration Tests', () => {
     it('should return ActionState format with presigned URL data', async () => {
       // Mock authentication
       mockGetServerSession.mockResolvedValue({
-        sub: 'test-cognito-sub',
+        sub: 'test-google-sub',
         email: 'test@example.com',
         iat: 1234567890
       })
@@ -118,7 +118,7 @@ describe('S3 Upload API Integration Tests', () => {
     it('should handle validation errors with ActionState format', async () => {
       // Mock authentication
       mockGetServerSession.mockResolvedValue({
-        sub: 'test-cognito-sub',
+        sub: 'test-google-sub',
         email: 'test@example.com',
         iat: 1234567890
       })
@@ -159,7 +159,7 @@ describe('S3 Upload API Integration Tests', () => {
     it('should return ActionState format with processed document data', async () => {
       // Mock authentication
       mockGetServerSession.mockResolvedValue({
-        sub: 'test-cognito-sub',
+        sub: 'test-google-sub',
         email: 'test@example.com',
         iat: 1234567890
       })
@@ -244,7 +244,7 @@ describe('S3 Upload API Integration Tests', () => {
     it('should handle S3 key authorization errors', async () => {
       // Mock authentication
       mockGetServerSession.mockResolvedValue({
-        sub: 'test-cognito-sub',
+        sub: 'test-google-sub',
         email: 'test@example.com',
         iat: 1234567890
       })
@@ -285,7 +285,7 @@ describe('S3 Upload API Integration Tests', () => {
     it('should maintain backward compatibility with existing client code', async () => {
       // Mock authentication
       mockGetServerSession.mockResolvedValue({
-        sub: 'test-cognito-sub',
+        sub: 'test-google-sub',
         email: 'test@example.com',
         iat: 1234567890
       })

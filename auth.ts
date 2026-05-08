@@ -17,6 +17,10 @@ import { getRefreshThresholdMs, getSessionMaxAgeSecs } from "@/lib/auth/token-re
 // and DB-config vars in lib/env-validation.ts.
 // Default is true (consent mode) when the var is absent or unrecognised — this
 // is also enforced by the env-validation startup warning in lib/env-validation.ts.
+// Note: evaluated once at module load. Tests that mutate AUTH_GOOGLE_FORCE_CONSENT
+// via process.env between cases must use jest.isolateModules() (or jest.resetModules())
+// to reload auth.ts and pick up the new value — a simple assignment mid-test is
+// not visible here since this const is already bound.
 const googleForceConsent = process.env.AUTH_GOOGLE_FORCE_CONSENT?.trim().toLowerCase() !== 'false'
 
 // Log the effective Google prompt mode at module load so operators can confirm

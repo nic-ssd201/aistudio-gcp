@@ -46,6 +46,13 @@ export class PollingSessionCache {
    * metrics purposes.  The returned object is the live cache entry (not a copy),
    * so callers must not mutate it.
    */
+  // Returns Readonly<CachedSession> for compile-time mutation prevention.
+  // Object.freeze() is intentionally NOT applied: the returned object is the
+  // live cache entry, and getCachedSession itself mutates entry.requestCount++
+  // for metrics.  Freezing the entry here would make the next call's
+  // requestCount++ a silent no-op (non-strict) or throw (strict mode).
+  // The TypeScript Readonly type is sufficient to prevent caller mutations at
+  // the type-checking layer.
   getCachedSession(sessionId: string): Readonly<CachedSession> | null {
     const cached = this.cache.get(sessionId);
 
@@ -202,10 +209,15 @@ export class PollingSessionCache {
   private evictOldest(): void {
     // Map preserves insertion order, so the first key is always the oldest
     // by creation time — identical semantics to the previous O(N) min-scan
-    // over cachedAt, but O(1) instead.  (setCachedSession always uses
-    // Map.set() which appends new keys; existing-key updates preserve position,
-    // but setCachedSession only calls set() for new sessions after eviction,
-    // so order ≈ insertion order in practice.)
+    // over cachedAt, but O(1) instead.
+    //
+    // Assumption: setCachedSession always inserts new keys (Map.set appends);
+    // it does not update an existing key in-place.  If a future change ever
+    // updates an entry for an existing sessionId without deleting+re-inserting
+    // first, that entry would retain its original insertion position and the
+    // "first key = oldest" invariant would silently break (a newer session
+    // could be evicted ahead of an older one).  Keep this in mind if
+    // setCachedSession's write pattern ever changes.
     const oldestKey = this.cache.keys().next().value;
     if (oldestKey !== undefined) {
       this.cache.delete(oldestKey);
