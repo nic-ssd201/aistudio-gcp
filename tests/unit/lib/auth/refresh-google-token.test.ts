@@ -334,8 +334,20 @@ describe("refreshGoogleToken", () => {
     })
 
     // Map is at capacity but 'user-123' is not already there → falls through and
-    // inserts a new entry (map briefly at 501), then doRefresh() runs successfully.
-    const result = await refreshGoogleToken(makeToken()) // dedupKey='user-123'
+    // inserts a new entry, briefly pushing the map to 501.
+    //
+    // IMPORTANT: do NOT await here yet.  The map entry is inserted synchronously
+    // inside refreshGoogleToken() (before the first `await fetch(...)` suspends),
+    // so the size is observable at 501 before this Promise settles.  Checking
+    // here locks in the "fall through" invariant: if someone re-introduces an
+    // early `return doRefresh()` at capacity the entry would never be inserted
+    // and this assertion would fail, surfacing the regression immediately.
+    const realTokenPromise = refreshGoogleToken(makeToken()) // dedupKey='user-123'
+
+    // Map is momentarily at 501 (500 dummies + 1 real) — .finally() has not run.
+    expect(getActiveRefreshCount()).toBeGreaterThanOrEqual(501)
+
+    const result = await realTokenPromise
 
     // Fall-through path called doRefresh() and the real token was refreshed.
     expect(result).not.toBeNull()
