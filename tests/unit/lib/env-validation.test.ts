@@ -231,6 +231,27 @@ describe("validateEnv()", () => {
     expect(warnings.some((w) => w.includes("SESSION_MAX_AGE"))).toBe(true)
   })
 
+  it("warns but stays valid when SESSION_MAX_AGE is below the 600 s soft floor", () => {
+    // A value of 60 is almost certainly a unit confusion (seconds vs minutes).
+    // The soft-floor warning surfaces this at deploy time rather than silently
+    // granting 1-minute sessions.
+    process.env.SESSION_MAX_AGE = "60"
+
+    const { isValid, warnings } = validateEnv()
+
+    expect(isValid).toBe(true) // soft floor — warning, not a hard failure
+    expect(warnings.some((w) => w.includes("SESSION_MAX_AGE"))).toBe(true)
+    expect(warnings.some((w) => w.includes("unusually short"))).toBe(true)
+  })
+
+  it("does not warn when SESSION_MAX_AGE is at or above the 600 s soft floor", () => {
+    process.env.SESSION_MAX_AGE = "600"
+
+    const { warnings } = validateEnv()
+
+    expect(warnings.some((w) => w.includes("SESSION_MAX_AGE") && w.includes("unusually short"))).toBe(false)
+  })
+
   // ── AUTH_GOOGLE_FORCE_CONSENT validation ──────────────────────────────────
 
   it("warns but stays valid when AUTH_GOOGLE_FORCE_CONSENT has an unrecognised value", () => {
@@ -319,6 +340,16 @@ describe("requireValidEnv() warning emission", () => {
     expect(calls).toMatch(/positive integer/)
   })
 
+  it("emits console.warn when SESSION_MAX_AGE is below the 600 s soft floor", () => {
+    process.env.SESSION_MAX_AGE = "60"
+
+    requireValidEnv()
+
+    const calls = warnSpy.mock.calls.flat().join(" ")
+    expect(calls).toMatch(/SESSION_MAX_AGE/)
+    expect(calls).toMatch(/unusually short/)
+  })
+
   it("emits console.warn when AUTH_GOOGLE_FORCE_CONSENT has an unrecognised value", () => {
     process.env.AUTH_GOOGLE_FORCE_CONSENT = "yes"
 
@@ -343,6 +374,7 @@ describe("requireValidEnv() warning emission", () => {
     const calls = warnSpy.mock.calls.flat().join(" ")
     expect(calls).not.toMatch(/floor and will be ignored/)
     expect(calls).not.toMatch(/not a positive integer/)
+    expect(calls).not.toMatch(/unusually short/)
     expect(calls).not.toMatch(/not recognised — expected "true" or "false"/)
   })
 })

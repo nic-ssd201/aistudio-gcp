@@ -111,12 +111,20 @@ export function validateEnv(): { isValid: boolean; missing: string[]; warnings: 
 
   // SESSION_MAX_AGE: warn at startup when the value is set but will be silently
   // ignored (non-numeric or non-positive) — mirrors the TOKEN_REFRESH_THRESHOLD_MS warning.
+  // Also warn on suspiciously short values (< 600 s / 10 min): a 1-minute session
+  // lifetime is almost certainly a misconfiguration (e.g. seconds confused with
+  // minutes) — flag it so the operator sees the effective value at deploy time.
+  const SESSION_MAX_AGE_SOFT_FLOOR = 600; // 10 minutes
   const sessionMaxAgeRaw = process.env.SESSION_MAX_AGE;
   if (sessionMaxAgeRaw !== undefined && sessionMaxAgeRaw !== '') {
     const sessionMaxAge = Number.parseInt(sessionMaxAgeRaw, 10);
     if (!Number.isFinite(sessionMaxAge) || sessionMaxAge <= 0) {
       warnings.push(
         `SESSION_MAX_AGE="${sessionMaxAgeRaw}" is not a positive integer and will be ignored — effective value is 86400 s (24 h).`
+      );
+    } else if (sessionMaxAge < SESSION_MAX_AGE_SOFT_FLOOR) {
+      warnings.push(
+        `SESSION_MAX_AGE="${sessionMaxAgeRaw}" is unusually short (< ${SESSION_MAX_AGE_SOFT_FLOOR} s / 10 min) — verify this is intentional.`
       );
     }
   }
