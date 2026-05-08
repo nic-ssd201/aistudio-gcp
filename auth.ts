@@ -410,14 +410,23 @@ export const authConfig: NextAuthConfig = {
 
       // A missing email is theoretically unreachable: hasVerifiedGoogleEmail()
       // in signIn() rejects any token without a verified email before the
-      // session callback is reached.  Throw rather than propagating an
-      // empty-string email that would corrupt the users table — a loud failure
-      // here is far preferable to a silent bad-data write that only surfaces
-      // on the next DB constraint violation or email-validation check.
+      // session callback is reached.  However, a JWT issued before that guard
+      // was deployed could reach this callback on a repeat visit within the
+      // session TTL.  Throwing here would surface as a 500 rather than a
+      // controlled re-auth for those stale-cookie cases.
+      //
+      // Instead: return the session without setting session.user.id.  The next
+      // layer (getServerSession → "if (!session?.user?.id) return null") treats
+      // this as "not authenticated", and middleware redirects to sign-in — the
+      // same observable result as a proper signOut, but without the 500 noise.
+      // Log at error level so the bypass (if it ever happens) is visible in
+      // Cloud Logging without disrupting the user's browser session.
       if (!email) {
-        throw new Error(
-          `session callback reached with no email for sub=${token.sub} — signIn guard appears to have been bypassed`
+        log.error(
+          "session callback reached with no email — stale pre-guard JWT or signIn bypass; treating as unauthenticated",
+          { sub: token.sub }
         )
+        return session  // session.user.id absent → getServerSession() returns null → middleware redirects
       }
 
       session.user = {

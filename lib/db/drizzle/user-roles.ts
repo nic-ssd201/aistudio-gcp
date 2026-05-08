@@ -153,7 +153,14 @@ export async function updateUserRoles(
  * provisioning only (`lib/auth/resolve-user.ts`), where no polling-cache entry
  * can pre-exist — so skipping the flush is safe for that path.
  *
- * Any future caller that invokes `addUserRole` for a user who may have an
+ * **Why the flush is not embedded here:** `pollingSessionCache.invalidateUser`
+ * takes the user's OAuth `sub` (Google subject ID), but this helper only receives
+ * `userId` (the database PK).  Looking up `sub` from `userId` would add a
+ * round-trip and an import dependency on the cache module.  Since the only
+ * production callers today are JIT-provisioning paths where the user cannot yet
+ * have an active cache entry, the cost is not justified.
+ *
+ * Any future caller that invokes `addUserRole` for a user who **may** have an
  * active polling-cache entry (e.g. admin UI, role-grant scripts) **must** call
  * `pollingSessionCache.invalidateUser(sub)` post-commit to flush the in-process
  * cache on the handling instance.  Without it, that instance continues to serve
@@ -226,8 +233,10 @@ export async function addUserRole(
  * **Cache invalidation contract:** same as `addUserRole` — `role_version` is
  * bumped inside the transaction but `pollingSessionCache.invalidateUser(sub)`
  * is **not** called.  Current callers are JIT provisioning only, where no
- * cache entry can pre-exist.  Any future caller that may remove a role from a
- * user with an active polling-cache session **must** call
+ * cache entry can pre-exist.  The flush is not embedded for the same structural
+ * reason as `addUserRole`: this helper receives only `userId` (DB PK), not the
+ * OAuth `sub` that `invalidateUser` requires.  Any future caller that may
+ * remove a role from a user with an active polling-cache session **must** call
  * `pollingSessionCache.invalidateUser(sub)` post-commit, or that instance will
  * continue serving the old role set for up to 5 minutes.
  */

@@ -498,6 +498,37 @@ describe("session() callback", () => {
     // auth.ts uses `delete session.loginIat` for type-safety reasons).
     expect(result.loginIat).toBeUndefined()
   })
+
+  // Regression pin: missing email must NOT throw — graceful return instead.
+  //
+  // A JWT issued before the hasVerifiedGoogleEmail guard was deployed could
+  // reach the session callback on a repeat visit within the session TTL, with
+  // no email claim.  Previously this caused a throw (→ 500 in the browser).
+  // The correct behaviour is to return the session without session.user.id set:
+  // getServerSession() checks `if (!session?.user?.id) return null`, so
+  // middleware treats the response as unauthenticated and redirects to sign-in.
+  it("returns session without user.id when token.email is absent (stale pre-guard JWT)", async () => {
+    const token: JWT = {
+      sub: "google-sub-no-email",
+      // email intentionally absent — simulates a stale JWT issued before the
+      // hasVerifiedGoogleEmail signIn() guard was deployed.
+      expiresAt: Date.now() + 3600 * 1000,
+      provider: "google",
+    }
+    const baseSession = makeSession() as AnyAccount
+
+    const result = (await callbacks.session!({
+      session: baseSession,
+      token,
+      user: { id: "", email: "", emailVerified: null },
+      newSession: undefined,
+      trigger: "update",
+    })) as AnyAccount
+
+    // Must not throw. Must return the session with no user.id set so
+    // getServerSession() returns null and middleware redirects to sign-in.
+    expect(result.user?.id).toBeUndefined()
+  })
 })
 
 // ── jwt() — TOKEN_REFRESH_THRESHOLD_MS env override ──────────────────────────
