@@ -24,7 +24,7 @@ import {
   startTimer
 } from "@/lib/logger"
 import { revalidatePath } from "next/cache"
-import { uploadDocument, deleteDocument } from "@/lib/services/document-storage-service"
+import { uploadDocument, deleteDocument, getDocumentSignedUrl } from "@/lib/services/document-storage-service"
 import { queueFileForProcessing, processUrl } from "@/lib/services/file-processing-service"
 import { canModifyRepository, getUserIdFromSession } from "./repository-permissions"
 
@@ -1138,52 +1138,34 @@ export async function getDocumentDownloadUrl(
       return { isSuccess: false, message: "Item is not a document" }
     }
 
-    // Generate a presigned URL for download
-    const { getSignedUrl } = await import('@aws-sdk/s3-request-presigner')
-    const { S3Client, GetObjectCommand } = await import('@aws-sdk/client-s3')
-    
-    const s3Client = new S3Client({})
-    const bucketName = process.env.DOCUMENTS_BUCKET_NAME
-    
-    if (!bucketName) {
-      return { isSuccess: false, message: "Storage not configured" }
-    }
-
-    // Extract file extension from the original S3 key or metadata
+    // Extract file extension from the stored object key or metadata
     let filename = item.name
     const metadata = item.metadata as Record<string, unknown> | null
 
-    // Try to get extension from original filename or S3 key
     let extension = ''
-
     if (metadata && typeof metadata === 'object' && 'originalFileName' in metadata && typeof metadata.originalFileName === 'string') {
-      // Use the original filename's extension
       extension = metadata.originalFileName.split('.').pop() || ''
     } else {
-      // Extract from S3 key
       const urlParts = item.source.split('/')
-      const s3Filename = urlParts[urlParts.length - 1]
-      extension = s3Filename.split('.').pop() || ''
+      const objectFilename = urlParts[urlParts.length - 1]
+      extension = objectFilename.split('.').pop() || ''
     }
-    
-    // Add extension if not already present in the name
+
     if (extension && !filename.toLowerCase().endsWith(`.${extension.toLowerCase()}`)) {
       filename = `${filename}.${extension}`
     }
 
-    const command = new GetObjectCommand({
-      Bucket: bucketName,
-      Key: item.source,
-      ResponseContentDisposition: `attachment; filename="${filename}"`
-    })
-
-    log.info("Generating presigned download URL", {
+    log.info("Generating signed download URL", {
       itemId,
-      s3Key: item.source,
+      objectKey: item.source,
       fileName: filename
     })
-    
-    const downloadUrl = await getSignedUrl(s3Client, command, { expiresIn: 3600 }) // 1 hour
+
+    const downloadUrl = await getDocumentSignedUrl({
+      key: item.source,
+      expiresIn: 3600,
+      responseDisposition: `attachment; filename="${filename}"`
+    })
 
     log.info("Download URL generated successfully", {
       itemId,
