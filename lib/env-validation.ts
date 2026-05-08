@@ -181,7 +181,7 @@ export function validateEnv(): { isValid: boolean; missing: string[]; warnings: 
         'e.g. your-district.k12.example.com, to restrict sign-in at the IdP level; ' +
         'set to "OPEN" to explicitly allow any Google account)'
       );
-    } else if (hd === 'OPEN') {
+    } else if (hd.toUpperCase() === 'OPEN') {
       // Sentinel acknowledged — the operator has explicitly opted into open access.
       // Warn so the choice is visible in startup logs: an operator checking Cloud
       // Logging after a suspected breach should immediately see that domain

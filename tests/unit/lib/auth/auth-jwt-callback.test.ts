@@ -743,4 +743,16 @@ describe("redirect() callback — URL handling", () => {
     expect(result).not.toMatch(/evil\.com/)
     expect(result).toBe(`${baseUrl}/dashboard`)
   })
+
+  it("passes /%5C safely — URL parser treats encoded backslash as a path character, not a separator", async () => {
+    // `/%5Cevil.com` looks like an encoded-backslash bypass but is not exploitable:
+    // new URL("/%5Cevil.com", baseUrl) resolves to baseUrl + "/%5Cevil.com" (same
+    // origin), so the origin-equality guard passes and the URL is served as-is.
+    // A literal `/\evil.com` IS blocked because browsers normalize '\' → '/' before
+    // parsing, but the percent-encoded form never reaches that normalization step.
+    // This test pins that %5C is handled safely by the existing guard without needing
+    // an extra explicit prefix check.
+    const result = await callbacks.redirect!({ url: "/%5Cevil.com", baseUrl })
+    expect(result).toBe(`${baseUrl}/%5Cevil.com`)
+  })
 })

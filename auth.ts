@@ -64,7 +64,9 @@ export const authConfig: NextAuthConfig = {
           // is a startup error rather than a silent open-access misconfiguration.
           ...(() => {
             const hd = process.env.AUTH_GOOGLE_HD?.trim();
-            return (hd && hd !== 'OPEN') ? { hd } : {};
+            // Case-fold before comparing so "open" / "Open" / "OPEN" all act as the sentinel.
+            // AUTH_GOOGLE_FORCE_CONSENT uses the same .toLowerCase() normalization pattern.
+            return (hd && hd.toUpperCase() !== 'OPEN') ? { hd } : {};
           })(),
           // `prompt` controls whether Google shows the consent screen on repeat sign-ins.
           //
