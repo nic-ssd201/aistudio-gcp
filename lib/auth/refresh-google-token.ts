@@ -62,7 +62,11 @@ const activeRefreshes = new Map<string, Promise<JWT | null>>()
 
 // Throttle the at-capacity warn to at most once per minute so a sustained burst
 // (500+ concurrent distinct sessions) doesn't flood telemetry with redundant lines.
+// omittedCapWarns counts how many cap-hit events were suppressed since the last
+// emitted warn — included in the next warn so operators can distinguish a
+// momentary spike (omittedCapWarns: 0) from a sustained anomaly (omittedCapWarns: N).
 let lastCapWarnAt = 0
+let omittedCapWarns = 0
 const CAP_WARN_THROTTLE_MS = 60_000
 
 /**
@@ -144,12 +148,19 @@ export async function refreshGoogleToken(token: JWT): Promise<JWT | null> {
     // one signal line per minute, not one per request.
     const now = Date.now()
     if (now - lastCapWarnAt >= CAP_WARN_THROTTLE_MS) {
+      const omitted = omittedCapWarns
       lastCapWarnAt = now
+      omittedCapWarns = 0
       log.warn("activeRefreshes map at capacity (≥500 entries) — investigate if persistent; per-session dedup still active", {
         size: activeRefreshes.size,
         sub,
         loginIat,
+        // omittedSinceLastWarn: 0 = momentary spike; >0 = sustained anomaly.
+        // Filter on this field in Cloud Logging to distinguish burst from sustained overload.
+        omittedSinceLastWarn: omitted,
       })
+    } else {
+      omittedCapWarns++
     }
     // Fall through — don't return early.
   }

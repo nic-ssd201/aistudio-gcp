@@ -260,9 +260,6 @@ export const authConfig: NextAuthConfig = {
           // has the same fields available on the fallback path as on the happy path.
           // Note: `preferred_username` is intentionally omitted — it comes from the
           // id_token payload that failed to parse.
-          // `iat` falls back to Math.floor(Date.now()/1000) so each fallback session
-          // gets a distinct cache key (session:sub:iat) rather than the default
-          // session:sub:0 that all sub-less fallback sessions would otherwise share.
           // Cast to the exported GoogleProfile type (not an ad-hoc structural type).
           const p = profile as GoogleProfile | undefined
           const fallbackToken: JWT = {
@@ -275,10 +272,28 @@ export const authConfig: NextAuthConfig = {
             refreshToken: account.refresh_token,
             idToken: account.id_token,
             expiresAt: expiresAt,
-            loginIat: Math.floor(Date.now() / 1000), // stable login-time marker (see happy-path comment)
+            // loginIat is our stable polling-cache key (see happy-path comment).
+            // We use Date.now()/1000 here rather than `decoded.iat` because the
+            // id_token failed to parse — we have no OIDC `iat` to extract.
+            // This is NOT the OIDC `iat`; it is a synthetic timestamp whose only
+            // purpose is to give the polling cache a distinct key per login session
+            // (session:sub:loginIat) instead of the degenerate session:sub:0 that
+            // every sub-less fallback session would otherwise share.
+            loginIat: Math.floor(Date.now() / 1000),
             roleVersion: 0,
             provider: 'google', // Always Google for SSD201
           };
+
+          // Mirror the happy-path warn: if Google also returned no refresh_token,
+          // the session will end silently at access-token expiry with no renewal
+          // path.  Emitting here gives operator visibility even on the fallback
+          // path (e.g. when id_token is malformed AND no refresh_token was issued).
+          if (!account.refresh_token) {
+            log.warn("Fallback path: no refresh_token returned by Google — session will end at access-token expiry", {
+              sub: fallbackToken.sub,
+              prompt: getForceConsent() ? 'consent' : 'select_account',
+            })
+          }
 
           log.info("Created fallback token", {
             sub: fallbackToken.sub,
@@ -669,12 +684,11 @@ export function createAuth() {
 // The gap is a misconfiguration-visibility issue (silent startup), not an
 // auth bypass.
 //
-// TODO: implement lazy authMiddleware so assertGoogleCreds() runs before the
-// first JWT decode rather than being silently skipped.  The cleanest approach
-// is to move the Google() provider construction out of the module-level authConfig
-// literal and into createAuth() so that middlewareAuth can be constructed with
-// an empty providers list (JWT-decode-only; no provider creds needed).
-// Track alongside the credential-guard audit in follow-up to nic-ssd201/aistudio-gcp#6.
+// TODO(nic-ssd201/aistudio-gcp#7): implement lazy authMiddleware so assertGoogleCreds()
+// runs before the first JWT decode rather than being silently skipped.  The cleanest
+// approach is to move the Google() provider construction out of the module-level
+// authConfig literal and into createAuth() so that middlewareAuth can be constructed
+// with an empty providers list (JWT-decode-only; no provider creds needed).
 const middlewareAuth = NextAuth(authConfig)
 export const { auth: authMiddleware } = middlewareAuth
 

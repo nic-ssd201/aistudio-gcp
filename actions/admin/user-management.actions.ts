@@ -489,6 +489,12 @@ export async function updateUser(
       throw ErrorFactories.missingRequiredField("roles")
     }
 
+    // Dedup at the boundary so the `roleList.length !== data.roles.length` check
+    // inside the transaction is not load-bearing for duplicate inputs.
+    // Without this, roles: ['student', 'student'] (size 2) would fail the length
+    // check because inArray returns one row per distinct name (size 1).
+    const dedupedRoles = [...new Set(data.roles)]
+
     // Update user and role assignments in a transaction.
     // All validation happens inside the transaction to prevent race conditions.
     // The transaction returns { sub, rolesChanged } so both values are available
@@ -507,7 +513,7 @@ export async function updateUser(
           .where(eq(userRoles.userId, userId))
 
         const currentRoleNames = new Set(currentUserRoles.map((r) => r.roleName))
-        const incomingRoleNames = new Set(data.roles)
+        const incomingRoleNames = new Set(dedupedRoles)
         // A role diff exists when the sets differ in size OR any incoming name
         // is absent from the current set.  Symmetric: if sizes match and all
         // incoming names are present, the sets are identical.
@@ -563,12 +569,12 @@ export async function updateUser(
         const roleList = await tx
           .select({ id: roles.id, name: roles.name })
           .from(roles)
-          .where(inArray(roles.name, data.roles))
+          .where(inArray(roles.name, dedupedRoles))
 
-        if (roleList.length !== data.roles.length) {
+        if (roleList.length !== dedupedRoles.length) {
           throw ErrorFactories.invalidInput(
             "roles",
-            data.roles,
+            dedupedRoles,
             "One or more role names are invalid"
           )
         }
@@ -576,7 +582,7 @@ export async function updateUser(
         // ── 4. Admin-removal guard ───────────────────────────────────────────
         // Prevent removing admin role from last administrator (would lock everyone out).
         // Reuse currentUserRoles fetched in step 1 — no extra query needed.
-        const isRemovingAdmin = !data.roles.includes("administrator")
+        const isRemovingAdmin = !dedupedRoles.includes("administrator")
         if (isRemovingAdmin) {
           const isCurrentlyAdmin = currentUserRoles.some((r) => r.roleName === "administrator")
 

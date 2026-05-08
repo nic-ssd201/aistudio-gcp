@@ -114,6 +114,13 @@ export class PollingSessionCache {
     // Deleting first forces re-insertion at the tail so the entry sorts as
     // "newest" — consistent with the "just cached" semantics of this call.
     this.cache.delete(sessionId);
+    // INVARIANT: this.cache.set() must always follow a this.cache.delete() for
+    // the same key so that the new entry is appended at the Map's tail.
+    // evictOldest() (below) relies on Map insertion order being FIFO — the first
+    // key returned by this.cache.keys() is assumed to be the oldest entry.
+    // Breaking this pattern (e.g. calling set() without the preceding delete()
+    // for an existing key) silently violates the FIFO invariant and causes
+    // evictOldest() to evict the wrong entry.
     this.cache.set(sessionId, {
       session,
       userId,
