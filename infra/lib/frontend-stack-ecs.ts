@@ -180,9 +180,13 @@ export class FrontendStackEcs extends cdk.Stack {
       rdsSecretArn: props.isLegacyAwsDeploy
         ? ssm.StringParameter.valueForStringParameter(this, `/aistudio/${environment}/db-secret-arn`)
         // cdk.Lazy.string defers value resolution past fromSecretCompleteArn's
-        // synth-time 6-char-suffix validation.  The producer throws if actually
-        // invoked in non-legacy mode — a loud failure beats a silent no-op.
-        : cdk.Lazy.string({ produce: () => { throw new Error('rdsSecretArn must not be resolved in GCP fork (isLegacyAwsDeploy=false) — see nic-ssd201/aistudio-gcp#8') } }),
+        // synth-time 6-char-suffix validation.  The produce() callback CANNOT
+        // throw here: CDK resolves lazy values during cdk synth (not only at
+        // deploy time), so a throw would break the synth run.  A syntactically-
+        // valid placeholder ARN is the correct approach — it satisfies the
+        // CDK construct's format check and is a no-op in the GCP deployment
+        // because the entire EcsServiceConstruct is DEAD CODE.
+        : cdk.Lazy.string({ produce: () => 'arn:aws:secretsmanager:us-east-1:000000000000:secret:unused-gcp-rds-aaaaaa' }),
       // Auth secret from Secrets Manager.
       // When not in legacy mode the real AuthSecretArn export doesn't exist, so
       // use cdk.Lazy.string() to produce a syntactically-valid ARN token at
@@ -190,10 +194,11 @@ export class FrontendStackEcs extends cdk.Stack {
       // 6-character suffix at CDK-construct-creation time for plain strings, but
       // defers validation for CDK lazy/token values — avoiding the "missing
       // 6-character suffix" synth error that a bare placeholder string causes.
-      // The producer throws if actually invoked — loud failure beats silent no-op.
+      // See rdsSecretArn comment above for why the producer returns a string
+      // rather than throwing.
       authSecretArn: props.isLegacyAwsDeploy
         ? cdk.Fn.importValue(`${environment}-AuthSecretArn`)
-        : cdk.Lazy.string({ produce: () => { throw new Error('authSecretArn must not be resolved in GCP fork (isLegacyAwsDeploy=false) — see nic-ssd201/aistudio-gcp#8') } }),
+        : cdk.Lazy.string({ produce: () => 'arn:aws:secretsmanager:us-east-1:000000000000:secret:unused-gcp-migration-aaaaaa' }),
       // Internal API secret (created above)
       internalApiSecretArn: internalApiSecret.secretArn,
       // K-12 Content Safety: Guardrails resources from GuardrailsStack
