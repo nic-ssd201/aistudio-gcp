@@ -7,15 +7,22 @@ import { refreshGoogleToken } from "@/lib/auth/refresh-google-token"
 import { hasVerifiedGoogleEmail } from "@/lib/auth/google-email-guard"
 import { getRefreshThresholdMs } from "@/lib/auth/token-refresh-config"
 
+// AUTH_GOOGLE_FORCE_CONSENT: single parse shared by the startup log and the
+// provider prompt selection below.  Three previously-independent reads of the
+// same env var with the same `.toLowerCase() === 'false'` logic are replaced
+// by this one derived value.
+//
+// Comparison is case-insensitive ("False" / "FALSE" are accepted alongside "false").
+// Default is true (consent mode) when the var is absent or unrecognised — this
+// is also enforced by the env-validation startup warning in lib/env-validation.ts.
+const googleForceConsent = process.env.AUTH_GOOGLE_FORCE_CONSENT?.toLowerCase() !== 'false'
+
 // Log the effective Google prompt mode at module load so operators can confirm
 // what they actually got (consent vs select_account) without reading source code.
 // Edge-logger is safe here — auth.ts runs in both Edge and Node runtimes.
 {
   const log = createLogger({ context: 'auth-config' })
-  const effectivePrompt =
-    process.env.AUTH_GOOGLE_FORCE_CONSENT?.toLowerCase() === 'false'
-      ? 'select_account'
-      : 'consent'
+  const effectivePrompt = googleForceConsent ? 'consent' : 'select_account'
   log.info(`Google OAuth prompt mode: "${effectivePrompt}"`, {
     AUTH_GOOGLE_FORCE_CONSENT: process.env.AUTH_GOOGLE_FORCE_CONSENT ?? '(unset — defaulting to consent)',
   })
@@ -51,8 +58,8 @@ export const authConfig: NextAuthConfig = {
           //   without a refreshToken) before enabling this in production.
           //
           // Default: "consent" — set AUTH_GOOGLE_FORCE_CONSENT=false to opt out.
-          // Comparison is case-insensitive so "False" / "FALSE" work as expected.
-          prompt: process.env.AUTH_GOOGLE_FORCE_CONSENT?.toLowerCase() === 'false' ? 'select_account' : 'consent',
+          // Comparison is case-insensitive; see googleForceConsent at module top.
+          prompt: googleForceConsent ? 'consent' : 'select_account',
         },
       },
       checks: ["pkce", "state", "nonce"],
@@ -143,9 +150,15 @@ export const authConfig: NextAuthConfig = {
             // loginIat is a custom claim that NextAuth never touches, so it stays
             // constant for the lifetime of the login session and gives the cache a
             // stable key to hit.  See lib/auth/polling-session-cache.ts.
-            // `??` not `||`: iat=0 is theoretically valid (epoch) and should
-            // not be overwritten by a synthetic fallback that would diverge from
-            // the real token timestamp and break cache-key consistency.
+            // `??` not `||`: iat=0 is theoretically valid (Unix epoch) and
+            // should be preserved as-is in the token rather than overwritten by a
+            // synthetic fallback. The cache layer (generateSessionCacheKey) treats
+            // iat=0 as absent — skip-caching rather than storing under the
+            // degenerate key session:sub:0 — because Google never actually issues
+            // iat=0 in production and caching under that key would risk
+            // cross-session collisions for all zero-iat tokens of the same sub.
+            // The two layers are intentionally consistent: preserve the real value
+            // in the token, reject the pathological value in the cache.
             loginIat: decoded.iat ?? Math.floor(Date.now() / 1000),
             roleVersion: 0, // Initialize role version
             provider: 'google', // Always Google for SSD201

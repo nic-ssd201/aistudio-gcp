@@ -162,8 +162,24 @@ export class FrontendStackEcs extends cdk.Stack {
       cognitoIssuer: props.isLegacyAwsDeploy
         ? `https://cognito-idp.${this.region}.amazonaws.com/${cdk.Fn.importValue(`${environment}-CognitoUserPoolId`)}`
         : 'unused-gcp-migration',
-      rdsResourceArn: ssm.StringParameter.valueForStringParameter(this, `/aistudio/${environment}/db-cluster-arn`),
-      rdsSecretArn: ssm.StringParameter.valueForStringParameter(this, `/aistudio/${environment}/db-secret-arn`),
+      // rdsResourceArn and rdsSecretArn are gated on isLegacyAwsDeploy for the
+      // same reason as cognitoClientId/cognitoIssuer above: in a GCP-only account
+      // the SSM parameters /aistudio/{env}/db-cluster-arn and db-secret-arn do
+      // not exist, so an ungated valueForStringParameter would generate a
+      // CloudFormation {{resolve:ssm:…}} token that fails at deploy time.
+      // The placeholder RDS ARN is a syntactically-valid but non-functional
+      // value; EcsServiceConstruct env-vars and IAM policies that reference it
+      // are no-ops in the GCP fork (see DEAD CODE comment above).
+      rdsResourceArn: props.isLegacyAwsDeploy
+        ? ssm.StringParameter.valueForStringParameter(this, `/aistudio/${environment}/db-cluster-arn`)
+        : 'arn:aws:rds:us-east-1:000000000000:cluster:unused-gcp-migration',
+      // rdsSecretArn is passed to fromSecretCompleteArn() which validates the
+      // 6-character suffix at CDK-construct-creation time for plain strings.
+      // Use cdk.Lazy.string() to defer the value (same technique as authSecretArn)
+      // so the suffix validation is also deferred and does not fail at synth time.
+      rdsSecretArn: props.isLegacyAwsDeploy
+        ? ssm.StringParameter.valueForStringParameter(this, `/aistudio/${environment}/db-secret-arn`)
+        : cdk.Lazy.string({ produce: () => 'arn:aws:secretsmanager:us-east-1:000000000000:secret:unused-gcp-rds-aaaaaa' }),
       // Auth secret from Secrets Manager.
       // When not in legacy mode the real AuthSecretArn export doesn't exist, so
       // use cdk.Lazy.string() to produce a syntactically-valid ARN token at
