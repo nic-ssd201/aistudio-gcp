@@ -23,6 +23,16 @@ export interface UserSession {
    */
   iat?: number;
   /**
+   * Role version monotonically incremented in the DB on every role change.
+   * Propagated from the JWT through the session callback so
+   * `/api/auth/refresh-session` can compare sessionRoleVersion against the DB
+   * value and force re-auth only when roles have actually changed (rather than
+   * on every poll once dbRoleVersion >= 1).  Without this field the comparison
+   * always sees `undefined → 0` on the session side, triggering needsRefresh=true
+   * on every request for every user whose roles have ever been updated.
+   */
+  roleVersion?: number;
+  /**
    * Forward-compat index signature: `getServerSession` spreads `session.user`
    * (which may carry extra NextAuth fields such as `name` or `image`) into the
    * returned object. Without this signature TypeScript rejects the object literal
@@ -56,6 +66,12 @@ export async function getServerSession(): Promise<UserSession | null> {
       familyName: session.user.familyName || undefined,
       idToken: session.idToken || undefined,
       iat: typeof session.iat === 'number' ? session.iat : undefined,
+      // roleVersion must be explicitly projected — session.user spread above
+      // does not include it (roleVersion lives on the session root, not on
+      // session.user).  Without this, refresh-session/route.ts always sees
+      // sessionRoleVersion=0 and fires needsRefresh=true on every poll the
+      // moment dbRoleVersion reaches 1 after any role change.
+      roleVersion: typeof session.roleVersion === 'number' ? session.roleVersion : undefined,
     };
   } catch (error) {
     logger.error("Session retrieval failed:", {

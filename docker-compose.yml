@@ -40,8 +40,8 @@ services:
       - DB_PASSWORD=${DB_PASSWORD:-}
       - DB_NAME=${DB_NAME:-aistudio}
 
-      # Storage (GCS)
-      - GCS_BUCKET_NAME=${GCS_BUCKET_NAME}
+      # Storage (GCS) — env-validation.ts requires GCS_BUCKET (not GCS_BUCKET_NAME)
+      - GCS_BUCKET=${GCS_BUCKET}
 
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:3000/api/healthz"]
