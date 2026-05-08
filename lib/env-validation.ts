@@ -140,6 +140,16 @@ export function validateEnv(): { isValid: boolean; missing: string[]; warnings: 
       warnings.push(
         `TOKEN_REFRESH_THRESHOLD_MS="${thresholdRaw}" is below the 60 000 ms floor and will be ignored — effective value is 300 000 ms (5 min).`
       );
+    } else if (thresholdMs >= 1_800_000) {
+      // An upper-bound warning: with TOKEN_REFRESH_THRESHOLD_MS >= 1 800 000 ms
+      // (30 min), MIN_EXPIRES_IN in refresh-google-token.ts would reach 1800 s
+      // (the runtime ceiling) and every Google token refresh response
+      // (expires_in: 3600) would pass the check — but just barely.  At
+      // >= 3 600 000 ms (1 h) it would fail every response silently.  Warn early
+      // so operators discover the misconfiguration at startup, not at user-logout time.
+      warnings.push(
+        `TOKEN_REFRESH_THRESHOLD_MS="${thresholdRaw}" (${Math.round(thresholdMs / 60_000)} min) is unusually high — values ≥ 1 800 000 ms approach Google's 3 600 s token lifetime and may cause every token refresh to fail. Verify this is intentional.`
+      );
     }
   }
 

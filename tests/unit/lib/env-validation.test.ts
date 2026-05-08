@@ -203,6 +203,16 @@ describe("validateEnv()", () => {
     expect(warnings.some((w) => w.includes("TOKEN_REFRESH_THRESHOLD_MS"))).toBe(true)
   })
 
+  it("warns but stays valid when TOKEN_REFRESH_THRESHOLD_MS is at or above 1 800 000 ms (upper bound)", () => {
+    process.env.TOKEN_REFRESH_THRESHOLD_MS = "1800000"
+
+    const { isValid, warnings } = validateEnv()
+
+    expect(isValid).toBe(true) // upper-bound warning, not a hard failure
+    expect(warnings.some((w) => w.includes("TOKEN_REFRESH_THRESHOLD_MS"))).toBe(true)
+    expect(warnings.some((w) => w.includes("unusually high"))).toBe(true)
+  })
+
   it("does not warn when TOKEN_REFRESH_THRESHOLD_MS is at or above the 60 000 ms floor", () => {
     process.env.TOKEN_REFRESH_THRESHOLD_MS = "60000"
 

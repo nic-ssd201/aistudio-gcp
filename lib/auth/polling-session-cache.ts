@@ -86,7 +86,10 @@ export class PollingSessionCache {
   ): void {
     const now = Date.now();
 
-    // Implement LRU eviction if cache is full
+    // FIFO eviction when cache is full: evicts the entry with the oldest
+    // cachedAt (creation time), not the least-recently-accessed.  For a
+    // 5-min TTL the difference is small in practice; true LRU would require
+    // tracking lastAccessedAt and is not worth the overhead here.
     if (this.cache.size >= this.options.maxEntries) {
       this.evictOldest();
     }
@@ -151,7 +154,13 @@ export class PollingSessionCache {
   // to make invalidation O(sessions-per-user) instead of O(total-sessions).
   invalidateUser(sub: string): void {
     const prefix = `session:${sub}:`;
-    const legacyKey = `session:${sub}`; // pre-iat format — belt-and-braces
+    // Legacy key (pre-iat format): no current code path writes entries under
+    // this key — generateSessionCacheKey() always produces session:sub:iat and
+    // returns null (skipping caching) when iat is absent.  Kept for migration
+    // safety in case a pre-deploy cookie populates the cache before the iat
+    // fix lands; a future cleanup PR may remove this branch once confident
+    // that no legacy entries remain in any deployment.
+    const legacyKey = `session:${sub}`;
     let count = 0;
 
     for (const key of this.cache.keys()) {
@@ -254,12 +263,32 @@ export class PollingSessionCache {
   }
 }
 
-// Singleton instance for application-wide use
-export const pollingSessionCache = new PollingSessionCache({
-  maxAge: 5 * 60 * 1000, // 5 minutes - longer than typical polling sessions
-  maxEntries: 500, // Reasonable for concurrent users
-  cleanupInterval: 2 * 60 * 1000, // 2 minutes
-});
+// Singleton instance for application-wide use.
+//
+// Stored on globalThis to survive Next.js HMR module reloads in development.
+// Without this, every hot-reload registers a new setInterval (from startCleanup)
+// while the old interval is never cleared (destroy() is only called in tests),
+// causing timer accumulation and stale cache entries surviving across reloads.
+// globalThis persists across HMR reloads within the same Node process, so the
+// single instance (and its interval) is reused rather than duplicated.
+// In production there is no HMR; the pattern is a no-op (just reads the cached
+// value on every import).
+const CACHE_GLOBAL_KEY = '__pollingSessionCache__' as const
+declare global {
+  // eslint-disable-next-line no-var -- globalThis augmentation requires var
+  var __pollingSessionCache__: PollingSessionCache | undefined
+}
+
+export const pollingSessionCache: PollingSessionCache =
+  globalThis.__pollingSessionCache__ ??
+  (globalThis.__pollingSessionCache__ = new PollingSessionCache({
+    maxAge: 5 * 60 * 1000, // 5 minutes - longer than typical polling sessions
+    maxEntries: 500, // Reasonable for concurrent users
+    cleanupInterval: 2 * 60 * 1000, // 2 minutes
+  }));
+
+// Silence unused-variable lint on the key constant (used only for type annotation)
+void CACHE_GLOBAL_KEY;
 
 /**
  * Generate cache key from session data.

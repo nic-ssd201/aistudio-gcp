@@ -202,13 +202,23 @@ async function doRefresh(token: JWT, log: ReturnType<typeof createLogger>): Prom
     // value — consistent with the documented contract in token-refresh-config.ts.
     // The Math.max + parseInt cost is negligible relative to an HTTP round-trip.
     //
-    // Math.max(300, …) is an absolute lower bound independent of any operator
-    // configuration: Google's documented access-token lifetime is 3600 s and
-    // < 300 s is structurally abnormal regardless of the threshold setting.
-    // An operator who raises the threshold above 300 s gets the higher value
-    // enforced, preventing the hot-loop for tokens whose expires_in falls between
-    // 300 s and their custom threshold.
-    const MIN_EXPIRES_IN = Math.max(300, Math.round(getRefreshThresholdMs() / 1000)) // seconds
+    // MIN_EXPIRES_IN floor: Math.max(300, threshold_s) — prevents a hot-loop
+    // against Google's token endpoint when expires_in is at or below the proactive-
+    // refresh threshold (the next jwt() callback would immediately trigger another
+    // refresh).  300 s is an absolute lower bound; an operator who raises the
+    // threshold above 300 s gets the higher value enforced.
+    //
+    // MIN_EXPIRES_IN ceiling: capped at 1800 s (half of Google's standard 3600 s
+    // lifetime).  Without a ceiling, an operator who sets TOKEN_REFRESH_THRESHOLD_MS
+    // >= 3600 000 ms would make MIN_EXPIRES_IN >= 3600 s, causing every Google
+    // response (expires_in: 3600) to be rejected as "too short" — the user would
+    // re-auth on every refresh cycle with no indication of why.  env-validation
+    // emits a warning for thresholds >= 1 800 000 ms; the cap here is the runtime
+    // safety net in case the warning is missed or the validator is bypassed.
+    const MIN_EXPIRES_IN = Math.min(
+      1800, // ceiling: never reject Google's standard 3600 s token lifetime
+      Math.max(300, Math.round(getRefreshThresholdMs() / 1000))
+    ) // seconds
     const expiresIn = tokens.expires_in ?? 0
     if (expiresIn < MIN_EXPIRES_IN) {
       // Production telemetry: filter on alert="short_expires_in" in Cloud Logging
