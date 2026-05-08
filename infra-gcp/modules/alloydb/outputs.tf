@@ -18,10 +18,9 @@ output "primary_private_ip" {
   value       = google_alloydb_instance.primary.ip_address
 }
 
-output "connection_string" {
-  description = "PostgreSQL connection string template — substitute DB_NAME and credentials at runtime"
-  # sslmode=require is non-negotiable; AlloyDB enforces TLS and AI Studio's drizzle-client
-  # auto-adds it, but this template makes the requirement explicit for Cloud Run env injection.
-  value     = "postgresql://postgres:PASSWORD@${google_alloydb_instance.primary.ip_address}:5432/DB_NAME?sslmode=require"
-  sensitive = true
-}
+# No `connection_string` output: a template with literal "PASSWORD"/"DB_NAME"
+# placeholders is a footgun (consumers wired it straight into Cloud Run as
+# DATABASE_URL, which then short-circuits the credential-aware fallback in
+# lib/db/drizzle-client.ts). Consumers should compose a connection from
+# `primary_private_ip` + a Secret Manager reference for the password +
+# DB_USER/DB_NAME literals — see envs/*/main.tf for the canonical wiring.
