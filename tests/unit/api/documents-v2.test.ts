@@ -64,7 +64,7 @@ jest.mock('@/lib/aws/document-upload', () => ({
   generateMultipartUrls: jest.fn()
 }));
 
-jest.mock('@/lib/aws/lambda-trigger', () => ({
+jest.mock('@/lib/gcp/processing-queue', () => ({
   sendToProcessingQueue: jest.fn()
 }));
 
@@ -288,7 +288,7 @@ describe.skip('Documents v2 API Routes', () => {
     it('should successfully confirm upload and trigger processing', async () => {
       const { getServerSession } = require('@/lib/auth/server-session');
       const { getJobStatus: getJobStatusService, confirmDocumentUpload } = require('@/lib/services/document-job-service');
-      const { sendToProcessingQueue } = require('@/lib/aws/lambda-trigger');
+      const { sendToProcessingQueue } = require('@/lib/gcp/processing-queue');
 
       getServerSession.mockResolvedValue(mockSession);
       getJobStatusService.mockResolvedValue({

@@ -91,11 +91,6 @@ jest.mock("@google/genai", () => ({
   Modality: { AUDIO: "AUDIO" },
 }))
 
-// Mock S3
-jest.mock("@/lib/aws/s3-client", () => ({
-  clearS3Cache: jest.fn(),
-}))
-
 import { handleVoiceConnection } from "../ws-handler"
 import type { IncomingMessage } from "node:http"
 

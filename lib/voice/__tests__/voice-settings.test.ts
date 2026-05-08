@@ -19,11 +19,6 @@ jest.mock("@/lib/logger", () => ({
   },
 }))
 
-// Mock S3 client (needed by revalidateSettingsCache)
-jest.mock("@/lib/aws/s3-client", () => ({
-  clearS3Cache: jest.fn(),
-}))
-
 // Import after mocks
 import { Settings, revalidateSettingsCache } from "@/lib/settings-manager"
 
