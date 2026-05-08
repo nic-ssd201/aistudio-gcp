@@ -37,9 +37,11 @@ export const authConfig: NextAuthConfig = {
     // initial 1-hour access token. prompt: "consent" ensures Google always
     // returns a refresh_token (even on repeat sign-ins).
     //
-    // No hd (hosted-domain) restriction: access control is enforced downstream
-    // by the role/permission system (hasToolAccess). Add hd here if you need
-    // to gate sign-in to a specific Workspace domain.
+    // Hosted-domain restriction (hd): when AUTH_GOOGLE_HD is set, Google
+    // enforces that the signing-in account belongs to that Workspace domain
+    // (e.g. "psd401.net"). Without hd, any Google account can sign in and
+    // access control is enforced entirely downstream by the role/permission
+    // system. Set AUTH_GOOGLE_HD in production for Workspace-only deployments.
     Google({
       clientId: process.env.AUTH_GOOGLE_ID!,
       clientSecret: process.env.AUTH_GOOGLE_SECRET!,
@@ -47,6 +49,13 @@ export const authConfig: NextAuthConfig = {
         params: {
           scope: "openid email profile",
           access_type: "offline",
+          // Conditionally gate sign-in to a specific Google Workspace domain.
+          // When AUTH_GOOGLE_HD is set, Google rejects accounts outside the domain
+          // before the OAuth code exchange, so the signIn() callback never fires
+          // for non-domain accounts — fail-closed at the IdP level.
+          // When unset, any Google account can sign in; role assignment in
+          // resolve-user.ts is the only access-control layer.
+          ...(process.env.AUTH_GOOGLE_HD ? { hd: process.env.AUTH_GOOGLE_HD } : {}),
           // `prompt` controls whether Google shows the consent screen on repeat sign-ins.
           //
           // "consent" (default when AUTH_GOOGLE_FORCE_CONSENT=true or unset):
@@ -394,7 +403,7 @@ export const authConfig: NextAuthConfig = {
         // (stale cookies trigger this for up to SESSION_MAX_AGE seconds post-deploy).
         // Logged at debug rather than warn to avoid noise during the rollout window.
         // A real regression (loginIat assignment removed) is caught by CI tests.
-        log.debug("loginIat missing on non-initial token — cache key will fall back to sub:0 until JWT re-issues", {
+        log.debug("loginIat missing on non-initial token — polling cache will be skipped until JWT re-issues", {
           sub: token.sub,
         })
         // Use `delete` rather than assigning `undefined` to avoid a runtime

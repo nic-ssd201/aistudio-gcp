@@ -129,13 +129,12 @@ export async function resolveUserId(
   // are all-digit numbers, e.g. 123456@psd401.net). Non-numeric → staff.
   // Defaults to least-privilege (student) when username cannot be determined.
   //
-  // ⚠️  Domain assumption: this heuristic is designed for deployments that
-  // restrict sign-in to a single Google Workspace domain via `hd` in auth.ts.
-  // In an open deployment (no `hd` restriction), any all-digit Google account
-  // local-part (e.g. 2026@gmail.com) would be auto-provisioned as "student".
-  // auth.ts line 42 uses `hd: process.env.AUTH_GOOGLE_HD` — if that env var
-  // is unset, callers from outside the expected domain bypass this check and
-  // receive the wrong default role. Set AUTH_GOOGLE_HD in production.
+  // ⚠️  Domain assumption: this heuristic is designed for K-12 Workspace
+  // deployments where all-digit usernames (e.g. 123456@psd401.net) are student
+  // IDs. Without a Google Workspace domain restriction, any all-digit Gmail
+  // local-part (e.g. 2026@gmail.com) would also be auto-provisioned as student.
+  // Set AUTH_GOOGLE_HD in auth.ts to gate sign-in to your Workspace domain and
+  // prevent non-district accounts from reaching this provisioning path entirely.
   const isNumeric = /^\d+$/.test(username) // already false for empty strings
   const defaultRole = isNumeric ? "student" : "staff"
 

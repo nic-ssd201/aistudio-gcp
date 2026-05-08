@@ -26,6 +26,10 @@ const ENV_VARS: EnvVar[] = [
   // `missing[]` before the pair check runs (which would produce duplicate entries).
   { name: 'AUTH_GOOGLE_ID', required: false, description: 'Google OAuth client ID' },
   { name: 'AUTH_GOOGLE_SECRET', required: false, description: 'Google OAuth client secret' },
+  // Optional: restrict sign-in to a specific Google Workspace domain at the IdP level.
+  // When set, Google rejects non-domain accounts before the OAuth code exchange.
+  // When unset, any Google account can sign in (access control is enforced by roles).
+  { name: 'AUTH_GOOGLE_HD', required: false, description: 'Google Workspace hosted domain (e.g. psd401.net) — restricts sign-in to that domain' },
 
   // Database — one of three modes required; validated dynamically below:
   //   1. DATABASE_URL  (local dev / direct URL)
@@ -148,7 +152,7 @@ export function validateEnv(): { isValid: boolean; missing: string[]; warnings: 
       // >= 3 600 000 ms (1 h) it would fail every response silently.  Warn early
       // so operators discover the misconfiguration at startup, not at user-logout time.
       warnings.push(
-        `TOKEN_REFRESH_THRESHOLD_MS="${thresholdRaw}" (${Math.round(thresholdMs / 60_000)} min) is unusually high — values ≥ 1 800 000 ms approach Google's 3 600 s token lifetime and may cause every token refresh to fail. Verify this is intentional.`
+        `TOKEN_REFRESH_THRESHOLD_MS="${thresholdRaw}" (${Math.round(thresholdMs / 60_000)} min) is unusually high — refresh-google-token.ts caps MIN_EXPIRES_IN at 1 800 s, so values ≥ 1 800 000 ms here cause every Google token response (expires_in: 3 600) to barely pass. Use ≤ 1 500 000 ms for a healthy margin. Verify this is intentional.`
       );
     }
   }
