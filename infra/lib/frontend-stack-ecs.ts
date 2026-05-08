@@ -84,25 +84,33 @@ export class FrontendStackEcs extends cdk.Stack {
     // ============================================================================
     // Internal API Secret for Scheduled Execution Authentication
     // ============================================================================
-    // Create secret for Lambda → ECS JWT authentication
-    const internalApiSecret = new secretsmanager.Secret(this, 'InternalApiSecret', {
-      secretName: `aistudio-${environment}-internal-api-secret`,
-      description: 'Internal API authentication secret for scheduled execution',
-      generateSecretString: {
-        secretStringTemplate: JSON.stringify({}),
-        generateStringKey: 'INTERNAL_API_SECRET',
-        excludePunctuation: true,
-        passwordLength: 32,
-      },
-      removalPolicy: environment === 'prod' ? cdk.RemovalPolicy.RETAIN : cdk.RemovalPolicy.DESTROY,
-    });
-
-    // Export secret ARN to SSM for SchedulerStack to read
-    new ssm.StringParameter(this, 'InternalApiSecretArnParam', {
-      parameterName: `/aistudio/${environment}/internal-api-secret-arn`,
-      stringValue: internalApiSecret.secretArn,
-      description: 'Internal API secret ARN for Lambda JWT authentication',
-    });
+    // Gated on isLegacyAwsDeploy: this secret is an AWS artefact consumed by
+    // Lambda → ECS JWT auth in the upstream AWS deployment. The GCP fork uses
+    // Cloud Run and does not deploy this stack, so creating the secret when
+    // !isLegacyAwsDeploy would generate a real (billable) Secrets Manager
+    // resource that serves no purpose.
+    const internalApiSecretArn = props.isLegacyAwsDeploy
+      ? (() => {
+          const secret = new secretsmanager.Secret(this, 'InternalApiSecret', {
+            secretName: `aistudio-${environment}-internal-api-secret`,
+            description: 'Internal API authentication secret for scheduled execution',
+            generateSecretString: {
+              secretStringTemplate: JSON.stringify({}),
+              generateStringKey: 'INTERNAL_API_SECRET',
+              excludePunctuation: true,
+              passwordLength: 32,
+            },
+            removalPolicy: environment === 'prod' ? cdk.RemovalPolicy.RETAIN : cdk.RemovalPolicy.DESTROY,
+          });
+          // Export secret ARN to SSM for SchedulerStack to read
+          new ssm.StringParameter(this, 'InternalApiSecretArnParam', {
+            parameterName: `/aistudio/${environment}/internal-api-secret-arn`,
+            stringValue: secret.secretArn,
+            description: 'Internal API secret ARN for Lambda JWT authentication',
+          });
+          return secret.secretArn;
+        })()
+      : cdk.Lazy.string({ produce: () => 'arn:aws:secretsmanager:us-east-1:000000000000:secret:unused-gcp-migration-aaaaaa' });
 
     // ============================================================================
     // MCP Token Encryption Key (AES-256-GCM DEK)
@@ -199,13 +207,22 @@ export class FrontendStackEcs extends cdk.Stack {
       authSecretArn: props.isLegacyAwsDeploy
         ? cdk.Fn.importValue(`${environment}-AuthSecretArn`)
         : cdk.Lazy.string({ produce: () => 'arn:aws:secretsmanager:us-east-1:000000000000:secret:unused-gcp-migration-aaaaaa' }),
-      // Internal API secret (created above)
-      internalApiSecretArn: internalApiSecret.secretArn,
-      // K-12 Content Safety: Guardrails resources from GuardrailsStack
-      // These enable precise IAM scoping and DynamoDB access for PII tokenization
-      guardrailArn: cdk.Fn.importValue(`${environment}-GuardrailArn`),
-      piiTokenTableArn: cdk.Fn.importValue(`${environment}-PIITokenTableArn`),
-      violationTopicArn: cdk.Fn.importValue(`${environment}-ViolationTopicArn`),
+      // Internal API secret (gated above)
+      internalApiSecretArn,
+      // K-12 Content Safety: Guardrails resources from GuardrailsStack.
+      // Gated on isLegacyAwsDeploy: these Fn::ImportValue calls require the
+      // GuardrailsStack exports to exist in CloudFormation.  In the GCP fork
+      // (no GuardrailsStack deployed), ungated importValue calls would fail at
+      // CloudFormation deploy time with "No export named …".
+      guardrailArn: props.isLegacyAwsDeploy
+        ? cdk.Fn.importValue(`${environment}-GuardrailArn`)
+        : 'unused-gcp-migration',
+      piiTokenTableArn: props.isLegacyAwsDeploy
+        ? cdk.Fn.importValue(`${environment}-PIITokenTableArn`)
+        : 'unused-gcp-migration',
+      violationTopicArn: props.isLegacyAwsDeploy
+        ? cdk.Fn.importValue(`${environment}-ViolationTopicArn`)
+        : 'unused-gcp-migration',
     });
 
     // ============================================================================

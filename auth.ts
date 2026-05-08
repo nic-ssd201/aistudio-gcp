@@ -142,6 +142,20 @@ export const authConfig: NextAuthConfig = {
             googleProvidedExpiry: !!account.expires_at
           })
 
+          // Warn when Google does not return a refresh_token on initial sign-in.
+          // This happens in select_account mode (AUTH_GOOGLE_FORCE_CONSENT=false)
+          // when the user has already granted offline_access and Google skips the
+          // consent screen — if no refresh_token is issued, the session will end
+          // silently at access-token expiry (auth.ts jwt() callback returns null).
+          // Operators should see this in logs and consider switching to consent mode
+          // or ensuring the prompt parameter forces a new grant.
+          if (!account.refresh_token) {
+            log.warn("Initial sign-in: no refresh_token returned by Google — session will end at access-token expiry", {
+              sub: decoded.sub,
+              prompt: googleForceConsent ? 'consent' : 'select_account',
+            })
+          }
+
           const newToken: JWT = {
             sub: decoded.sub,
             email: decoded.email,

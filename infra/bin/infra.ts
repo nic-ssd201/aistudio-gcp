@@ -112,7 +112,7 @@ Object.entries(standardTags).forEach(([key, value]) => cdk.Tags.of(devPermission
 
 // Access Analyzer Stack - continuous IAM compliance monitoring
 const devAccessAnalyzerStack = new AccessAnalyzerStack(app, 'AIStudio-AccessAnalyzer-Dev', {
-  config: {} as any, // Config not used by current implementation
+  config: EnvironmentConfig.get('dev'),
   environment: 'dev',
   alertEmail,
   env: { account: process.env.CDK_DEFAULT_ACCOUNT, region: process.env.CDK_DEFAULT_REGION },
