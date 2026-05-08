@@ -49,6 +49,32 @@ This guide covers ongoing operations, monitoring, and management for the AWS inf
 - If stack deployment fails due to missing parameters, provide the required client ID(s) with `--parameters`
 - For missing secrets, create them in AWS Secrets Manager as documented in `DEPLOYMENT.md` (in this directory)
 
+## Google Sign-In Domain Restriction — AUTH_GOOGLE_HD (K-12 Deployments)
+
+**For K-12 and other closed deployments, setting `AUTH_GOOGLE_HD` is strongly recommended in production.**
+
+Without `AUTH_GOOGLE_HD`, any Google account (personal Gmail, other Workspace domains, etc.) can
+sign in and will be **automatically provisioned** as a new user via JIT provisioning in
+`lib/auth/resolve-user.ts`. This is the intended behavior for open deployments, but is almost
+certainly wrong for a school district that should only allow district Google Workspace accounts.
+
+```bash
+# .env (production)
+AUTH_GOOGLE_HD=your-district.k12.us.example.com   # restricts to this Workspace domain at the IdP level
+```
+
+**What it does**: Google's OAuth `hd` parameter causes Google to reject sign-in attempts from
+accounts outside the specified hosted domain *before* they reach the application — the user sees
+a Google-side error, not an application error. This is the strongest gate available short of
+allowlisting individual accounts.
+
+**Startup warning**: If `AUTH_GOOGLE_HD` is not set in a production environment, the application
+emits a startup warning at deploy time (`validateEnv()`) to surface this policy gap to operators.
+
+**Note**: `AUTH_GOOGLE_HD` restricts sign-in but does not affect users who are already provisioned.
+To remove a provisioned user's access, use the admin user-management UI to delete or deactivate
+their account.
+
 ## Polling Session Cache — Role Revocation Behavior (GCP Deployment)
 
 The polling session cache (`lib/auth/polling-session-cache.ts`) is an in-process

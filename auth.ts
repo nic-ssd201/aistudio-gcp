@@ -371,18 +371,22 @@ export const authConfig: NextAuthConfig = {
       // (a test fixture, JIT provisioning, etc.), an empty-string email would
       // silently propagate into the users table — log a warn so the regression
       // surfaces in production telemetry immediately.
+      // A missing email is theoretically unreachable: hasVerifiedGoogleEmail()
+      // in signIn() rejects any token without a verified email before the
+      // session callback is reached.  Throw rather than propagating an
+      // empty-string email that would corrupt the users table — a loud failure
+      // here is far preferable to a silent bad-data write that only surfaces
+      // on the next DB constraint violation or email-validation check.
       if (!email) {
-        log.warn("session callback reached with no email — signIn guard may have been bypassed", {
-          sub: token.sub,
-        })
+        throw new Error(
+          `session callback reached with no email for sub=${token.sub} — signIn guard appears to have been bypassed`
+        )
       }
 
       session.user = {
         ...session.user,
         id: token.sub as string,
-        // `email` is string | undefined per the cast fix; NextAuth's User type
-        // requires string.  Use ?? '' as a safe fallback (see warn above).
-        email: email ?? '',
+        email,
         name: displayName,
         givenName: givenName || null,
         familyName: familyName || null,
