@@ -94,8 +94,11 @@ export async function refreshGoogleToken(token: JWT): Promise<JWT | null> {
   // whole map.  Clearing would evict in-flight Promises without aborting the
   // underlying fetches, creating a dedup gap where a follow-up call could race
   // the orphaned fetch.  Bypassing dedup is safer: the in-flight entries are
-  // left intact, no race is introduced, and the extra refresh for this one sub
-  // is the only cost.  At 500 entries the dedup benefit is already marginal.
+  // left intact and no race is introduced.  The cost is that N concurrent
+  // callers for the same sub each issue an independent refresh fetch (N fetches
+  // rather than 1), and each subsequent caller races the first one's
+  // refresh_token rotation — an acceptable risk at 500+ subs where the dedup
+  // benefit is already marginal.
   if (activeRefreshes.size >= 500) {
     log.warn("activeRefreshes map at capacity (≥500 entries) — bypassing dedup for this call; should be rare in production — investigate if persistent", {
       size: activeRefreshes.size,

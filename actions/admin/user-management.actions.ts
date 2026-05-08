@@ -618,8 +618,10 @@ export async function updateUser(
     // for the polling-auth perf improvement; a cross-instance signal (Pub/Sub,
     // Redis invalidation) would eliminate the window but is out of scope here.
     if (subFromTx) {
-      // Wrap in try/catch: cache invalidation is best-effort. If invalidateUser
-      // throws (e.g. a bug in the cache module), we log a warning rather than
+      // Wrap in try/catch: cache invalidation is best-effort. invalidateUser()
+      // is currently synchronous Map iteration with no realistic throw path,
+      // but the try/catch future-proofs for any async or more complex extension
+      // of the cache module. If it does throw, we log a warning rather than
       // turning a successful committed role change into an apparent failure.
       try {
         pollingSessionCache.invalidateUser(subFromTx)
