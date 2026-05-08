@@ -74,6 +74,16 @@ Optional tuning:
 | `SESSION_MAX_AGE` | `86400` (24 h) | JWT session lifetime in seconds. Must be a positive integer; non-numeric values fall back to the default. |
 | `TOKEN_REFRESH_THRESHOLD_MS` | `300000` (5 min) | How many milliseconds before token expiry to proactively refresh. Minimum 60000 ms. Increase for deployments with long-running streaming paths (>5 min). |
 
+#### `loginIat` — custom JWT / session claim
+
+`loginIat` is a custom claim written into the NextAuth JWT at sign-in time (copied from
+the Google OIDC `id_token`'s standard `iat`). Unlike NextAuth's own `iat` claim —
+which `jose.EncryptJWT.setIssuedAt()` resets to `Date.now()` on every token re-encode —
+`loginIat` is stable for the lifetime of a login session. The polling session cache
+keys on `sub + loginIat` (via `generateSessionCacheKey`) so that a user who signs out
+and back in within the 5-minute TTL window gets a fresh cache miss rather than
+inheriting the previous session's stale role set. This claim is not operator-configurable.
+
 #### Polling auth cache and role-change propagation
 
 The polling auth layer caches authenticated user data (userId, roles) for up to
@@ -99,7 +109,7 @@ accepted trade-off for the polling-auth performance improvement.
   in issue #9 as a future improvement.
 
 To monitor the window in practice, watch the `Google token refresh failed` and
-`Skipping polling cache — session.iat absent` warn-rate in Cloud Logging. A
+`Skipping polling cache — session.loginIat absent` debug-rate in Cloud Logging. A
 spike after a role change indicates instances still serving cached sessions.
 
 ---
