@@ -132,6 +132,72 @@ describe("PollingSessionCache", () => {
     expect(cache.getCachedSession(key2)).not.toBeNull()
   })
 
+  // ── FIFO eviction ─────────────────────────────────────────────────────────
+
+  it("evictOldest() respects delete-before-set: re-cached key is treated as newest, not oldest", () => {
+    // Pin the evictOldest() + delete-before-set invariant documented in
+    // setCachedSession():
+    //   - Insert keys A, B, C (FIFO order: A is oldest).
+    //   - Re-set key B (delete + re-insert → B moves to tail).
+    //   - On the next insert that triggers eviction, A must be evicted, not B.
+    //
+    // If setCachedSession() used Map.set() without a preceding delete(), B
+    // would keep its original insertion position (between A and C) and the
+    // eviction order would silently become A → B, wrongly evicting an entry
+    // that was just refreshed.
+    const tinyCache = new PollingSessionCache({
+      maxAge: 5 * 60 * 1000,
+      maxEntries: 3,
+      cleanupInterval: 600_000,
+    })
+
+    const sA = makeSession({ sub: "a", loginIat: 1_000_001 })
+    const sB = makeSession({ sub: "b", loginIat: 1_000_002 })
+    const sC = makeSession({ sub: "c", loginIat: 1_000_003 })
+    const sD = makeSession({ sub: "d", loginIat: 1_000_004 })
+
+    const keyA = generateSessionCacheKey(sA)!
+    const keyB = generateSessionCacheKey(sB)!
+    const keyC = generateSessionCacheKey(sC)!
+    const keyD = generateSessionCacheKey(sD)!
+
+    tinyCache.setCachedSession(keyA, sA, 1, ["student"])  // map: [A, B_placeholder, C_placeholder]
+    tinyCache.setCachedSession(keyB, sB, 2, ["student"])  // map: [A, B, ...]
+    tinyCache.setCachedSession(keyC, sC, 3, ["student"])  // map: [A, B, C] — full
+
+    // Re-cache B: delete-before-set moves B to the tail → [A, C, B].
+    tinyCache.setCachedSession(keyB, sB, 2, ["administrator"])
+
+    // Inserting D triggers eviction.  A is now the oldest entry — it must be
+    // evicted, not B (which was just re-inserted at the tail).
+    tinyCache.setCachedSession(keyD, sD, 4, ["student"])
+
+    expect(tinyCache.getCachedSession(keyA)).toBeNull()   // evicted (oldest)
+    expect(tinyCache.getCachedSession(keyB)).not.toBeNull() // survived (recently re-cached)
+    expect(tinyCache.getCachedSession(keyC)).not.toBeNull() // survived
+    expect(tinyCache.getCachedSession(keyD)).not.toBeNull() // just inserted
+
+    tinyCache.destroy()
+  })
+
+  // ── setCachedSession copies the roles array ────────────────────────────────
+
+  it("setCachedSession copies the roles array — post-call mutations do not corrupt the cached entry", () => {
+    const session = makeSession()
+    const key = generateSessionCacheKey(session)!
+    const roles = ["student"]
+
+    cache.setCachedSession(key, session, 42, roles)
+
+    // Mutate the caller's array after caching.
+    roles.push("administrator")
+
+    // The cached entry must still reflect the original roles.
+    const hit = cache.getCachedSession(key)
+    expect(hit!.userRoles).toEqual(["student"])
+    expect(hit!.userRoles).toHaveLength(1)
+  })
+
   // ── TTL enforcement ────────────────────────────────────────────────────────
 
   it("returns null when the entry has expired", () => {

@@ -117,14 +117,13 @@ export class PollingSessionCache {
     this.cache.set(sessionId, {
       session,
       userId,
-      // Captured by reference — callers must not mutate the array after
-      // passing it here.  The current sole caller (optimized-polling-auth.ts)
-      // passes a freshly-mapped array and discards the reference, so this is
-      // safe today.  If a future caller retains a reference to the same array,
-      // it must not push/splice/assign to it post-call or the cached entry
-      // will be silently corrupted.  See also: getCachedSession returns
-      // readonly string[] to prevent mutation on the read path.
-      userRoles,
+      // Shallow copy so mutations to the caller's array after this call cannot
+      // corrupt the cached entry.  getCachedSession() already returns
+      // `readonly string[]` to block mutation on the read path; copying here
+      // closes the write-path gap for callers that retain a reference to the
+      // original array.  The copy is O(roles) — negligible for typical role
+      // counts (1–5 strings) relative to the DB round-trip this call replaces.
+      userRoles: [...userRoles],
       cachedAt: now,
       expiresAt: now + this.options.maxAge,
       requestCount: 1

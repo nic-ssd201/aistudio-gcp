@@ -585,32 +585,38 @@ export const authConfig: NextAuthConfig = {
   debug: process.env.AUTH_DEBUG === 'true',
 }
 
-// Factory function — returns a NextAuth instance bound to authConfig.
-// NextAuth route modules (app/api/auth/[...nextauth]/route.ts) are module-level
-// singletons in Next.js, so createAuth() is called once at module load, not
-// per-request. The function exists to keep authConfig private and allow tests
-// to call createAuth() with a fresh NextAuth instance per test file via jest.resetModules().
-export function createAuth() {
-  // Belt-and-suspenders credential check.
-  //
-  // requireValidEnv() in instrumentation.ts catches missing AUTH_GOOGLE_ID /
-  // AUTH_GOOGLE_SECRET at startup, but it deliberately does NOT re-throw — it
-  // only logs an error so Cloud Run health checks can still respond during a
-  // rolling deploy with a misconfigured revision.  As a result, if the vars are
-  // absent, the module-level Google({ clientId: process.env.AUTH_GOOGLE_ID! })
-  // call above silently receives `undefined` cast to string, and the first
-  // sign-in attempt produces a cryptic Google "invalid_client" error rather than
-  // a clear message pointing to the missing vars.
-  //
-  // This guard fires before NextAuth uses the config and surfaces the real cause
-  // with an actionable message — the same information requireValidEnv() would
-  // have emitted at startup, now also visible at the call site.
+/**
+ * Belt-and-suspenders guard: throws if AUTH_GOOGLE_ID or AUTH_GOOGLE_SECRET
+ * are absent.
+ *
+ * requireValidEnv() in instrumentation.ts catches missing credentials at
+ * startup but deliberately does NOT re-throw — it only logs, so Cloud Run
+ * health checks can still respond during a rolling deploy with a
+ * misconfigured revision.  As a result the Google provider above would
+ * silently receive `undefined` cast to string, and the first sign-in attempt
+ * would produce a cryptic "invalid_client" from Google rather than a clear
+ * message pointing to the missing vars.
+ *
+ * Called by createAuth() (OAuth code-exchange path) to surface the real cause
+ * before NextAuth ever uses the config.  NOT called from the middlewareAuth
+ * construction below — see the comment there for the rationale.
+ */
+function assertGoogleCreds(): void {
   if (!process.env.AUTH_GOOGLE_ID || !process.env.AUTH_GOOGLE_SECRET) {
     throw new Error(
       'Missing Google OAuth credentials: AUTH_GOOGLE_ID and AUTH_GOOGLE_SECRET must be set. ' +
       'See ENVIRONMENT_VARIABLES.md for setup instructions.'
     );
   }
+}
+
+// Factory function — returns a NextAuth instance bound to authConfig.
+// NextAuth route modules (app/api/auth/[...nextauth]/route.ts) are module-level
+// singletons in Next.js, so createAuth() is called once at module load, not
+// per-request. The function exists to keep authConfig private and allow tests
+// to call createAuth() with a fresh NextAuth instance per test file via jest.resetModules().
+export function createAuth() {
+  assertGoogleCreds()
   return NextAuth(authConfig)
 }
 

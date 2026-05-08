@@ -42,6 +42,17 @@ export interface UserSession {
 }
 
 
+// Module-level singleton — constructing this once avoids re-running the
+// credential guard and the NextAuth(authConfig) constructor on every
+// getServerSession() call.  In production the module is loaded once per
+// process; in development HMR may reload it, but credential validation
+// runs at most once per reload (acceptable).
+//
+// jest.mock('@/auth') is babel-hoisted above any module-level code, so tests
+// that mock createAuth() will see their mock here — the credential guard
+// inside createAuth() never fires against real env vars during unit tests.
+const { auth: _serverAuth } = createAuth();
+
 /**
  * Gets the current authenticated session using NextAuth v5.
  * Returns null when the user is not signed in or the session has expired.
@@ -50,8 +61,7 @@ export async function getServerSession(): Promise<UserSession | null> {
   const context = await createRequestContext();
 
   try {
-    const { auth } = createAuth();
-    const session = await auth();
+    const session = await _serverAuth();
 
     if (!session?.user?.id) {
       return null;
