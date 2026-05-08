@@ -146,6 +146,12 @@ export async function updateUserRoles(
  * @param userId - The user database ID
  * @param roleName - Role name to add
  */
+// CACHE INVALIDATION NOTE: addUserRole and removeUserRole bump roleVersion
+// inside their transactions but do NOT call pollingSessionCache.invalidateUser().
+// Current callers are JIT provisioning only (resolve-user.ts) where no polling
+// cache entry can pre-exist, so this is safe today.  Any future admin-facing
+// caller must call pollingSessionCache.invalidateUser(sub) post-commit to flush
+// the in-process polling cache on the handling instance.
 export async function addUserRole(
   userId: number,
   roleName: string

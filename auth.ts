@@ -25,11 +25,13 @@ const googleForceConsent = process.env.AUTH_GOOGLE_FORCE_CONSENT?.trim().toLower
 
 // Log the effective Google prompt mode at module load so operators can confirm
 // what they actually got (consent vs select_account) without reading source code.
-// Edge-logger is safe here — auth.ts runs in both Edge and Node runtimes.
+// Uses log.warn (not log.info) because edge-logger only emits INFO/DEBUG in
+// development — warn is always emitted and this startup-config line is only
+// useful in production where the choice of prompt mode actually matters.
 {
   const log = createLogger({ context: 'auth-config' })
   const effectivePrompt = googleForceConsent ? 'consent' : 'select_account'
-  log.info(`Google OAuth prompt mode: "${effectivePrompt}"`, {
+  log.warn(`Google OAuth prompt mode: "${effectivePrompt}"`, {
     AUTH_GOOGLE_FORCE_CONSENT: process.env.AUTH_GOOGLE_FORCE_CONSENT ?? '(unset — defaulting to consent)',
   })
 }

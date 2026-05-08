@@ -525,9 +525,17 @@ export async function updateUser(
         // for that user) — disruptive for a purely cosmetic change.
         //
         // Safety: other code paths that mutate roles without going through updateUser
-        // (e.g. lib/db/user-roles.ts assignRole / removeRole / replaceRoles) bump
-        // roleVersion themselves inside their own transactions, so skipping the bump
-        // here on a name-only edit does not create a gap — roles aren't changing.
+        // (e.g. lib/db/drizzle/user-roles.ts addUserRole / removeUserRole /
+        // replaceUserRoles) bump roleVersion themselves inside their own transactions,
+        // so skipping the bump here on a name-only edit does not create a gap —
+        // roles aren't changing.
+        //
+        // NOTE: those helpers do NOT call pollingSessionCache.invalidateUser() — they
+        // rely on the roleVersion bump + /api/auth/refresh-session as the cross-instance
+        // invalidation path.  Their current callers are JIT provisioning only (no
+        // pre-existing cache entry), so this is safe today.  Any future admin-facing
+        // caller that uses addUserRole/removeUserRole directly must call
+        // pollingSessionCache.invalidateUser(sub) post-commit to flush the local cache.
         const result = await tx
           .update(users)
           .set({
