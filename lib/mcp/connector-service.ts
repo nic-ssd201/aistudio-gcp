@@ -230,12 +230,10 @@ export async function getConnectorTools(
         authProvider,
       }
     }
-  } else if (authType === "cognito_passthrough") {
+  } else if (authType === "session_passthrough") {
     // Session passthrough: forward the Google OIDC idToken as a Bearer header.
     // idToken is populated in auth.ts jwt callback (account.id_token → token.idToken)
     // and surfaced via session callback (session.idToken → UserSession.idToken).
-    // Note: the auth type name 'cognito_passthrough' is a historical misnomer;
-    // it will be renamed to 'session_passthrough' in a follow-up migration.
     if (!options?.idToken) {
       throw new Error(
         "Session passthrough requires an active session with an ID token. " +
@@ -600,7 +598,7 @@ async function loadServerAndToken(
  * Decrypts the stored access token and maps it to the appropriate header.
  */
 async function buildAuthHeaders(
-  authType: Exclude<McpAuthType, "oauth" | "cognito_passthrough">,
+  authType: Exclude<McpAuthType, "oauth" | "session_passthrough">,
   tokenRow: TokenRow
 ): Promise<Record<string, string>> {
   if (authType === "none") {
@@ -974,7 +972,7 @@ function assertHttpTransport(transport: string): asserts transport is "http" {
 }
 
 const VALID_TRANSPORTS = new Set<McpTransportType>(["stdio", "http", "websocket"])
-const VALID_AUTH_TYPES = new Set<McpAuthType>(["api_key", "oauth", "jwt", "none", "cognito_passthrough"])
+const VALID_AUTH_TYPES = new Set<McpAuthType>(["api_key", "oauth", "jwt", "none", "session_passthrough"])
 
 /** Maps a DB row to the McpConnector type with runtime validation */
 function toMcpConnector(row: typeof nexusMcpServers.$inferSelect): McpConnector {

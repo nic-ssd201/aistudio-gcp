@@ -92,7 +92,7 @@ type McpServerUpdate = Partial<
 // ============================================
 
 const VALID_TRANSPORTS = ["http", "stdio", "websocket"] as const
-const VALID_AUTH_TYPES = ["none", "oauth", "api_key", "jwt", "cognito_passthrough"] as const
+const VALID_AUTH_TYPES = ["none", "oauth", "api_key", "jwt", "session_passthrough"] as const
 const MAX_CONNECTIONS_LIMIT = 100
 
 /**
