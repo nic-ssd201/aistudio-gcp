@@ -414,20 +414,16 @@ export const authConfig: NextAuthConfig = {
         familyName: familyName || null,
       }
 
-      // Store tokens in session for server-side use.
-      // NOTE: refreshToken is intentionally kept on the JWT only (not exposed
-      // here) — it is only needed server-side inside the jwt() callback to
-      // obtain a new access/id token and should not be reachable via useSession().
-      //
-      // Security considerations:
-      // - These tokens are encrypted in the NextAuth JWT session cookie
-      // - accessToken: used for server-side Google API calls
-      // - idToken: contains OIDC user claims for identity verification
-      // - Never log or expose these tokens in client-side code
+      // Token propagation to session (server-side use only):
+      // - refreshToken: JWT-only — never exposed here; only needed in jwt() callback.
+      // - accessToken: JWT-only — no server or client code reads session.accessToken;
+      //   keeping it off the session reduces the attack surface if a future bug
+      //   accidentally serializes session fields to a client response.
+      // - idToken: propagated because MCP connector-service.ts uses it as a Bearer
+      //   token for cognito_passthrough (now session-passthrough) auth type.
       // `?? undefined` rather than `as string`: token fields are string | undefined
       // in next-auth.d.ts, so `as string` would silently assign undefined to a
       // string-typed slot when the token lacks the field.
-      session.accessToken = token.accessToken ?? undefined;
       session.idToken = token.idToken ?? undefined;
       // Propagate loginIat (our stable login-time marker) as session.iat so the
       // polling session cache can key on sub+loginIat and avoid returning a stale
@@ -464,7 +460,6 @@ export const authConfig: NextAuthConfig = {
       log.debug("Session created successfully", {
         userId: session.user.id,
         userEmail: session.user.email,
-        hasAccessToken: !!session.accessToken,
         hasIdToken: !!session.idToken,
         tokenExpiresAt: token.expiresAt ? new Date(token.expiresAt as number).toISOString() : 'unknown'
       })

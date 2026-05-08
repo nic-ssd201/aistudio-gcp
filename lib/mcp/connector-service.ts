@@ -798,7 +798,10 @@ export async function loadOAuthCredentials(
   // GCP Secret Manager: convert DB key path to GCP secret name format.
   // Fail-loud: a missing GCP_PROJECT_ID would silently target 'your-project'
   // and surface as a confusing "secret not found" error at request time.
-  const gcpSecretName = `projects/${getRequiredEnv('GCP_PROJECT_ID')}/secrets/${credentialsKey.replace("/", "-")}/versions/latest`
+  // Replace ALL slashes in the key (String.replace(string) only replaces the
+  // first occurrence; a key like "oauth/github/client-1" would produce a
+  // malformed secret name with leftover slashes and silently misroute the lookup).
+  const gcpSecretName = `projects/${getRequiredEnv('GCP_PROJECT_ID')}/secrets/${credentialsKey.replace(/\//g, "-")}/versions/latest`
   const [version] = await getSecretsClient().accessSecretVersion({ name: gcpSecretName })
   if (!version?.payload?.data) {
     // version not available; JSON.parse("") will throw below

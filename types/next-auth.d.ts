@@ -10,10 +10,11 @@ declare module "next-auth" {
       givenName?: string | null
       familyName?: string | null
     }
-    // Add token properties to session for server-side use.
-    // refreshToken is intentionally excluded — it lives only on the JWT,
-    // not in the client-visible session object.
-    accessToken?: string
+    // Token propagation policy (see auth.ts session callback):
+    // - refreshToken: JWT-only — not exposed on Session.
+    // - accessToken: JWT-only — no consumer reads session.accessToken, keeping
+    //   it off the session reduces accidental client-side exposure.
+    // - idToken: propagated for MCP connector session-passthrough auth.
     idToken?: string
     /** Login-time issued-at (seconds since epoch). Propagated from token.loginIat
      *  so the polling cache can key on sub+iat and avoid returning a stale role
