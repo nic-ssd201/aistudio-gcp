@@ -18,8 +18,8 @@ import type { McpAuthType, McpConnectionStatus } from "@/lib/mcp/connector-types
 /** Token expiry buffer — proactively mark tokens expiring within 60 seconds as expired */
 const TOKEN_EXPIRY_BUFFER_MS = 60_000
 
-/** Valid authType values — mirrors CHECK constraint (updated in 060-mcp-cognito-passthrough-auth.sql) */
-const VALID_AUTH_TYPES = new Set<McpAuthType>(["api_key", "oauth", "jwt", "none", "cognito_passthrough"])
+/** Valid authType values — mirrors CHECK constraint (current state set by 066-rename-cognito-passthrough-to-session-passthrough.sql) */
+const VALID_AUTH_TYPES = new Set<McpAuthType>(["api_key", "oauth", "jwt", "none", "session_passthrough"])
 
 /**
  * Connector with connection status for the current user.
@@ -135,9 +135,9 @@ export async function getConnectorsWithStatus(): Promise<ActionState<ConnectorWi
             : "connected"
       }
 
-      // Connectors with authType "none" or "cognito_passthrough" are always connected
-      // (no per-user token storage needed — cognito_passthrough uses the session idToken)
-      if (row.authType === "none" || row.authType === "cognito_passthrough") {
+      // Connectors with authType "none" or "session_passthrough" are always connected
+      // (session_passthrough forwards the active session's idToken — no per-user token storage)
+      if (row.authType === "none" || row.authType === "session_passthrough") {
         status = "connected"
       }
 

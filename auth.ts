@@ -422,7 +422,7 @@ export const authConfig: NextAuthConfig = {
       //   accidentally serializes session fields to a client response.
       // - idToken: the ONLY token credential consciously placed on the session.
       //   Required by lib/mcp/connector-service.ts which forwards it as a Bearer
-      //   token for the session-passthrough (formerly cognito_passthrough) auth type.
+      //   token for the session_passthrough auth type.
       //   Any future addition of a token field to the session should be deliberate
       //   and documented here — session fields are more broadly accessible than JWT
       //   fields and increasing this surface should be an explicit decision.
