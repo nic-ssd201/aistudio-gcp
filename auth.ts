@@ -156,7 +156,14 @@ export const authConfig: NextAuthConfig = {
               `malformed id_token: expected 3 dot-separated JWT parts, got ${parts.length}`
             )
           }
-          const base64Payload = parts[1].replace(/-/g, '+').replace(/_/g, '/');
+          // base64url → base64: replace URL-safe chars, then restore padding.
+          // JWT segments omit `=` padding; the WHATWG atob() spec requires the
+          // input length to be a multiple of 4 — without padding, strict runtimes
+          // throw InvalidCharacterError for payloads whose length is not 0 mod 4.
+          // `(4 - len % 4) % 4` gives 0, 1, or 2 padding chars as needed (a JWT
+          // payload is never 3-short because base64 encodes 3 bytes → 4 chars).
+          const b64 = parts[1].replace(/-/g, '+').replace(/_/g, '/');
+          const base64Payload = b64 + '='.repeat((4 - b64.length % 4) % 4);
           const payload = atob(base64Payload);
           const decoded = JSON.parse(payload);
 
