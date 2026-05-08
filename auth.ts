@@ -28,7 +28,13 @@ const googleForceConsent = process.env.AUTH_GOOGLE_FORCE_CONSENT?.trim().toLower
 // Uses log.warn (not log.info) because edge-logger only emits INFO/DEBUG in
 // development — warn is always emitted and this startup-config line is only
 // useful in production where the choice of prompt mode actually matters.
-{
+//
+// Gated by globalThis.__authConfigLogged__ so Next.js HMR reloads in development
+// don't emit a fresh warn line on every file save.  In production there is no
+// HMR; the flag is a no-op (the module loads exactly once per process).
+declare global { var __authConfigLogged__: boolean | undefined }
+if (!globalThis.__authConfigLogged__) {
+  globalThis.__authConfigLogged__ = true
   const log = createLogger({ context: 'auth-config' })
   const effectivePrompt = googleForceConsent ? 'consent' : 'select_account'
   log.warn(`Google OAuth prompt mode: "${effectivePrompt}"`, {
@@ -565,6 +571,26 @@ export const authConfig: NextAuthConfig = {
 // per-request. The function exists to keep authConfig private and allow tests
 // to call createAuth() with a fresh NextAuth instance per test file via jest.resetModules().
 export function createAuth() {
+  // Belt-and-suspenders credential check.
+  //
+  // requireValidEnv() in instrumentation.ts catches missing AUTH_GOOGLE_ID /
+  // AUTH_GOOGLE_SECRET at startup, but it deliberately does NOT re-throw — it
+  // only logs an error so Cloud Run health checks can still respond during a
+  // rolling deploy with a misconfigured revision.  As a result, if the vars are
+  // absent, the module-level Google({ clientId: process.env.AUTH_GOOGLE_ID! })
+  // call above silently receives `undefined` cast to string, and the first
+  // sign-in attempt produces a cryptic Google "invalid_client" error rather than
+  // a clear message pointing to the missing vars.
+  //
+  // This guard fires before NextAuth uses the config and surfaces the real cause
+  // with an actionable message — the same information requireValidEnv() would
+  // have emitted at startup, now also visible at the call site.
+  if (!process.env.AUTH_GOOGLE_ID || !process.env.AUTH_GOOGLE_SECRET) {
+    throw new Error(
+      'Missing Google OAuth credentials: AUTH_GOOGLE_ID and AUTH_GOOGLE_SECRET must be set. ' +
+      'See ENVIRONMENT_VARIABLES.md for setup instructions.'
+    );
+  }
   return NextAuth(authConfig)
 }
 

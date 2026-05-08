@@ -326,10 +326,14 @@ export const pollingSessionCache: PollingSessionCache =
  *          (treat as cache miss — do not call getCachedSession with the result).
  */
 export function generateSessionCacheKey(session: UserSession): string | null {
+  // Intentionally falsy-checks loginIat: both `undefined` and `0` are rejected.
+  // The token-JWT path preserves `decoded.iat ?? Date.now()/1000` so loginIat=0
+  // (Unix epoch) is physically possible but astronomically unlikely in practice.
+  // Treating 0 as absent is correct: a session:sub:0 key would collide across
+  // every zero-loginIat session for the same sub, serving stale roles across
+  // different login events.  The unit test "returns null when loginIat is 0"
+  // (polling-session-cache.test.ts) pins this behavior explicitly.
   if (!session.loginIat) {
-    // loginIat is absent or 0 — skip caching to avoid the degenerate key collision
-    // where every session for a sub maps to session:sub:0 and cross-session
-    // stale-role serving becomes possible.
     return null;
   }
   return `session:${session.sub}:${session.loginIat}`;

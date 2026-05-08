@@ -177,6 +177,15 @@ export function validateEnv(): { isValid: boolean; missing: string[]; warnings: 
         'e.g. your-district.k12.example.com, to restrict sign-in at the IdP level; ' +
         'set to "OPEN" to explicitly allow any Google account)'
       );
+    } else if (hd === 'OPEN') {
+      // Sentinel acknowledged — the operator has explicitly opted into open access.
+      // Warn so the choice is visible in startup logs: an operator checking Cloud
+      // Logging after a suspected breach should immediately see that domain
+      // restriction was intentionally disabled, rather than having to check env vars.
+      warnings.push(
+        'AUTH_GOOGLE_HD=OPEN — open deployment: any Google account can sign in and ' +
+        'will be JIT-provisioned.  Ensure this is intentional for your deployment context.'
+      );
     }
   }
 
