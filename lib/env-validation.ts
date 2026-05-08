@@ -157,6 +157,21 @@ export function validateEnv(): { isValid: boolean; missing: string[]; warnings: 
     }
   }
 
+  // AUTH_GOOGLE_HD: warn in production when unset.
+  // Without this, any Google account can sign in and will be auto-provisioned by
+  // resolve-user.ts (JIT provisioning).  Setting AUTH_GOOGLE_HD=your-domain.com
+  // restricts sign-in to that Google Workspace domain at the IdP level — the
+  // safest gate for school deployments where only district accounts should access
+  // the application.  This is an intentional policy choice in open deployments
+  // (e.g. a school that allows parent Google accounts), so we warn rather than error.
+  if (process.env.NODE_ENV === 'production' && !process.env.AUTH_GOOGLE_HD?.trim()) {
+    warnings.push(
+      'AUTH_GOOGLE_HD is not set — any Google account can sign in and will be ' +
+      'auto-provisioned by JIT provisioning. Set AUTH_GOOGLE_HD=your-domain.com ' +
+      'to restrict sign-in to a Google Workspace domain at the IdP level.'
+    );
+  }
+
   // AUTH_GOOGLE_FORCE_CONSENT: warn when set to an unrecognised value.
   // Normalise to lowercase so "False" / "FALSE" are accepted alongside "false".
   const forceConsent = process.env.AUTH_GOOGLE_FORCE_CONSENT;

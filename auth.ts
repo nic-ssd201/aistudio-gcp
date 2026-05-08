@@ -141,7 +141,18 @@ export const authConfig: NextAuthConfig = {
           // (Node 16+ / all Edge environments), removing any runtime dependency on
           // the Node-only Buffer API and keeping auth.ts safe to import from Edge.
           // base64url → base64: replace URL-safe chars before decoding.
-          const base64Payload = account.id_token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/');
+          // Validate JWT structure before indexing: a well-formed JWT has exactly
+          // three dot-separated parts (header.payload.signature).  An id_token
+          // that fails this check is structurally malformed — split('.')[1] would
+          // return undefined and atob(undefined) would throw a cryptic TypeError
+          // rather than a meaningful auth error.  Fail loudly here instead.
+          const parts = account.id_token.split('.')
+          if (parts.length !== 3) {
+            throw new Error(
+              `malformed id_token: expected 3 dot-separated JWT parts, got ${parts.length}`
+            )
+          }
+          const base64Payload = parts[1].replace(/-/g, '+').replace(/_/g, '/');
           const payload = atob(base64Payload);
           const decoded = JSON.parse(payload);
 

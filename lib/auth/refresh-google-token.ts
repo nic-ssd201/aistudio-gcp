@@ -159,6 +159,10 @@ async function doRefresh(token: JWT, log: ReturnType<typeof createLogger>): Prom
     log.warn("No refresh token available for Google token", { sub: token.sub })
     return null
   }
+  // Extract to a const so TypeScript narrows the type to `string` for all
+  // downstream uses — avoids the non-null assertion (`!`) at the call site
+  // and makes the null-guard above clearly sufficient.
+  const refreshToken = token.refreshToken
 
   // Return null (not throw) when credentials are absent — the misconfiguration
   // is already surfaced by validateEnv() at startup and flagged in auth.ts at
@@ -194,7 +198,7 @@ async function doRefresh(token: JWT, log: ReturnType<typeof createLogger>): Prom
         grant_type: "refresh_token",
         client_id: clientId,
         client_secret: secret,
-        refresh_token: token.refreshToken!, // null-guarded by the early return in doRefresh above
+        refresh_token: refreshToken,
       }),
       signal: controller.signal,
     })
@@ -272,13 +276,13 @@ async function doRefresh(token: JWT, log: ReturnType<typeof createLogger>): Prom
       // new one when present; fall back to the existing token otherwise.
       // Using `||` (not `??`) so an empty-string rotation result is also treated
       // as absent — Google shouldn't return `""`, but `||` is free defense-in-depth.
-      refreshToken: tokens.refresh_token || token.refreshToken,
+      refreshToken: tokens.refresh_token || refreshToken,
       expiresAt: Date.now() + expiresIn * 1000,
     }
 
-    // Fail-closed: the `refreshToken: tokens.refresh_token || token.refreshToken`
+    // Fail-closed: the `refreshToken: tokens.refresh_token || refreshToken`
     // chain above should always produce a non-empty string (token.refreshToken is
-    // checked for presence at line 122 before reaching doRefresh).  But if both
+    // null-guarded at the top of doRefresh and extracted to `refreshToken`).  But if both
     // somehow resolve to undefined / empty-string (e.g. a future refactor removes
     // the early return), storing an absent refresh token would cause a silent
     // auth failure on the *next* expiry without any visible error.  Return null
