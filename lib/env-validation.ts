@@ -58,6 +58,7 @@ const ENV_VARS: EnvVar[] = [
   // Session / Token behaviour (optional overrides)
   { name: 'SESSION_MAX_AGE', required: false, description: 'Session lifetime in seconds (default: 86400 / 24 h)' },
   { name: 'TOKEN_REFRESH_THRESHOLD_MS', required: false, description: 'Access-token refresh look-ahead in ms (default: 300 000 / 5 min; floor: 60 000)' },
+  { name: 'AUTH_DEBUG', required: false, description: 'Set to "true" to enable NextAuth verbose debug logging (local dev only; never set in production)' },
 
   // Application
   { name: 'NODE_ENV', required: false, description: 'Node environment (development/production)' },

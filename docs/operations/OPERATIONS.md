@@ -78,6 +78,25 @@ visible in configuration. Any Google account will be JIT-provisioned on first si
 To remove a provisioned user's access, use the admin user-management UI to delete or deactivate
 their account.
 
+## Sign-Out Behavior — Local Cookie Only
+
+Signing out clears the NextAuth session cookie for the current browser but does **not** revoke
+the Google OAuth grant. This means:
+
+- The user's Google account remains authorized in Google's systems.
+- On a shared device, another user who visits the app may be silently re-authenticated by Google
+  if their browser still has a valid Google session and `AUTH_GOOGLE_FORCE_CONSENT` is `false`
+  (the `select_account` prompt, not `consent`, is shown on repeat visits).
+
+**For shared-device deployments** (e.g. classroom computers): set `AUTH_GOOGLE_FORCE_CONSENT=true`
+(the default) so Google always shows the account chooser, preventing silent re-authentication after
+sign-out.
+
+**Google OAuth grant revocation** is not implemented. If a user's account is compromised, the
+recovery path is: (1) delete the user in the admin UI, (2) revoke the Google OAuth grant in
+Google Admin Console → Security → API controls, and (3) rotate `AUTH_SECRET` to invalidate all
+existing JWT sessions immediately.
+
 ## Polling Session Cache — Role Revocation Behavior (GCP Deployment)
 
 The polling session cache (`lib/auth/polling-session-cache.ts`) is an in-process

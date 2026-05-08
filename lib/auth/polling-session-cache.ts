@@ -289,7 +289,6 @@ export class PollingSessionCache {
 // single instance (and its interval) is reused rather than duplicated.
 // In production there is no HMR; the pattern is a no-op (just reads the cached
 // value on every import).
-const CACHE_GLOBAL_KEY = '__pollingSessionCache__' as const
 declare global {
   // eslint-disable-next-line no-var -- globalThis augmentation requires var
   var __pollingSessionCache__: PollingSessionCache | undefined
@@ -302,9 +301,6 @@ export const pollingSessionCache: PollingSessionCache =
     maxEntries: POLLING_CACHE_MAX_ENTRIES, // shared with refresh-google-token.ts dedup cap
     cleanupInterval: 2 * 60 * 1000, // 2 minutes
   }));
-
-// Silence unused-variable lint on the key constant (used only for type annotation)
-void CACHE_GLOBAL_KEY;
 
 /**
  * Generate cache key from session data.

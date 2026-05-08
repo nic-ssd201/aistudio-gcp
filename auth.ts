@@ -523,15 +523,17 @@ export const authConfig: NextAuthConfig = {
   // set from a non-HTTPS origin, closing the sibling-subdomain-XSS cookie-
   // overwrite vector. A custom `cookies` block would need to replicate this
   // prefix logic manually; removing it gets the protection for free.
-  // debug: false suppresses NextAuth's CHUNKING_SESSION_COOKIE warnings (#361).
-  // To enable verbose NextAuth debug output during local development without
-  // touching this file, set AUTH_DEBUG=true in .env.local:
-  //   debug: process.env.NODE_ENV === 'development' && process.env.AUTH_DEBUG === 'true',
-  // Keeping it unconditionally false in source prevents accidental production enablement.
-  debug: false,
+  // AUTH_DEBUG=true enables NextAuth verbose logging (session cookie chunking, token events).
+  // Off by default; set in .env.local for local debugging without touching this file.
+  // False in production suppresses CHUNKING_SESSION_COOKIE noise (#361).
+  debug: process.env.AUTH_DEBUG === 'true',
 }
 
-// Factory function - creates new instance per request
+// Factory function — returns a NextAuth instance bound to authConfig.
+// NextAuth route modules (app/api/auth/[...nextauth]/route.ts) are module-level
+// singletons in Next.js, so createAuth() is called once at module load, not
+// per-request. The function exists to keep authConfig private and allow tests
+// to call createAuth() with a fresh NextAuth instance per test file via jest.resetModules().
 export function createAuth() {
   return NextAuth(authConfig)
 }
