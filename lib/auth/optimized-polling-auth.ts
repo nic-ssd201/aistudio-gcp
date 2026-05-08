@@ -49,7 +49,7 @@ export async function authenticatePollingRequest(): Promise<OptimizedAuthResult>
       };
     }
 
-    // generateSessionCacheKey returns null when session.iat is absent or 0,
+    // generateSessionCacheKey returns null when session.loginIat is absent or 0,
     // which indicates broken loginIat propagation.  In that case we skip the
     // cache entirely (fail-closed) rather than caching under the degenerate key
     // session:sub:0 where every session for the same sub would collide and
@@ -74,7 +74,9 @@ export async function authenticatePollingRequest(): Promise<OptimizedAuthResult>
           isAuthorized: true,
           userId: cachedAuth.userId,
           session: cachedAuth.session,
-          userRoles: cachedAuth.userRoles,
+          // Spread to give callers a plain string[] — CachedSession.userRoles is
+          // readonly string[] to prevent in-place mutation of the cached array.
+          userRoles: [...cachedAuth.userRoles],
           authMethod: 'cache',
           authTime
         };
@@ -86,7 +88,7 @@ export async function authenticatePollingRequest(): Promise<OptimizedAuthResult>
       // a potential log-volume spike that drowns signal at exactly the worst time.
       // Debug is sufficient: the condition is expected during the rollout window
       // and auth.ts already documents the transition behaviour.
-      log.debug('Skipping polling cache — session.iat absent (expected during loginIat rollout)', {
+      log.debug('Skipping polling cache — session.loginIat absent (expected during loginIat rollout)', {
         sub: session.sub,
       });
     }

@@ -69,7 +69,7 @@ describe('S3 Upload API Integration Tests', () => {
       mockGetServerSession.mockResolvedValue({
         sub: 'test-google-sub',
         email: 'test@example.com',
-        iat: 1234567890
+        loginIat: 1234567890
       })
 
       mockGetCurrentUserAction.mockResolvedValue({
@@ -120,7 +120,7 @@ describe('S3 Upload API Integration Tests', () => {
       mockGetServerSession.mockResolvedValue({
         sub: 'test-google-sub',
         email: 'test@example.com',
-        iat: 1234567890
+        loginIat: 1234567890
       })
 
       mockGetCurrentUserAction.mockResolvedValue({
@@ -161,7 +161,7 @@ describe('S3 Upload API Integration Tests', () => {
       mockGetServerSession.mockResolvedValue({
         sub: 'test-google-sub',
         email: 'test@example.com',
-        iat: 1234567890
+        loginIat: 1234567890
       })
 
       mockGetCurrentUserAction.mockResolvedValue({
@@ -246,7 +246,7 @@ describe('S3 Upload API Integration Tests', () => {
       mockGetServerSession.mockResolvedValue({
         sub: 'test-google-sub',
         email: 'test@example.com',
-        iat: 1234567890
+        loginIat: 1234567890
       })
 
       mockGetCurrentUserAction.mockResolvedValue({
@@ -287,7 +287,7 @@ describe('S3 Upload API Integration Tests', () => {
       mockGetServerSession.mockResolvedValue({
         sub: 'test-google-sub',
         email: 'test@example.com',
-        iat: 1234567890
+        loginIat: 1234567890
       })
 
       mockGetCurrentUserAction.mockResolvedValue({

@@ -1,14 +1,15 @@
 // @ts-nocheck — jest.doMock() factory types inside jest.isolateModules() are not
 // inferrable by TypeScript; @ts-nocheck must be the first line of the file.
 /**
- * Regression pin: getServerSession() must propagate session.iat → UserSession.iat
- * so the polling cache can key on sub+iat and avoid returning stale role sets
+ * Regression pin: getServerSession() must propagate session.loginIat → UserSession.loginIat
+ * so the polling cache can key on sub+loginIat and avoid returning stale role sets
  * when a user re-authenticates within the 5-min TTL window.
  *
- * Previously session.iat was never propagated (auth.ts read token.iat which NextAuth
- * overwrites on every re-encode; later fixed to token.loginIat). A refactor that
- * silently dropped session.iat → UserSession.iat would re-break the cache without
- * any type error or runtime exception — only polling cache misses on every request.
+ * Previously session.loginIat was never propagated (auth.ts read token.iat which NextAuth
+ * overwrites on every re-encode; later fixed to token.loginIat → session.loginIat). A
+ * refactor that silently dropped session.loginIat → UserSession.loginIat would re-break
+ * the cache without any type error or runtime exception — only polling cache misses on
+ * every request.
  *
  * Uses jest.isolateModules() + jest.requireActual() to load the real getServerSession()
  * implementation. jest.requireActual bypasses the global jest.setup.js stub for
@@ -31,13 +32,13 @@ function makeNextAuthSession(overrides: Record<string, unknown> = {}) {
       familyName: "Smith",
     },
     idToken: "id-token-value",
-    iat: STUB_IAT,
+    loginIat: STUB_IAT,
     roleVersion: STUB_ROLE_VERSION,
     ...overrides,
   }
 }
 
-type GetServerSessionFn = () => Promise<{ sub: string; email?: string; idToken?: string; iat?: number; roleVersion?: number } | null>
+type GetServerSessionFn = () => Promise<{ sub: string; email?: string; idToken?: string; loginIat?: number; roleVersion?: number } | null>
 
 /**
  * Load the real getServerSession() with a controlled auth() mock,
@@ -77,27 +78,27 @@ describe("getServerSession() — session field propagation to UserSession", () =
     jest.clearAllMocks()
   })
 
-  it("propagates session.iat to UserSession.iat", async () => {
+  it("propagates session.loginIat to UserSession.loginIat", async () => {
     const getServerSession = await loadGetServerSession()
 
     const result = await getServerSession()
 
     expect(result).not.toBeNull()
-    // iat must reach UserSession so the polling cache key is sub+iat (not sub+undefined)
-    expect(result!.iat).toBe(STUB_IAT)
+    // loginIat must reach UserSession so the polling cache key is sub+loginIat (not sub+undefined)
+    expect(result!.loginIat).toBe(STUB_IAT)
   })
 
-  it("sets UserSession.iat to undefined when session.iat is absent", async () => {
-    const getServerSession = await loadGetServerSession({ iat: undefined })
+  it("sets UserSession.loginIat to undefined when session.loginIat is absent", async () => {
+    const getServerSession = await loadGetServerSession({ loginIat: undefined })
 
     const result = await getServerSession()
 
     expect(result).not.toBeNull()
-    // undefined iat → cache key falls back to sub+0 (a miss, but not an error)
-    expect(result!.iat).toBeUndefined()
+    // undefined loginIat → generateSessionCacheKey returns null (cache skipped)
+    expect(result!.loginIat).toBeUndefined()
   })
 
-  it("propagates sub, email, and idToken alongside iat", async () => {
+  it("propagates sub, email, and idToken alongside loginIat", async () => {
     const getServerSession = await loadGetServerSession()
 
     const result = await getServerSession()
@@ -105,7 +106,7 @@ describe("getServerSession() — session field propagation to UserSession", () =
     expect(result!.sub).toBe(STUB_SUB)
     expect(result!.email).toBe("user@example.com")
     expect(result!.idToken).toBe("id-token-value")
-    expect(result!.iat).toBe(STUB_IAT)
+    expect(result!.loginIat).toBe(STUB_IAT)
   })
 
   it("returns null when session has no user.id (unauthenticated)", async () => {
@@ -154,7 +155,7 @@ describe("getServerSession() — session field propagation to UserSession", () =
     const result = await getServerSession()
 
     expect(result!.sub).toBe(STUB_SUB)
-    expect(result!.iat).toBe(STUB_IAT)
+    expect(result!.loginIat).toBe(STUB_IAT)
     expect(result!.roleVersion).toBe(STUB_ROLE_VERSION)
     expect(result!.idToken).toBe("id-token-value")
   })

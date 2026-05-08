@@ -12,7 +12,11 @@ const log = createLogger({ module: 'polling-session-cache' });
 interface CachedSession {
   session: UserSession;
   userId: number;
-  userRoles: string[];
+  // readonly string[] prevents callers from pushing to the cached array and
+  // silently corrupting the cache entry.  Readonly<CachedSession> only protects
+  // top-level property assignments; without this annotation a caller could do
+  // getCachedSession(key).userRoles.push("admin") and mutate the live entry.
+  userRoles: readonly string[];
   cachedAt: number;
   expiresAt: number;
   requestCount: number;
@@ -310,23 +314,23 @@ export const pollingSessionCache: PollingSessionCache =
  * `iat` (issued-at), so the cache entry for the previous session is bypassed
  * automatically — without needing an explicit invalidation on sign-out.
  *
- * `iat` is propagated from the JWT's `loginIat` custom claim through the NextAuth
- * session callback and `getServerSession()`.  A missing or zero iat indicates
- * broken propagation — in that case we return `null` so callers skip the cache
- * entirely rather than caching under the degenerate key `session:sub:0`.
+ * `loginIat` is propagated from the JWT's `loginIat` custom claim through the
+ * NextAuth session callback and `getServerSession()`.  A missing or zero loginIat
+ * indicates broken propagation — in that case we return `null` so callers skip
+ * the cache entirely rather than caching under the degenerate key `session:sub:0`.
  *
  * Fail-closed: a cache miss on every request is preferable to multiple concurrent
  * sessions for the same sub sharing one entry and potentially receiving stale roles.
  *
- * @returns The cache key string, or `null` when `iat` is absent or zero
+ * @returns The cache key string, or `null` when `loginIat` is absent or zero
  *          (treat as cache miss — do not call getCachedSession with the result).
  */
 export function generateSessionCacheKey(session: UserSession): string | null {
-  if (!session.iat) {
-    // iat is absent or 0 — skip caching to avoid the degenerate key collision
+  if (!session.loginIat) {
+    // loginIat is absent or 0 — skip caching to avoid the degenerate key collision
     // where every session for a sub maps to session:sub:0 and cross-session
     // stale-role serving becomes possible.
     return null;
   }
-  return `session:${session.sub}:${session.iat}`;
+  return `session:${session.sub}:${session.loginIat}`;
 }

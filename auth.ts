@@ -434,14 +434,16 @@ export const authConfig: NextAuthConfig = {
       // in next-auth.d.ts, so `as string` would silently assign undefined to a
       // string-typed slot when the token lacks the field.
       session.idToken = token.idToken ?? undefined;
-      // Propagate loginIat (our stable login-time marker) as session.iat so the
-      // polling session cache can key on sub+loginIat and avoid returning a stale
-      // role set when the user re-authenticates within the 5-min TTL window.
+      // Propagate loginIat (our stable login-time marker) as session.loginIat so
+      // the polling session cache can key on sub+loginIat and avoid returning a
+      // stale role set when the user re-authenticates within the 5-min TTL window.
       // token.loginIat is a custom JWT claim that NextAuth never overwrites; the
       // standard token.iat is reset to Date.now() on every re-encode by jose's
       // .setIssuedAt() and would therefore produce a fresh cache key per request.
+      // Session.loginIat is distinct from NextAuth's own session.iat (standard JWT
+      // claim) to avoid confusion and accidental collision.
       if (typeof token.loginIat === 'number') {
-        session.iat = token.loginIat;
+        session.loginIat = token.loginIat;
       } else {
         // loginIat is set unconditionally on every initial sign-in (happy path
         // and malformed-id_token fallback). Reaching here on a non-initial token
@@ -454,11 +456,11 @@ export const authConfig: NextAuthConfig = {
         })
         // Use `delete` rather than assigning `undefined` so the key is absent
         // from JSON.stringify output.  Both produce `number | undefined` at the
-        // TypeScript level, but `JSON.stringify({iat: undefined})` → `{}` while
-        // `delete obj.iat` guarantees the key is genuinely missing — keeps the
-        // serialized session minimal and avoids a spurious `"iat":null` entry
+        // TypeScript level, but `JSON.stringify({loginIat: undefined})` → `{}` while
+        // `delete obj.loginIat` guarantees the key is genuinely missing — keeps the
+        // serialized session minimal and avoids a spurious `"loginIat":null` entry
         // if a serializer treats explicit-undefined as null.
-        delete session.iat;
+        delete session.loginIat;
       }
       // Propagate roleVersion so /api/auth/refresh-session can compare against the
       // DB value and detect role changes.  Without this the sessionRoleVersion is

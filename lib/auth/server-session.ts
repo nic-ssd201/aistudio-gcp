@@ -21,12 +21,14 @@ export interface UserSession {
   /** Google ID token — available in session (used for downstream API auth). */
   idToken?: string;
   /**
-   * JWT issued-at timestamp (seconds since epoch). Copied from the NextAuth JWT
-   * into the session so the polling session cache can key on `sub + iat` and
-   * automatically bypass a stale entry when the user re-authenticates within the
-   * 5-minute TTL window (a fresh login produces a new `iat`).
+   * Login-time issued-at timestamp (seconds since epoch). Copied from token.loginIat
+   * (the stable custom JWT claim) into the session so the polling session cache can
+   * key on `sub + loginIat` and automatically bypass a stale entry when the user
+   * re-authenticates within the 5-minute TTL window (a fresh login produces a new
+   * loginIat; NextAuth's own `iat` is unsuitable because jose.EncryptJWT resets it
+   * on every re-encode).
    */
-  iat?: number;
+  loginIat?: number;
   /**
    * Role version monotonically incremented in the DB on every role change.
    * Propagated from the JWT through the session callback so
@@ -64,11 +66,11 @@ export async function getServerSession(): Promise<UserSession | null> {
       givenName: session.user.givenName || undefined,
       familyName: session.user.familyName || undefined,
       idToken: session.idToken || undefined,
-      // `session.iat` is set from `token.loginIat` by the session callback in
-      // auth.ts:413.  When loginIat is absent (stale pre-deploy cookie), auth.ts
-      // uses `delete session.iat` (not assignment of undefined) to avoid type
+      // `session.loginIat` is set from `token.loginIat` by the session callback in
+      // auth.ts.  When loginIat is absent (stale pre-deploy cookie), auth.ts uses
+      // `delete session.loginIat` (not assignment of undefined) to avoid type
       // narrowing issues — hence the explicit typeof guard here rather than `??`.
-      iat: typeof session.iat === 'number' ? session.iat : undefined,
+      loginIat: typeof session.loginIat === 'number' ? session.loginIat : undefined,
       // roleVersion lives on the session root, not on session.user — must be
       // explicitly projected here.  Without this, refresh-session/route.ts always
       // sees sessionRoleVersion=0 and fires needsRefresh=true on every poll the

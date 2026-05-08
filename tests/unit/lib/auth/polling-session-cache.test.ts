@@ -3,14 +3,14 @@
  *
  * Covered paths:
  * - Cache hit on second call (cache is actually caching — regression pin for
- *   the broken-iat bug where the cache was a permanent miss)
+ *   the broken-loginIat bug where the cache was a permanent miss)
  * - Cache miss for an unknown key
- * - iat-keyed entries don't collide across re-authentications within TTL
- * - invalidateUser removes all entries for a given sub (across iat values)
+ * - loginIat-keyed entries don't collide across re-authentications within TTL
+ * - invalidateUser removes all entries for a given sub (across loginIat values)
  * - invalidateSession removes a specific entry
  * - Expired entries return null (TTL enforcement)
- * - generateSessionCacheKey format includes sub and iat
- * - generateSessionCacheKey returns null when iat is absent/0 (fail-closed)
+ * - generateSessionCacheKey format includes sub and loginIat
+ * - generateSessionCacheKey returns null when loginIat is absent/0 (fail-closed)
  */
 
 import { PollingSessionCache, generateSessionCacheKey } from "@/lib/auth/polling-session-cache"
@@ -22,7 +22,7 @@ function makeSession(overrides: Partial<UserSession> = {}): UserSession {
   return {
     sub: "user-123",
     email: "user@example.com",
-    iat: 1_700_000_000,
+    loginIat: 1_700_000_000,
     ...overrides,
   }
 }
@@ -44,9 +44,9 @@ describe("PollingSessionCache", () => {
 
   // ── Cache hit regression test ──────────────────────────────────────────────
 
-  it("returns cached result on second call — cache is actually caching (regression pin for broken-iat bug)", () => {
+  it("returns cached result on second call — cache is actually caching (regression pin for broken-loginIat bug)", () => {
     const session = makeSession()
-    // Non-null assertion: makeSession() always produces a non-zero iat.
+    // Non-null assertion: makeSession() always produces a non-zero loginIat.
     const key = generateSessionCacheKey(session)!
 
     cache.setCachedSession(key, session, 42, ["student"])
@@ -67,11 +67,11 @@ describe("PollingSessionCache", () => {
     expect(cache.getCachedSession(key)).toBeNull()
   })
 
-  // ── iat-keyed collision prevention ────────────────────────────────────────
+  // ── loginIat-keyed collision prevention ───────────────────────────────────
 
-  it("different iat values produce different keys — re-auth within TTL gets a fresh cache miss", () => {
-    const firstSession = makeSession({ iat: 1_000_000 })
-    const secondSession = makeSession({ iat: 1_000_001 }) // simulates re-login
+  it("different loginIat values produce different keys — re-auth within TTL gets a fresh cache miss", () => {
+    const firstSession = makeSession({ loginIat: 1_000_000 })
+    const secondSession = makeSession({ loginIat: 1_000_001 }) // simulates re-login
 
     const firstKey = generateSessionCacheKey(firstSession)!
     const secondKey = generateSessionCacheKey(secondSession)!
@@ -86,10 +86,10 @@ describe("PollingSessionCache", () => {
 
   // ── invalidateUser ─────────────────────────────────────────────────────────
 
-  it("invalidateUser removes all entries for the sub regardless of iat", () => {
-    const s1 = makeSession({ iat: 1_000_000 })
-    const s2 = makeSession({ iat: 1_000_001 })
-    const otherUser = makeSession({ sub: "other-user", iat: 1_000_000 })
+  it("invalidateUser removes all entries for the sub regardless of loginIat", () => {
+    const s1 = makeSession({ loginIat: 1_000_000 })
+    const s2 = makeSession({ loginIat: 1_000_001 })
+    const otherUser = makeSession({ sub: "other-user", loginIat: 1_000_000 })
 
     cache.setCachedSession(generateSessionCacheKey(s1)!, s1, 42, ["student"])
     cache.setCachedSession(generateSessionCacheKey(s2)!, s2, 42, ["administrator"])
@@ -103,8 +103,8 @@ describe("PollingSessionCache", () => {
     expect(cache.getCachedSession(generateSessionCacheKey(otherUser)!)).not.toBeNull()
   })
 
-  it("invalidateUser handles the legacy session:sub (no iat) key format", () => {
-    // Simulate an entry cached with the old key format (pre-iat migration).
+  it("invalidateUser handles the legacy session:sub (no loginIat) key format", () => {
+    // Simulate an entry cached with the old key format (pre-loginIat migration).
     const legacyKey = "session:user-123"
     const session = makeSession()
     cache.setCachedSession(legacyKey, session, 42, ["student"])
@@ -117,8 +117,8 @@ describe("PollingSessionCache", () => {
   // ── invalidateSession ──────────────────────────────────────────────────────
 
   it("invalidateSession removes a specific key only", () => {
-    const s1 = makeSession({ iat: 1_000_000 })
-    const s2 = makeSession({ iat: 1_000_001 })
+    const s1 = makeSession({ loginIat: 1_000_000 })
+    const s2 = makeSession({ loginIat: 1_000_001 })
     const key1 = generateSessionCacheKey(s1)!
     const key2 = generateSessionCacheKey(s2)!
 
@@ -159,12 +159,12 @@ describe("PollingSessionCache", () => {
 // ── generateSessionCacheKey ────────────────────────────────────────────────────
 
 describe("generateSessionCacheKey", () => {
-  it("includes sub and iat in the returned key", () => {
-    const session = makeSession({ sub: "abc", iat: 1_700_000_000 })
+  it("includes sub and loginIat in the returned key", () => {
+    const session = makeSession({ sub: "abc", loginIat: 1_700_000_000 })
     expect(generateSessionCacheKey(session)).toBe("session:abc:1700000000")
   })
 
-  it("returns null when iat is absent — fail-closed to prevent session:sub:0 collision", () => {
+  it("returns null when loginIat is absent — fail-closed to prevent session:sub:0 collision", () => {
     // Rationale: if loginIat propagation breaks, every session for a sub would
     // map to the same key session:sub:0. Two concurrent sessions could serve
     // stale roles from each other's cache entry. Returning null tells callers
@@ -173,10 +173,10 @@ describe("generateSessionCacheKey", () => {
     expect(generateSessionCacheKey(session)).toBeNull()
   })
 
-  it("returns null when iat is 0 — same fail-closed logic as absent iat", () => {
-    // iat=0 is treated identically to absent: the degenerate key session:sub:0
-    // would collide across all zero-iat sessions for the same sub.
-    const session = makeSession({ iat: 0 })
+  it("returns null when loginIat is 0 — same fail-closed logic as absent loginIat", () => {
+    // loginIat=0 is treated identically to absent: the degenerate key session:sub:0
+    // would collide across all zero-loginIat sessions for the same sub.
+    const session = makeSession({ loginIat: 0 })
     expect(generateSessionCacheKey(session)).toBeNull()
   })
 })

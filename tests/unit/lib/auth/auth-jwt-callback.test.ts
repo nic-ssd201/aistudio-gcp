@@ -452,13 +452,13 @@ describe("session() callback", () => {
 
   // Regression pin for the loginIat propagation chain:
   //   decoded.iat → token.loginIat (jwt callback, initial sign-in)
-  //   → session.iat (session callback)
-  //   → UserSession.iat (getServerSession projection)
+  //   → session.loginIat (session callback)
+  //   → UserSession.loginIat (getServerSession projection)
   //   → generateSessionCacheKey (polling cache key)
   // Each link is unit-tested at its own layer; this test pins the
-  // session-callback step (token.loginIat → session.iat) so a future
+  // session-callback step (token.loginIat → session.loginIat) so a future
   // change to the session callback cannot silently break the chain.
-  it("propagates token.loginIat to session.iat", async () => {
+  it("propagates token.loginIat to session.loginIat", async () => {
     const loginIat = 1_700_000_000 // stable login-time marker
     const token: JWT = {
       sub: "google-sub-iat",
@@ -474,10 +474,10 @@ describe("session() callback", () => {
       newSession: undefined,
       trigger: "update",
     })) as AnyAccount
-    expect(result.iat).toBe(loginIat)
+    expect(result.loginIat).toBe(loginIat)
   })
 
-  it("does not set session.iat when token.loginIat is absent (stale pre-deploy cookie)", async () => {
+  it("does not set session.loginIat when token.loginIat is absent (stale pre-deploy cookie)", async () => {
     // Stale JWTs issued before loginIat was added should skip the cache
     // (generateSessionCacheKey returns null), not collide under session:sub:0.
     const token: JWT = {
@@ -494,9 +494,9 @@ describe("session() callback", () => {
       newSession: undefined,
       trigger: "update",
     })) as AnyAccount
-    // session.iat should be absent (not 0, not undefined via assignment —
-    // auth.ts uses `delete session.iat` for type-safety reasons).
-    expect(result.iat).toBeUndefined()
+    // session.loginIat should be absent (not 0, not undefined via assignment —
+    // auth.ts uses `delete session.loginIat` for type-safety reasons).
+    expect(result.loginIat).toBeUndefined()
   })
 })
 
