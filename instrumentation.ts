@@ -73,12 +73,12 @@ async function warmupConnectionPool(): Promise<void> {
       });
     }
   } catch (error) {
-    const { createLogger: createLoggerFallback } = await import("@/lib/logger");
-    const fallbackLog = createLoggerFallback({ context: "instrumentation" });
+    const { createLogger } = await import("@/lib/logger");
+    const log = createLogger({ context: "instrumentation" });
     const errorMessage = error instanceof Error ? error.message : String(error);
 
     // Don't fail startup on warmup errors
-    fallbackLog.warn("Database connection warmup error - will retry on first query", {
+    log.warn("Database connection warmup error - will retry on first query", {
       error: errorMessage,
     });
   }

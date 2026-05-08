@@ -41,11 +41,14 @@ import { getRefreshThresholdMs, POLLING_CACHE_MAX_ENTRIES } from "@/lib/auth/tok
  * so the map is effectively bounded by concurrent users whose tokens expire at
  * the same instant — negligible in practice.
  *
- * Soft cap: when the map reaches POLLING_CACHE_MAX_ENTRIES, new callers bypass
- * dedup entirely (still call doRefresh) rather than evicting in-flight Promises.
- * The map can momentarily exceed the cap if many bypassing callers insert between
- * the size check and the `.finally()` cleanup — the cap is a circuit breaker, not
- * a hard bound (see "Safety cap" guard below).
+ * Soft cap: when the map reaches POLLING_CACHE_MAX_ENTRIES (500), a throttled
+ * warn is emitted and the caller still falls through to the normal dedup path —
+ * the new sub's Promise is inserted and cleaned up in `.finally()` exactly like
+ * any other entry.  Per-sub deduplication is **always active**, even at capacity.
+ * The map can temporarily exceed 500 by one entry per distinct sub that enters
+ * the cap branch concurrently; `.finally()` shrinks it back as Promises settle.
+ * The cap is a circuit-breaker signal (500 distinct subs refreshing simultaneously
+ * is anomalous), not a hard bound on map size (see "Safety cap" guard below).
  */
 const activeRefreshes = new Map<string, Promise<JWT | null>>()
 

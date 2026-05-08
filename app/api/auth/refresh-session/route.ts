@@ -151,7 +151,12 @@ export async function GET() {
       }
 
       const dbRoleVersion = user.roleVersion || 0
-      const sessionRoleVersion = (session as { roleVersion?: number }).roleVersion || 0
+      // UserSession already declares roleVersion?: number — no cast needed.
+      // Use typeof (same pattern as server-session.ts:88) rather than ||, so
+      // roleVersion: 0 is treated as present (version 0) rather than falling
+      // back to the default.  || would silently treat a valid 0 as "absent"
+      // and return 0 anyway, but the intent is clearer with typeof.
+      const sessionRoleVersion = typeof session.roleVersion === 'number' ? session.roleVersion : 0
       
       log.debug("Role version comparison", {
         userId: session.sub,

@@ -287,6 +287,105 @@ describe("jwt() callback — proactive refresh threshold", () => {
   })
 })
 
+// ── signIn() callback — AUTH_GOOGLE_HD production gate ───────────────────────
+
+describe("signIn() callback — AUTH_GOOGLE_HD production gate", () => {
+  // Save and restore env vars mutated by these tests.
+  const origNodeEnv = process.env.NODE_ENV
+  const origGoogleHd = process.env.AUTH_GOOGLE_HD
+
+  afterEach(() => {
+    // Clear all mock queues so stale mockReturnValueOnce values don't bleed
+    // across describe blocks.  (The production-guard test causes signIn() to
+    // return before hasVerifiedGoogleEmail() is called, leaving its queued
+    // value un-consumed — clearAllMocks() prevents that from poisoning later
+    // tests in the email-verification-gate describe below.)
+    jest.clearAllMocks()
+    // Restore env vars mutated by these tests.
+    if (origNodeEnv === undefined) {
+      Reflect.deleteProperty(process.env, 'NODE_ENV')
+    } else {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (process.env as any).NODE_ENV = origNodeEnv
+    }
+    if (origGoogleHd === undefined) {
+      Reflect.deleteProperty(process.env, 'AUTH_GOOGLE_HD')
+    } else {
+      process.env.AUTH_GOOGLE_HD = origGoogleHd
+    }
+  })
+
+  it("rejects all sign-ins in production when AUTH_GOOGLE_HD is absent (fail-closed)", async () => {
+    // Simulate a misconfigured production instance where AUTH_GOOGLE_HD was
+    // not set (e.g. a rolling deploy with a bad revision).
+    // The signIn() callback must reject the request before any provider check
+    // so no Google account can slip through without domain restriction.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (process.env as any).NODE_ENV = 'production'
+    Reflect.deleteProperty(process.env, 'AUTH_GOOGLE_HD')
+
+    // Do NOT queue a mockReturnValueOnce here — hasVerifiedGoogleEmail is never
+    // called (the production guard fires and returns false before reaching it),
+    // and an unconsumed mockReturnValueOnce would leak into subsequent tests.
+    const { hasVerifiedGoogleEmail } = jest.requireMock(
+      "@/lib/auth/google-email-guard"
+    ) as { hasVerifiedGoogleEmail: jest.Mock }
+
+    const result = await callbacks.signIn!({
+      account: { provider: "google" } as AnyAccount,
+      profile: { email: "user@example.com", email_verified: true, sub: "sub-123" },
+      user: { id: "", email: "", emailVerified: null },
+      credentials: undefined,
+    })
+
+    // Must reject before reaching the email-verification check.
+    expect(result).toBe(false)
+    // hasVerifiedGoogleEmail should NOT have been called — we bailed before that.
+    expect(hasVerifiedGoogleEmail).not.toHaveBeenCalled()
+  })
+
+  it("allows sign-in in production when AUTH_GOOGLE_HD is set", async () => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (process.env as any).NODE_ENV = 'production'
+    process.env.AUTH_GOOGLE_HD = 'example.com'
+
+    const { hasVerifiedGoogleEmail } = jest.requireMock(
+      "@/lib/auth/google-email-guard"
+    ) as { hasVerifiedGoogleEmail: jest.Mock }
+    hasVerifiedGoogleEmail.mockReturnValueOnce(true)
+
+    const result = await callbacks.signIn!({
+      account: { provider: "google" } as AnyAccount,
+      profile: { email: "user@example.com", email_verified: true, sub: "sub-456" },
+      user: { id: "", email: "", emailVerified: null },
+      credentials: undefined,
+    })
+
+    expect(result).toBe(true)
+  })
+
+  it("allows sign-in in development even when AUTH_GOOGLE_HD is absent", async () => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (process.env as any).NODE_ENV = 'development'
+    Reflect.deleteProperty(process.env, 'AUTH_GOOGLE_HD')
+
+    const { hasVerifiedGoogleEmail } = jest.requireMock(
+      "@/lib/auth/google-email-guard"
+    ) as { hasVerifiedGoogleEmail: jest.Mock }
+    hasVerifiedGoogleEmail.mockReturnValueOnce(true)
+
+    const result = await callbacks.signIn!({
+      account: { provider: "google" } as AnyAccount,
+      profile: { email: "dev@example.com", email_verified: true, sub: "sub-789" },
+      user: { id: "", email: "", emailVerified: null },
+      credentials: undefined,
+    })
+
+    // Production guard does not apply in development.
+    expect(result).toBe(true)
+  })
+})
+
 // ── signIn() callback integration ─────────────────────────────────────────────
 
 describe("signIn() callback — email-verification gate", () => {
@@ -544,7 +643,7 @@ describe("jwt() callback — TOKEN_REFRESH_THRESHOLD_MS env override", () => {
   afterEach(() => {
     // Restore original value (or delete if it was never set)
     if (originalThreshold === undefined) {
-      delete process.env.TOKEN_REFRESH_THRESHOLD_MS
+      Reflect.deleteProperty(process.env, 'TOKEN_REFRESH_THRESHOLD_MS')
     } else {
       process.env.TOKEN_REFRESH_THRESHOLD_MS = originalThreshold
     }

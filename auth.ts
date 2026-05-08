@@ -535,6 +535,32 @@ export const authConfig: NextAuthConfig = {
     async signIn({ account, profile }) {
       const log = createLogger({ context: "auth-signin-callback" })
 
+      // Production fail-closed guard: reject all sign-ins when AUTH_GOOGLE_HD
+      // is absent in production.
+      //
+      // instrumentation.ts catches missing AUTH_GOOGLE_HD at startup and logs an
+      // error, but intentionally does NOT re-throw — Cloud Run health probes must
+      // respond during a rolling deploy with a misconfigured revision.  That means
+      // a misconfigured revision can start, pass liveness, and begin serving traffic
+      // while silently allowing any Google account to sign in (no domain restriction).
+      //
+      // This runtime check is the second line of defence: even if the startup alert
+      // is missed, no user can complete sign-in on an instance without AUTH_GOOGLE_HD
+      // set in production.  The env-validation startup log remains the authoritative
+      // signal for ops (Cloud Logging filter in OPERATIONS.md); this guard is the
+      // security backstop.
+      //
+      // Not applied in development (NODE_ENV !== 'production'): local dev often runs
+      // without AUTH_GOOGLE_HD, and the env-validation startup warning is sufficient.
+      if (process.env.NODE_ENV === 'production' && !process.env.AUTH_GOOGLE_HD) {
+        log.error(
+          "AUTH_GOOGLE_HD is not set in production — rejecting sign-in (fail-closed). " +
+          "Set AUTH_GOOGLE_HD to a Workspace domain or the sentinel 'OPEN' to allow any Google account.",
+          { provider: account?.provider ?? 'unknown' }
+        )
+        return false
+      }
+
       if (account?.provider === 'google') {
         // Reject Google accounts with unverified emails.
         // hasVerifiedGoogleEmail uses `=== true` so absent/stringified/"false"
@@ -640,12 +666,21 @@ export function createAuth() {
 // Known gap: if AUTH_GOOGLE_ID / AUTH_GOOGLE_SECRET are absent, the module-level
 // Google({ clientId: undefined as string }) call is silent rather than loud.
 // requireValidEnv() in instrumentation.ts already logs an error for missing creds
-// at startup; that log line is the authoritative startup signal.  A future
-// refactor that makes authMiddleware lazy (computed on first call) would close
-// this gap cleanly.
+// at startup; that log line is the authoritative startup signal.
+//
+// This gap is **not exploitable at the request level**: on a misconfigured
+// instance where AUTH_GOOGLE_ID/SECRET are absent, the Google provider cannot
+// complete an OAuth code exchange (invalid_client), and the signIn() callback
+// above rejects all sign-ins in production when AUTH_GOOGLE_HD is absent.
+// The gap is a misconfiguration-visibility issue (silent startup), not an
+// auth bypass.
+//
 // TODO: implement lazy authMiddleware so assertGoogleCreds() runs before the
-// first JWT decode rather than being silently skipped.  Track alongside the
-// broader credential-guard audit in follow-up to nic-ssd201/aistudio-gcp#6.
+// first JWT decode rather than being silently skipped.  The cleanest approach
+// is to move the Google() provider construction out of the module-level authConfig
+// literal and into createAuth() so that middlewareAuth can be constructed with
+// an empty providers list (JWT-decode-only; no provider creds needed).
+// Track alongside the credential-guard audit in follow-up to nic-ssd201/aistudio-gcp#6.
 const middlewareAuth = NextAuth(authConfig)
 export const { auth: authMiddleware } = middlewareAuth
 

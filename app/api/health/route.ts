@@ -23,6 +23,11 @@ import { validateEnv } from "@/lib/env-validation"
  *   per-check `connectionType`, and `diagnostics.hints[]` are included to ease
  *   local debugging. `hasSession` is omitted in production — probes need only
  *   the HTTP status code; the boolean adds no value over the `status` field.
+ *
+ * **Probe semantics:** a 200 response is a point-in-time snapshot — it confirms
+ * the checks passed at probe time, not that every subsequent request will succeed.
+ * Do not add request-blocking I/O or heavy validation here; Cloud Run and k8s
+ * treat a slow health endpoint as a liveness failure and restart the container.
  */
 export async function GET() {
   const requestId = generateRequestId();
