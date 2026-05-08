@@ -69,7 +69,6 @@ describe('S3 Upload API Integration Tests', () => {
       mockGetServerSession.mockResolvedValue({
         sub: 'test-cognito-sub',
         email: 'test@example.com',
-        exp: 1234567890,
         iat: 1234567890
       })
 
@@ -121,7 +120,6 @@ describe('S3 Upload API Integration Tests', () => {
       mockGetServerSession.mockResolvedValue({
         sub: 'test-cognito-sub',
         email: 'test@example.com',
-        exp: 1234567890,
         iat: 1234567890
       })
 
@@ -163,7 +161,6 @@ describe('S3 Upload API Integration Tests', () => {
       mockGetServerSession.mockResolvedValue({
         sub: 'test-cognito-sub',
         email: 'test@example.com',
-        exp: 1234567890,
         iat: 1234567890
       })
 
@@ -249,7 +246,6 @@ describe('S3 Upload API Integration Tests', () => {
       mockGetServerSession.mockResolvedValue({
         sub: 'test-cognito-sub',
         email: 'test@example.com',
-        exp: 1234567890,
         iat: 1234567890
       })
 
@@ -291,7 +287,6 @@ describe('S3 Upload API Integration Tests', () => {
       mockGetServerSession.mockResolvedValue({
         sub: 'test-cognito-sub',
         email: 'test@example.com',
-        exp: 1234567890,
         iat: 1234567890
       })
 
