@@ -349,7 +349,7 @@ describe("signIn() callback — email-verification gate", () => {
 function makeSession() {
   return {
     user: { id: "", email: "", name: "", givenName: null as string | null, familyName: null as string | null },
-    accessToken: "",
+    // accessToken intentionally omitted: removed from Session type (JWT-only now)
     idToken: "",
     expires: new Date(Date.now() + 3600 * 1000).toISOString(),
   }
@@ -380,7 +380,7 @@ describe("session() callback", () => {
     expect(result.user.id).toBe("google-sub-789")
     expect(result.user.email).toBe("user@example.com")
     expect(result.user.name).toBe("Alice") // givenName takes precedence
-    expect(result.accessToken).toBe("at-xyz")
+    // accessToken is intentionally NOT propagated to session (JWT-only) — no assertion
     expect(result.idToken).toBe("it-xyz")
   })
 
