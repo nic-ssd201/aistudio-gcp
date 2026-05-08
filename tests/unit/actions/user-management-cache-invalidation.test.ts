@@ -37,16 +37,31 @@ const STUB_SUB = 'google-oidc-sub-abc123'
  *   - admin-count:  count = 2 (guards against last-admin removal pass)
  *
  * The first `.returning()` call yields the user-update row with cognitoSub.
+ *
+ * @param currentRoleNames - Roles to return for the FIRST select (the
+ *   "fetch current role assignments" query).  Defaults to `roleNames` so
+ *   tests that don't care about the diff still work.  Pass a different set
+ *   to simulate a real role change (`rolesChanged = true`).
  */
-function makeProxyTx(cognitoSub: string | null, roleNames: string[]): unknown {
+function makeProxyTx(
+  cognitoSub: string | null,
+  roleNames: string[],
+  currentRoleNames: string[] = roleNames
+): unknown {
+  let selectCallCount = 0
   let returningCallCount = 0
   const self: Record<string, unknown> = {}
 
   const handler: ProxyHandler<typeof self> = {
     get(_target, prop) {
       if (prop === 'then') {
-        return (resolve: (v: unknown[]) => void) =>
-          resolve(roleNames.map((name, i) => ({ id: i + 1, name, roleName: name, count: 2 })))
+        return (resolve: (v: unknown[]) => void) => {
+          // The first `then` is the "fetch current role assignments" SELECT;
+          // subsequent ones are role-validation, admin-count, etc.
+          const rows = (selectCallCount++ === 0 ? currentRoleNames : roleNames)
+            .map((name, i) => ({ id: i + 1, name, roleName: name, count: 2 }))
+          resolve(rows)
+        }
       }
       if (prop === 'returning') {
         return () =>
@@ -111,9 +126,10 @@ type UpdateUserFn = (
 async function loadUpdateUser(opts: {
   cognitoSub: string | null
   roles?: string[]
+  currentRoles?: string[]
   onInvalidateUser: jest.Mock
 }): Promise<UpdateUserFn> {
-  const { cognitoSub, roles = ['student'], onInvalidateUser } = opts
+  const { cognitoSub, roles = ['student'], currentRoles, onInvalidateUser } = opts
   let fn!: UpdateUserFn
 
   jest.isolateModules(() => {
@@ -137,7 +153,7 @@ async function loadUpdateUser(opts: {
     }))
     jest.doMock('@/lib/db/drizzle-client', () => ({
       executeTransaction: jest.fn((cb: (tx: unknown) => Promise<void>) =>
-        cb(makeProxyTx(cognitoSub, roles))
+        cb(makeProxyTx(cognitoSub, roles, currentRoles))
       ),
       executeQuery: jest.fn().mockResolvedValue([]),
     }))
@@ -292,7 +308,13 @@ describe('updateUser — pollingSessionCache.invalidateUser wiring', () => {
 
   it('calls invalidateUser(cognitoSub) after a successful role update', async () => {
     const mockInvalidateUser = jest.fn()
-    const updateUser = await loadUpdateUser({ cognitoSub: STUB_SUB, onInvalidateUser: mockInvalidateUser })
+    // currentRoles differs from incoming roles so rolesChanged = true → cache flush fires
+    const updateUser = await loadUpdateUser({
+      cognitoSub: STUB_SUB,
+      roles: ['student'],
+      currentRoles: ['staff'],
+      onInvalidateUser: mockInvalidateUser,
+    })
 
     const result = await updateUser(42, { firstName: 'Alice', lastName: 'Smith', roles: ['student'] })
 
@@ -301,9 +323,30 @@ describe('updateUser — pollingSessionCache.invalidateUser wiring', () => {
     expect(mockInvalidateUser).toHaveBeenCalledWith(STUB_SUB)
   })
 
+  it('does NOT call invalidateUser on a name-only edit (roles unchanged)', async () => {
+    const mockInvalidateUser = jest.fn()
+    // currentRoles === incoming roles → rolesChanged = false → cache flush skipped
+    const updateUser = await loadUpdateUser({
+      cognitoSub: STUB_SUB,
+      roles: ['student'],
+      currentRoles: ['student'],
+      onInvalidateUser: mockInvalidateUser,
+    })
+
+    const result = await updateUser(42, { firstName: 'Alice', lastName: 'New-Name', roles: ['student'] })
+
+    expect(result.isSuccess).toBe(true)
+    expect(mockInvalidateUser).not.toHaveBeenCalled()
+  })
+
   it('does NOT call invalidateUser when cognitoSub is null (user never completed sign-in)', async () => {
     const mockInvalidateUser = jest.fn()
-    const updateUser = await loadUpdateUser({ cognitoSub: null, onInvalidateUser: mockInvalidateUser })
+    const updateUser = await loadUpdateUser({
+      cognitoSub: null,
+      roles: ['student'],
+      currentRoles: ['staff'],
+      onInvalidateUser: mockInvalidateUser,
+    })
 
     const result = await updateUser(42, { firstName: 'Bob', lastName: 'Jones', roles: ['student'] })
 

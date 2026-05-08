@@ -491,10 +491,10 @@ export async function updateUser(
 
     // Update user and role assignments in a transaction.
     // All validation happens inside the transaction to prevent race conditions.
-    // cognitoSub is returned from the transaction body (not closed over) so the
-    // binding is a const and there is no mutable outer variable that could be
-    // silently clobbered by a concurrent call on the same event-loop tick.
-    const subFromTx = await executeTransaction(
+    // The transaction returns { sub, rolesChanged } so both values are available
+    // as consts post-commit — no mutable outer variables that could be silently
+    // clobbered by a concurrent call on the same event-loop tick.
+    const txResult = await executeTransaction(
       async (tx) => {
         // ── 1. Fetch current role assignments ────────────────────────────────
         // Done first so we can (a) diff against incoming roles before the UPDATE
@@ -603,26 +603,32 @@ export async function updateUser(
           }))
         )
 
-        // Return cognitoSub so it is available as a const post-commit, avoiding
-        // a closed-over mutable variable that could be clobbered if two requests
-        // for the same user overlap on the same event-loop tick.
-        return capturedSub
+        // Return both sub and rolesChanged so the post-commit cache-flush can be
+        // gated on actual role changes — a name-only edit should not evict the
+        // cache, symmetric with the conditional roleVersion bump above.
+        // Returning as a const object avoids a closed-over mutable variable that
+        // could be clobbered if two requests for the same user overlap on the same
+        // event-loop tick.
+        return { sub: capturedSub, rolesChanged }
       },
       "updateUser-transaction"
     )
 
-    // Flush polling cache for this user so role changes propagate immediately
-    // to polling endpoints rather than waiting up to 5 minutes for TTL expiry.
-    // subFromTx was captured inside the transaction (via the .select() at the
-    // start of the transaction body) and returned as the transaction result, so
-    // no extra post-commit DB query is needed and a post-commit query failure
-    // cannot mask a successful commit as an error.
+    const { sub: subFromTx, rolesChanged: didRolesChange } = txResult
+
+    // Flush polling cache only when roles actually changed, to mirror the
+    // conditional roleVersion bump above.  A name-only edit does not alter
+    // the user's role set — evicting the cache would serve no purpose and
+    // wastes one TTL worth of warm cache for a cosmetic operation.
+    // subFromTx is captured inside the transaction and returned as the tx
+    // result; no extra post-commit DB query is needed and a post-commit
+    // failure cannot mask a successful commit.
     // NOTE: only the current process's in-process cache is flushed. On Cloud Run
     // (or any multi-instance deployment), the other N-1 instances continue serving
     // stale roles for up to 5 minutes (the TTL).  This is the accepted trade-off
     // for the polling-auth perf improvement; a cross-instance signal (Pub/Sub,
     // Redis invalidation) would eliminate the window but is out of scope here.
-    if (subFromTx) {
+    if (subFromTx && didRolesChange) {
       // Wrap in try/catch: cache invalidation is best-effort. invalidateUser()
       // is currently synchronous Map iteration with no realistic throw path,
       // but the try/catch future-proofs for any async or more complex extension
