@@ -187,12 +187,15 @@ export class PollingSessionCache {
   // to make invalidation O(sessions-per-user) instead of O(total-sessions).
   invalidateUser(sub: string): void {
     const prefix = `session:${sub}:`;
-    // Legacy key (pre-iat format): no current code path writes entries under
-    // this key — generateSessionCacheKey() always produces session:sub:iat and
-    // returns null (skipping caching) when iat is absent.  Kept for migration
-    // safety in case a pre-deploy cookie populates the cache before the iat
-    // fix lands; a future cleanup PR may remove this branch once confident
-    // that no legacy entries remain in any deployment.
+    // Legacy key (pre-iat format, session:sub without iat suffix): no current
+    // code path can produce an entry under this key.  generateSessionCacheKey()
+    // always returns either session:sub:iat (when loginIat is present and non-zero)
+    // or null (causing the caller to skip caching entirely when loginIat is absent).
+    // The null path means no write ever occurs, so a "legacy" entry could only exist
+    // if it was written by a version of this code that predated the loginIat fix and
+    // survived in the same process across a hot-deploy.  Kept defensively; a future
+    // cleanup PR may remove this branch once all deployments have been restarted
+    // with loginIat-aware code and TTL-expired any pre-fix entries.
     const legacyKey = `session:${sub}`;
     let count = 0;
 
@@ -227,7 +230,10 @@ export class PollingSessionCache {
       totalEntries: this.cache.size,
       validEntries,
       totalRequests,
-      hitRate: validEntries > 0 ? (totalRequests / validEntries).toFixed(2) : '0.00',
+      // Named avgRequestsPerEntry rather than hitRate: this is totalRequests / validEntries
+      // (average lookups per live cache slot), not a true hit/(hit+miss) ratio.
+      // A real hit-rate would require separate hit/miss counters in getCachedSession().
+      avgRequestsPerEntry: validEntries > 0 ? (totalRequests / validEntries).toFixed(2) : '0.00',
       memoryUsage: this.estimateMemoryUsage()
     };
   }

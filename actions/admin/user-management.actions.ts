@@ -555,7 +555,10 @@ export async function updateUser(
             // Without this bump on role changes, the multi-instance stale-role
             // fallback (/api/auth/refresh-session) never fires — the in-process
             // pollingSessionCache.invalidateUser() only flushes the local cache.
-            ...(rolesChanged ? { roleVersion: sql`${users.roleVersion} + 1` } : {}),
+            // COALESCE guards against NULL + 1 = NULL on rows whose role_version
+            // column was NULL before migration 020 populated it — matches the same
+            // pattern used in lib/db/drizzle/user-roles.ts replaceUserRoles().
+            ...(rolesChanged ? { roleVersion: sql`COALESCE(${users.roleVersion}, 0) + 1` } : {}),
           })
           .where(eq(users.id, userId))
           // TODO(#8): rename users.cognitoSub → users.authSub once the column rename lands
