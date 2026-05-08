@@ -365,10 +365,11 @@ export const authConfig: NextAuthConfig = {
       } else {
         // loginIat is set unconditionally on every initial sign-in (happy path
         // and malformed-id_token fallback). Reaching here on a non-initial token
-        // means a deploy removed the loginIat assignment — warn so the regression
-        // surfaces in production logs rather than silently collapsing all sessions
-        // for this user to cache key session:sub:0.
-        log.warn("loginIat missing on non-initial token — cache key will fall back to sub:0", {
+        // normally means a JWT cookie was issued before this deploy added loginIat
+        // (stale cookies trigger this for up to SESSION_MAX_AGE seconds post-deploy).
+        // Logged at debug rather than warn to avoid noise during the rollout window.
+        // A real regression (loginIat assignment removed) is caught by CI tests.
+        log.debug("loginIat missing on non-initial token — cache key will fall back to sub:0 until JWT re-issues", {
           sub: token.sub,
         })
         // Use `delete` rather than assigning `undefined` to avoid a runtime

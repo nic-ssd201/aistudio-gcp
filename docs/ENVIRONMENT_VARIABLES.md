@@ -91,6 +91,28 @@ spike after a role change indicates instances still serving cached sessions.
 
 ---
 
+## Email Notifications
+
+The upstream application used AWS SQS + a Lambda `EmailNotificationStack` for
+scheduled-execution result notifications. That stack was **removed in this fork**
+as part of the Cognito/AWS removal.
+
+**Current state:** Email notifications are a **no-op stub**.
+`app/api/assistant-architect/execute/scheduled/route.ts` calls
+`sendNotificationToQueue()`, which logs an info message and returns without
+sending anything when `NOTIFICATION_QUEUE_URL` is unset (which it always is in
+this fork). Users are not notified by email when scheduled executions complete.
+
+**To wire up notifications on GCP:** Replace the stub with a Cloud Pub/Sub
+publish call. Set `NOTIFICATION_QUEUE_URL` (or an equivalent GCP-specific env
+var) to trigger the active path. This is tracked in the project backlog.
+
+| Variable | Description | Required |
+|----------|-------------|----------|
+| `NOTIFICATION_QUEUE_URL` | (stub, unused) Legacy SQS URL — not consumed in this fork | ❌ |
+
+---
+
 ## Optional / AI Provider Variables
 
 AI provider API keys are managed through the database-first settings system.
