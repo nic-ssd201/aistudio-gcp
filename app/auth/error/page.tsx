@@ -17,8 +17,11 @@ function AuthErrorContent() {
                         error?.toLowerCase().includes('callback');
   
   const handleClearSession = () => {
-    // Redirect to home page to clear session
-    window.location.href = '/';
+    // Navigate to /signout so NextAuth's signOut() POSTs to /api/auth/signout
+    // and explicitly clears the session cookie.  A bare redirect to '/' would
+    // do a hard navigation home without clearing the cookie — the stale JWT
+    // would persist until it expires or middleware rejects it on the next request.
+    window.location.href = '/signout';
   };
   
   return (
@@ -43,8 +46,8 @@ function AuthErrorContent() {
           {isSessionError && (
             <div className="bg-amber-50 border border-amber-200 p-3 rounded text-sm">
               <p className="text-amber-800">
-                This error often occurs when you have an active Cognito session that conflicts with the sign-in process. 
-                Try clearing your session and signing in again.
+                This error often occurs when you have an active session that conflicts with the sign-in process.
+                Try clearing your browser cookies and signing in again.
               </p>
             </div>
           )}

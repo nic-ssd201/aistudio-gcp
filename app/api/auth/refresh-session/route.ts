@@ -4,118 +4,83 @@ import { createLogger, generateRequestId, startTimer } from "@/lib/logger"
 import { getUserByCognitoSub } from "@/lib/db/drizzle"
 
 /**
- * Force session refresh API
- * 
- * This endpoint can be called to force a session refresh,
- * typically after user roles have been changed.
- * It will invalidate the current JWT and force re-authentication.
+ * Check if session needs refresh
+ *
+ * Compares the JWT's `roleVersion` claim (set at sign-in and propagated through
+ * the session callback) against the live value in the database.  Returns
+ * `{ needsRefresh: true }` when they differ so the client can force a sign-in.
+ *
+ * **Polling-cache bypass** — this handler deliberately uses `getServerSession()`
+ * (which decodes the NextAuth JWT directly) and queries the DB for `roleVersion`
+ * without going through `authenticatePollingRequest()`.  That means:
+ * - `getServerSession()` always reads the live JWT — not the polling cache.
+ * - The `getUserByCognitoSub()` call always hits the database — it is not
+ *   affected by the 5-minute in-process polling-session cache.
+ * - The `roleVersion` comparison (`dbRoleVersion !== sessionRoleVersion`) is
+ *   therefore always fresh, even on instances whose polling cache still holds
+ *   the old roles for up to 5 minutes after a role change.
+ *
+ * This property is load-bearing: it is what makes the polling-session-cache
+ * role-revocation strategy work on multi-instance deployments.  Do NOT switch
+ * this handler to `authenticatePollingRequest()` without also adding explicit
+ * cache-bypass logic for the `roleVersion` comparison.
+ *
+ * **POST handler removed** — the former POST handler cleared `authjs.session-token`
+ * but in production NextAuth v5 sets `__Secure-authjs.session-token` (RFC 6265bis
+ * `__Secure-` prefix), so the expire-cookie response was silently leaving the real
+ * session cookie intact.  No production client calls POST to this endpoint
+ * (`grep -rn '/api/auth/refresh-session'` finds only doc references); the active
+ * flow is the GET role-version compare below + the NextAuth `/api/auth/signout`
+ * route for actual sign-out.  The dead POST handler is removed to prevent future
+ * callers from discovering a broken sign-out path.
+ */
+/**
+ * POST /api/auth/refresh-session — 410 Gone (handler removed in SSD201 GCP migration)
+ *
+ * The former POST handler cleared `authjs.session-token`, but in production
+ * NextAuth v5 sets `__Secure-authjs.session-token` (RFC 6265bis prefix), so the
+ * expire-cookie response silently left the real cookie intact — it was a no-op.
+ * No production client calls POST here (`grep` found only doc references).
+ *
+ * Returning 410 Gone (rather than 405 Method Not Allowed) signals that the
+ * endpoint was intentionally retired — any stale client code or automation
+ * polling this path should use `/api/auth/signout` for actual sign-out.
+ *
+ * Remove this stub after one full release cycle.
  */
 export async function POST() {
-  const requestId = generateRequestId()
-  const timer = startTimer("api.auth.refresh-session")
-  const log = createLogger({ requestId, route: "api.auth.refresh-session" })
-  
-  log.info("POST /api/auth/refresh-session - Session refresh requested")
-  
-  try {
-    const session = await getServerSession()
-    
-    if (!session) {
-      log.warn("No session to refresh")
-      timer({ status: "error", reason: "no_session" })
-      return NextResponse.json(
-        { isSuccess: false, message: "No active session" },
-        { status: 401, headers: { "X-Request-Id": requestId } }
-      )
-    }
-    
-    log.info("Session refresh initiated", { userId: session.sub })
-    
-    // Clear the session cookie to force re-authentication
-    const response = NextResponse.json(
-      { 
-        isSuccess: true, 
-        message: "Session refresh initiated. Please sign in again.",
-        redirectUrl: "/auth/signin"
-      },
-      { headers: { "X-Request-Id": requestId } }
-    )
-    
-    // Clear auth cookies
-    response.cookies.set('authjs.session-token', '', {
-      httpOnly: true,
-      sameSite: 'lax',
-      secure: process.env.NODE_ENV === 'production',
-      path: '/',
-      maxAge: 0 // Expire immediately
-    })
-    
-    response.cookies.set('authjs.csrf-token', '', {
-      httpOnly: true,
-      sameSite: 'lax',
-      secure: process.env.NODE_ENV === 'production',
-      path: '/',
-      maxAge: 0
-    })
-    
-    response.cookies.set('authjs.callback-url', '', {
-      httpOnly: true,
-      sameSite: 'lax',
-      secure: process.env.NODE_ENV === 'production',
-      path: '/',
-      maxAge: 0
-    })
-    
-    timer({ status: "success" })
-    log.info("Session cookies cleared, user must re-authenticate")
-    
-    return response
-    
-  } catch (error) {
-    timer({ status: "error" })
-    log.error("Error refreshing session", {
-      error: error instanceof Error ? error.message : "Unknown error"
-    })
-    
-    return NextResponse.json(
-      { 
-        isSuccess: false, 
-        message: "Failed to refresh session"
-      },
-      { status: 500, headers: { "X-Request-Id": requestId } }
-    )
-  }
+  return NextResponse.json(
+    {
+      isSuccess: false,
+      message: "POST /api/auth/refresh-session has been removed. Use /api/auth/signout to sign out.",
+    },
+    { status: 410 }
+  )
 }
 
-/**
- * Check if session needs refresh
- * 
- * This can be called to check if the user's role version
- * has changed and they need to refresh their session.
- */
 export async function GET() {
   const requestId = generateRequestId()
   const timer = startTimer("api.auth.check-session")
   const log = createLogger({ requestId, route: "api.auth.check-session" })
-  
+
   log.info("GET /api/auth/refresh-session - Checking if session needs refresh")
-  
+
   try {
     const session = await getServerSession()
-    
+
     if (!session) {
       log.warn("No session found")
       timer({ status: "error", reason: "no_session" })
       return NextResponse.json(
-        { 
-          isSuccess: false, 
+        {
+          isSuccess: false,
           needsRefresh: false,
           message: "No active session"
         },
         { status: 200, headers: { "X-Request-Id": requestId } }
       )
     }
-    
+
     // Check role_version from database and compare with session
     try {
       // Get the user's current role version from the database
@@ -135,16 +100,21 @@ export async function GET() {
       }
 
       const dbRoleVersion = user.roleVersion || 0
-      const sessionRoleVersion = (session as { roleVersion?: number }).roleVersion || 0
-      
+      // UserSession already declares roleVersion?: number — no cast needed.
+      // Use typeof (same pattern as server-session.ts:88) rather than ||, so
+      // roleVersion: 0 is treated as present (version 0) rather than falling
+      // back to the default.  || would silently treat a valid 0 as "absent"
+      // and return 0 anyway, but the intent is clearer with typeof.
+      const sessionRoleVersion = typeof session.roleVersion === 'number' ? session.roleVersion : 0
+
       log.debug("Role version comparison", {
         userId: session.sub,
         dbRoleVersion,
         sessionRoleVersion
       })
-      
+
       const needsRefresh = dbRoleVersion !== sessionRoleVersion
-      
+
       if (needsRefresh) {
         log.info("Session needs refresh due to role version mismatch", {
           userId: session.sub,
@@ -152,13 +122,13 @@ export async function GET() {
           sessionRoleVersion
         })
       }
-      
+
       timer({ status: "success", needsRefresh })
       return NextResponse.json(
-        { 
+        {
           isSuccess: true,
           needsRefresh,
-          message: needsRefresh 
+          message: needsRefresh
             ? "Your permissions have changed. Please sign in again to apply the updates."
             : "Session is up to date"
         },
@@ -168,11 +138,11 @@ export async function GET() {
       log.error("Error checking role version", {
         error: dbError instanceof Error ? dbError.message : "Unknown error"
       })
-      
+
       // If we can't check, assume no refresh needed to avoid disrupting the user
       timer({ status: "error", reason: "db_error" })
       return NextResponse.json(
-        { 
+        {
           isSuccess: true,
           needsRefresh: false,
           message: "Session is up to date"
@@ -180,15 +150,15 @@ export async function GET() {
         { headers: { "X-Request-Id": requestId } }
       )
     }
-    
+
   } catch (error) {
     timer({ status: "error" })
     log.error("Error checking session", {
       error: error instanceof Error ? error.message : "Unknown error"
     })
-    
+
     return NextResponse.json(
-      { 
+      {
         isSuccess: false,
         needsRefresh: false,
         message: "Failed to check session status"

@@ -209,7 +209,10 @@ export function ConnectorFormSheet({ server, onSuccess }: Props) {
             <SelectItem value="oauth">OAuth</SelectItem>
             <SelectItem value="api_key">API Key</SelectItem>
             <SelectItem value="jwt">JWT</SelectItem>
-            <SelectItem value="cognito_passthrough">Cognito Passthrough</SelectItem>
+            {/* Label updated to "Session Passthrough" — the DB enum value
+                "cognito_passthrough" is a historical misnomer; full rename
+                tracked in nic-ssd201/aistudio-gcp#8. */}
+            <SelectItem value="cognito_passthrough">Session Passthrough</SelectItem>
           </SelectContent>
         </Select>
       </div>
@@ -325,12 +328,15 @@ export function ConnectorFormSheet({ server, onSuccess }: Props) {
         </>
       )}
 
+      {/* cognito_passthrough: historical enum value preserved for DB/migration
+           compatibility — semantically "session passthrough". TODO: rename to
+           session_passthrough in a follow-up migration (no behaviour change). */}
       {authType === "cognito_passthrough" && (
         <div className="rounded-md border border-border bg-muted/50 p-3">
           <p className="text-xs text-muted-foreground">
-            The user&apos;s Cognito ID token is forwarded as a Bearer token.
+            The user&apos;s Google ID token is forwarded as a Bearer token.
             No per-user token storage needed — the token comes from the active session.
-            The MCP server must trust this Cognito pool&apos;s JWKS for JWT validation.
+            The MCP server must trust the Google OIDC provider&apos;s JWKS for JWT validation.
           </p>
         </div>
       )}

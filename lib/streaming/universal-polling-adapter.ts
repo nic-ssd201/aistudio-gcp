@@ -48,10 +48,9 @@ export interface JobPollingResponse {
 
 /**
  * Universal Polling Adapter
- * 
- * Provides seamless polling integration for AI streaming requests,
- * overcoming AWS Amplify's 30-second timeout limitation.
- * 
+ *
+ * Provides seamless polling integration for AI streaming requests.
+ *
  * Features:
  * - Progressive content streaming via polling
  * - Intelligent polling intervals based on model characteristics
@@ -76,14 +75,6 @@ export class UniversalPollingAdapter {
     const { abortSignal, onProgress, onStatusChange } = options;
 
     log.info('Starting job polling', { jobId });
-
-    // Set global context for JWT callback optimization
-    // TODO: Replace with AsyncLocalStorage for better request isolation
-    // This global approach works for current use case but could have race conditions in high-concurrency scenarios
-    if (typeof global !== 'undefined') {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      (global as any).__POLLING_CONTEXT__ = true;
-    }
 
     // Create internal abort controller for cleanup
     const internalController = new AbortController();
@@ -237,14 +228,6 @@ export class UniversalPollingAdapter {
     } finally {
       // Cleanup
       this.activePollers.delete(jobId);
-
-      // Clear global polling context
-      // TODO: When migrating to AsyncLocalStorage, this cleanup will be automatic
-      if (typeof global !== 'undefined') {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        delete (global as any).__POLLING_CONTEXT__;
-      }
-
       log.debug('Job polling cleanup completed', { jobId });
     }
   }

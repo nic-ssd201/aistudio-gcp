@@ -91,7 +91,7 @@ export async function POST(req: NextRequest) {
       fileSize,
       fileType,
       purpose,
-      userId: session.userId
+      userId: session.sub
     });
     
     // Validate file size limits based on purpose

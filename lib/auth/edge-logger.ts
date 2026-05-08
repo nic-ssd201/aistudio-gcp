@@ -52,8 +52,25 @@ export function createEdgeLogger(context: LogContext): EdgeLogger {
       } else if (key === 'tokenSub' && typeof value === 'string' && process.env.NODE_ENV === 'production') {
         sanitized[key] = value.substring(0, 8) + '***'
       } else if (key === 'error' && typeof value === 'string') {
-        // Sanitize error messages that might contain tokens
-        sanitized[key] = value.replace(/[\d+/=A-Za-z]{20,}/g, '[REDACTED_TOKEN]')
+        // Redact credential-like substrings from error messages.
+        // Two-pass to balance coverage vs. false-positive rate:
+        //   (1) Standard base64 (with padding): any 20+ char run that ends in
+        //       one or two `=` signs — the `=` discriminates real base64 from
+        //       UUIDs (32 hex, no `=`), commit SHAs (40 hex, no `=`), and GCP
+        //       resource names that look alphanumeric but lack padding.
+        //   (2) Long bare base64url (no padding): 64+ chars of [A-Za-z0-9_-].
+        //       Anything this long is almost certainly a JWT segment or API key;
+        //       legitimate debug values (UUIDs, SHAs) are all shorter than 64 chars.
+        //       Known over-redaction cases: long GCS object names (e.g. UUIDs with
+        //       path segments), base64-encoded image data URIs in error messages,
+        //       and long alphanumeric stack-frame identifiers.  The accepted
+        //       trade-off is occasional loss of these identifiers in exchange for
+        //       preventing accidental key/token leakage via error log fields.
+        // The previous 20-char catch-all clobbered too much: UUIDs, commit SHAs,
+        // package version hashes, and stack-frame names were all silently destroyed.
+        sanitized[key] = value
+          .replace(/[A-Za-z\d+/]{20,}={1,2}/g, '[REDACTED_TOKEN]')
+          .replace(/[A-Za-z\d_-]{64,}/g, '[REDACTED_TOKEN]')
       } else {
         sanitized[key] = value
       }
@@ -66,45 +83,40 @@ export function createEdgeLogger(context: LogContext): EdgeLogger {
     const timestamp = new Date().toISOString()
     const contextString = `${context.context}[${sanitizedTokenSub}]`
     const sanitizedMeta = sanitizeMetadata(meta)
+    const formattedMessage = `[${timestamp}] ${contextString} ${level}: ${message}`
+    const metaString = sanitizedMeta ? ` ${JSON.stringify(sanitizedMeta)}` : ''
 
-    // In development, attempt to output to available logging mechanism
-    if (process.env.NODE_ENV === 'development') {
-      try {
-        const formattedMessage = `[${timestamp}] ${contextString} ${level}: ${message}`
-        const metaString = sanitizedMeta ? ` ${JSON.stringify(sanitizedMeta)}` : ''
+    try {
+      // ERROR and WARN are always emitted — Cloud Run captures stderr/stdout so
+      // operators see auth failures, dedup-cap hits, malformed token responses,
+      // and loginIat regression warnings in production without any extra config.
+      // INFO and DEBUG stay development-only to avoid log noise in production.
+      if (level === 'ERROR') {
+        // eslint-disable-next-line no-console
+        console.error(`${formattedMessage}${metaString}`)
+      } else if (level === 'WARN') {
+        // eslint-disable-next-line no-console
+        console.warn(`${formattedMessage}${metaString}`)
+      } else if (process.env.NODE_ENV === 'development') {
+        // INFO / DEBUG — development only
 
-        // Try to use fetch to send to a logging endpoint if available
-        // This is Edge Runtime compatible
+        // Optionally forward to a DEBUG_LOG_ENDPOINT (Edge Runtime compatible)
         if (process.env.DEBUG_LOG_ENDPOINT) {
-          const logEntry = {
-            level,
-            message,
-            timestamp,
-            context: contextString,
-            meta: sanitizedMeta
-          }
-
           fetch(process.env.DEBUG_LOG_ENDPOINT, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(logEntry)
+            body: JSON.stringify({ level, message, timestamp, context: contextString, meta: sanitizedMeta }),
           }).catch(() => {
             // Silently fail if logging endpoint unavailable
           })
         }
 
-        // For development debugging - works in both Node.js and Edge Runtime
-        if (level === 'ERROR') {
-          // eslint-disable-next-line no-console
-          console.error(`${formattedMessage}${metaString}`)
-        } else {
-          // eslint-disable-next-line no-console
-          console.log(`${formattedMessage}${metaString}`)
-        }
-      } catch {
-        // Silently fail if any logging mechanism fails
-        // This ensures the logger never breaks the application
+        // eslint-disable-next-line no-console
+        console.log(`${formattedMessage}${metaString}`)
       }
+    } catch {
+      // Silently fail if any logging mechanism fails
+      // This ensures the logger never breaks the application
     }
   }
 

@@ -1,9 +1,9 @@
 /**
- * Resolve a Cognito session to a database user ID.
+ * Resolve a user session to a database user ID.
  *
  * Performs JIT (just-in-time) user provisioning if the user
  * doesn't exist in the database yet. This handles the case where
- * a valid Cognito session has no corresponding users table record
+ * a valid Google OIDC session has no corresponding users table record
  * (e.g., first login, deleted user re-authenticating).
  *
  * @see actions/db/get-current-user-action.ts for the full provisioning
@@ -21,17 +21,17 @@ import {
 import { createLogger, sanitizeForLogging } from "@/lib/logger"
 import { ErrorFactories } from "@/lib/error-utils"
 import { ErrorCode } from "@/types/error-types"
-import type { CognitoSession } from "./server-session"
+import type { UserSession } from "./server-session"
 
 /**
- * Resolve a Cognito session to a numeric database user ID.
+ * Resolve a user session to a numeric database user ID.
  *
  * Flow:
- * 1. Look up user by cognito_sub (fast path)
- * 2. If not found, look up by email and link cognito_sub (migration path)
+ * 1. Look up user by sub / cognito_sub column (fast path)
+ * 2. If not found, look up by email and link sub (migration path)
  * 3. If still not found, create user via UPSERT and assign default role (new user path)
  *
- * **Write side-effect**: On the first call for a new Cognito user, this function
+ * **Write side-effect**: On the first call for a new user, this function
  * creates a users row and assigns a default role. Callers on read-only (GET) routes
  * accept this one-time write — it is intentional for JIT provisioning.
  *
@@ -40,7 +40,7 @@ import type { CognitoSession } from "./server-session"
  * @throws If database operations fail
  */
 export async function resolveUserId(
-  session: CognitoSession,
+  session: UserSession,
   requestId?: string
 ): Promise<number> {
   const log = createLogger({ module: "resolveUserId", requestId })
@@ -52,22 +52,25 @@ export async function resolveUserId(
   }
 
   // Slow path: provision the user
-  log.info("User not found by Cognito sub — provisioning", {
-    cognitoSub: sanitizeForLogging(session.sub),
+  log.info("User not found by OIDC sub — provisioning", {
+    // Note: the DB column is still named cognito_sub; rename tracked in
+    // TODO(#8): col rename cognito_sub → auth_sub.
+    sub: sanitizeForLogging(session.sub),
     hasEmail: !!session.email,
   })
 
-  // Check by email (migration from old auth — link the new cognitoSub to
-  // the existing record rather than creating a duplicate row)
+  // Check by email (migration path — link the OIDC sub to the existing record
+  // rather than creating a duplicate row)
   if (session.email) {
     try {
       const byEmail = await getUserByEmail(session.email)
       if (byEmail) {
-        log.info("User found by email, linking Cognito sub", {
+        log.info("User found by email, linking OIDC sub", {
           userId: byEmail.id,
         })
-        // MUST explicitly update cognitoSub — createUser UPSERT conflicts on
-        // cognitoSub, not email. Without this call a duplicate row is inserted.
+        // MUST explicitly update cognitoSub column — createUser UPSERT conflicts on
+        // that column, not email. Without this call a duplicate row is inserted.
+        // TODO(#8): col rename cognito_sub → auth_sub.
         // Mirrors getCurrentUserAction.ts:100
         await updateUser(byEmail.id, { cognitoSub: session.sub })
         return byEmail.id
@@ -92,7 +95,7 @@ export async function resolveUserId(
   // bad data in the users table and break downstream notification delivery.
   if (!session.email) {
     log.warn("Cannot provision user: session has no email address", {
-      cognitoSub: sanitizeForLogging(session.sub),
+      sub: sanitizeForLogging(session.sub),
     })
     throw ErrorFactories.missingRequiredField("email")
   }
@@ -115,15 +118,23 @@ export async function resolveUserId(
   if (!userId || typeof userId !== "number" || userId <= 0) {
     throw ErrorFactories.dbQueryFailed(
       "createUser UPSERT",
-      new Error(`Returned no valid ID for cognitoSub: ${sanitizeForLogging(session.sub)}`)
+      new Error(`Returned no valid ID for sub: ${sanitizeForLogging(session.sub)}`)
     )
   }
 
   // Assign default role using addUserRole, which runs in a transaction and
   // increments role_version for session cache invalidation.
+  //
   // Numeric username prefix → student (K-12 district convention: student IDs
   // are all-digit numbers, e.g. 123456@psd401.net). Non-numeric → staff.
   // Defaults to least-privilege (student) when username cannot be determined.
+  //
+  // ⚠️  Domain assumption: this heuristic is designed for K-12 Workspace
+  // deployments where all-digit usernames (e.g. 123456@psd401.net) are student
+  // IDs. Without a Google Workspace domain restriction, any all-digit Gmail
+  // local-part (e.g. 2026@gmail.com) would also be auto-provisioned as student.
+  // Set AUTH_GOOGLE_HD in auth.ts to gate sign-in to your Workspace domain and
+  // prevent non-district accounts from reaching this provisioning path entirely.
   const isNumeric = /^\d+$/.test(username) // already false for empty strings
   const defaultRole = isNumeric ? "student" : "staff"
 

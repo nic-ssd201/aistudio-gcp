@@ -338,6 +338,37 @@ Tests run automatically on:
    - Clear mock cache: `jest.clearAllMocks()`
    - Check import paths match exactly
 
+## Module-Level Constants and `jest.isolateModules()`
+
+Some modules evaluate environment variables once at import time and bind the
+result to a module-level `const`.  Tests that mutate those env vars between
+cases will see the stale value from the initial import — a silent false-pass.
+
+**Known cases:**
+
+| Module | Const | Env var |
+|--------|-------|---------|
+| `auth.ts` | `googleForceConsent` | `AUTH_GOOGLE_FORCE_CONSENT` |
+
+**Pattern:** use `jest.isolateModules()` (or `jest.resetModules()` + `require`)
+to force a fresh module load for each case:
+
+```typescript
+it("uses select_account when AUTH_GOOGLE_FORCE_CONSENT=false", () => {
+  process.env.AUTH_GOOGLE_FORCE_CONSENT = 'false';
+  let authConfig: import('@/auth').authConfig;
+  jest.isolateModules(() => {
+    authConfig = require('@/auth').authConfig;
+  });
+  // assert on authConfig...
+  delete process.env.AUTH_GOOGLE_FORCE_CONSENT;
+});
+```
+
+A simple `process.env.AUTH_GOOGLE_FORCE_CONSENT = 'false'` mid-test **will not
+work** — `googleForceConsent` was already bound when the module was first
+imported.
+
 ## Resources
 
 - [Jest Documentation](https://jestjs.io/docs/getting-started)

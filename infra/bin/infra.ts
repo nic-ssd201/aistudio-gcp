@@ -9,7 +9,6 @@ import { ProcessingStack } from '../lib/processing-stack';
 import { DocumentProcessingStack } from '../lib/document-processing-stack';
 import { MonitoringStack } from '../lib/monitoring-stack';
 import { SchedulerStack } from '../lib/scheduler-stack';
-import { EmailNotificationStack } from '../lib/email-notification-stack';
 import { PowerTuningStack } from '../lib/power-tuning-stack';
 import { SecretsManagerStack } from '../lib/secrets-manager-stack';
 import { GuardrailsStack } from '../lib/guardrails-stack';
@@ -18,6 +17,27 @@ import { SecretValue } from 'aws-cdk-lib';
 import { PermissionBoundaryConstruct } from '../lib/constructs/security';
 import { AccessAnalyzerStack } from '../lib/stacks/access-analyzer-stack';
 import { EnvironmentConfig } from '../lib/constructs/config/environment-config';
+
+// SSD201 FORK — INFRASTRUCTURE STATUS
+//
+// This fork replaces AWS Cognito with Google OIDC (NextAuth v5) for authentication.
+// The COMPUTE and DATA infrastructure remains on AWS for now:
+//
+//   ✅ STILL DEPLOYED ON AWS:
+//     - FrontendStackEcs   — ECS Fargate (Next.js SSR)
+//     - DatabaseStack      — Aurora Serverless v2 (PostgreSQL)
+//     - StorageStack       — S3 (document storage)
+//     - ProcessingStack, DocumentProcessingStack — Lambda document processing
+//     - AgentPlatformStack — Bedrock (AI model inference)
+//     - MonitoringStack, SchedulerStack, SecretsManagerStack, etc. — supporting infra
+//
+//   ❌ DEAD CODE (gated behind --context legacy=true):
+//     - AuthStack          — Cognito User Pool (replaced by Google OIDC in auth.ts)
+//
+// Only AuthStack is gated because it's the only stack whose CDK definition is valuable
+// to preserve for upstream cherry-pick surface. The compute/data stacks are genuinely
+// deployed; gating them would break production deployments.
+// Full Cognito deletion tracked in nic-ssd201/aistudio-gcp#8.
 
 const app = new cdk.App();
 
@@ -33,7 +53,18 @@ const alertEmail = app.node.tryGetContext('alertEmail');
 const brandingOrgName = app.node.tryGetContext('brandingOrgName');
 const brandingAppName = app.node.tryGetContext('brandingAppName');
 
-// Helper to get callback/logout URLs for any environment
+// Gate Cognito AuthStack behind --context legacy=true so the default `cdk synth`
+// does not include it. The fork does not deploy Cognito; these stacks are preserved
+// only to ease upstream cherry-picks. Planned for deletion in nic-ssd201/aistudio-gcp#8.
+const isLegacyAwsDeploy = app.node.tryGetContext('legacy') === 'true';
+
+// DEAD CODE — SSD201 GCP fork: this function builds Cognito callback/logout URLs
+// that are fed into AuthStack (Cognito User Pool client configuration).
+// Neither AuthStack nor Cognito is deployed in the GCP fork — the app uses
+// Google OIDC via NextAuth v5 directly. This function and its callers below
+// (devAuthStack, prodAuthStack) are preserved only to keep the upstream merge
+// surface intact. Do NOT run `cdk deploy` targeting AuthStack from this fork.
+// Full removal tracked in nic-ssd201/aistudio-gcp#8.
 function getCallbackAndLogoutUrls(environment: string, baseDomain?: string): { callbackUrls: string[], logoutUrls: string[] } {
   // Determine ECS subdomain based on environment
   const ecsSubdomain = environment === 'dev'
@@ -102,7 +133,7 @@ Object.entries(standardTags).forEach(([key, value]) => cdk.Tags.of(devPermission
 
 // Access Analyzer Stack - continuous IAM compliance monitoring
 const devAccessAnalyzerStack = new AccessAnalyzerStack(app, 'AIStudio-AccessAnalyzer-Dev', {
-  config: {} as any, // Config not used by current implementation
+  config: EnvironmentConfig.get('dev'),
   environment: 'dev',
   alertEmail,
   env: { account: process.env.CDK_DEFAULT_ACCOUNT, region: process.env.CDK_DEFAULT_REGION },
@@ -127,16 +158,21 @@ const devDbStack = new DatabaseStack(app, 'AIStudio-DatabaseStack-Dev', {
 cdk.Tags.of(devDbStack).add('Environment', 'Dev');
 Object.entries(standardTags).forEach(([key, value]) => cdk.Tags.of(devDbStack).add(key, value));
 
-const devUrls = getCallbackAndLogoutUrls('dev', baseDomain);
-const devAuthStack = new AuthStack(app, 'AIStudio-AuthStack-Dev', {
-  environment: 'dev',
-  googleClientSecret: SecretValue.secretsManager('aistudio-dev-google-oauth', { jsonField: 'clientSecret' }),
-  callbackUrls: devUrls.callbackUrls,
-  logoutUrls: devUrls.logoutUrls,
-  env: { account: process.env.CDK_DEFAULT_ACCOUNT, region: process.env.CDK_DEFAULT_REGION },
-});
-cdk.Tags.of(devAuthStack).add('Environment', 'Dev');
-Object.entries(standardTags).forEach(([key, value]) => cdk.Tags.of(devAuthStack).add(key, value));
+// DEAD CODE — gated: only instantiated when --context legacy=true.
+// To deploy (not recommended from this fork):
+//   bunx cdk deploy AIStudio-AuthStack-Dev --context legacy=true --context baseDomain=<domain>
+if (isLegacyAwsDeploy) {
+  const devUrls = getCallbackAndLogoutUrls('dev', baseDomain);
+  const devAuthStack = new AuthStack(app, 'AIStudio-AuthStack-Dev', {
+    environment: 'dev',
+    googleClientSecret: SecretValue.secretsManager('aistudio-dev-google-oauth', { jsonField: 'clientSecret' }),
+    callbackUrls: devUrls.callbackUrls,
+    logoutUrls: devUrls.logoutUrls,
+    env: { account: process.env.CDK_DEFAULT_ACCOUNT, region: process.env.CDK_DEFAULT_REGION },
+  });
+  cdk.Tags.of(devAuthStack).add('Environment', 'Dev');
+  Object.entries(standardTags).forEach(([key, value]) => cdk.Tags.of(devAuthStack).add(key, value));
+}
 
 const devStorageStack = new StorageStack(app, 'AIStudio-StorageStack-Dev', {
   environment: 'dev',
@@ -203,39 +239,12 @@ devSchedulerStack.addDependency(devDbStack);
 cdk.Tags.of(devSchedulerStack).add('Environment', 'Dev');
 Object.entries(standardTags).forEach(([key, value]) => cdk.Tags.of(devSchedulerStack).add(key, value));
 
-// Get email configuration from context (environment-specific with fallback)
-const devEmailDomain = app.node.tryGetContext('devEmailDomain') || app.node.tryGetContext('emailDomain');
-const devSesIdentityExists = app.node.tryGetContext('devSesIdentityExists') === 'true' ||
-                             app.node.tryGetContext('sesIdentityExists') === 'true';
-
-// Only create dev email notification stack if emailDomain is provided
-if (devEmailDomain && !baseDomain) {
-  throw new Error(
-    'CDK context: baseDomain is required when emailDomain is set (used for appBaseUrl). ' +
-    'Deploy with: --context baseDomain=<your-domain> --context devEmailDomain=<email-domain>'
-  );
-}
-let devEmailNotificationStack: EmailNotificationStack | undefined;
-if (devEmailDomain) {
-  devEmailNotificationStack = new EmailNotificationStack(app, 'AIStudio-EmailNotificationStack-Dev', {
-    environment: 'dev',
-    databaseResourceArn: devDbStack.databaseResourceArn,
-    databaseSecretArn: devDbStack.databaseSecretArn,
-    // SES configuration from context
-    createSesIdentity: !devSesIdentityExists,
-    emailDomain: devEmailDomain,
-    fromEmail: `noreply@${devEmailDomain}`,
-    appBaseUrl: `https://dev.${baseDomain}`, // baseDomain is guaranteed non-null by guard above
-    useDomainIdentity: false, // Dev uses email identity by default
-    // Branding for email templates (passed as Lambda env vars)
-    brandingOrgName,
-    brandingAppName,
-    env: { account: process.env.CDK_DEFAULT_ACCOUNT, region: process.env.CDK_DEFAULT_REGION },
-  });
-  devEmailNotificationStack.addDependency(devDbStack);
-  cdk.Tags.of(devEmailNotificationStack).add('Environment', 'Dev');
-  Object.entries(standardTags).forEach(([key, value]) => cdk.Tags.of(devEmailNotificationStack!).add(key, value));
-}
+// EmailNotificationStack (AWS SES + Lambda) fully removed — not gated like AuthStack.
+// Asymmetry rationale: AuthStack (Cognito) is kept as dead code behind --context legacy=true
+// because upstream auth PRs may touch it and having the CDK file reduces cherry-pick friction.
+// EmailNotificationStack has no GCP analogue and upstream email changes are unlikely to produce
+// merge conflicts we need to resolve here, so full deletion is the cleaner approach.
+// See PR #6; restore from git history if a future upstream cherry-pick requires it.
 
 // Prod environment
 // Permission Boundary Stack - must be deployed first before other stacks
@@ -265,16 +274,21 @@ const prodDbStack = new DatabaseStack(app, 'AIStudio-DatabaseStack-Prod', {
 cdk.Tags.of(prodDbStack).add('Environment', 'Prod');
 Object.entries(standardTags).forEach(([key, value]) => cdk.Tags.of(prodDbStack).add(key, value));
 
-const prodUrls = getCallbackAndLogoutUrls('prod', baseDomain);
-const prodAuthStack = new AuthStack(app, 'AIStudio-AuthStack-Prod', {
-  environment: 'prod',
-  googleClientSecret: SecretValue.secretsManager('aistudio-prod-google-oauth', { jsonField: 'clientSecret' }),
-  callbackUrls: prodUrls.callbackUrls,
-  logoutUrls: prodUrls.logoutUrls,
-  env: { account: process.env.CDK_DEFAULT_ACCOUNT, region: process.env.CDK_DEFAULT_REGION },
-});
-cdk.Tags.of(prodAuthStack).add('Environment', 'Prod');
-Object.entries(standardTags).forEach(([key, value]) => cdk.Tags.of(prodAuthStack).add(key, value));
+// DEAD CODE — gated: only instantiated when --context legacy=true.
+// To deploy (not recommended from this fork):
+//   bunx cdk deploy AIStudio-AuthStack-Prod --context legacy=true --context baseDomain=<domain>
+if (isLegacyAwsDeploy) {
+  const prodUrls = getCallbackAndLogoutUrls('prod', baseDomain);
+  const prodAuthStack = new AuthStack(app, 'AIStudio-AuthStack-Prod', {
+    environment: 'prod',
+    googleClientSecret: SecretValue.secretsManager('aistudio-prod-google-oauth', { jsonField: 'clientSecret' }),
+    callbackUrls: prodUrls.callbackUrls,
+    logoutUrls: prodUrls.logoutUrls,
+    env: { account: process.env.CDK_DEFAULT_ACCOUNT, region: process.env.CDK_DEFAULT_REGION },
+  });
+  cdk.Tags.of(prodAuthStack).add('Environment', 'Prod');
+  Object.entries(standardTags).forEach(([key, value]) => cdk.Tags.of(prodAuthStack).add(key, value));
+}
 
 const prodStorageStack = new StorageStack(app, 'AIStudio-StorageStack-Prod', {
   environment: 'prod',
@@ -344,40 +358,8 @@ prodSchedulerStack.addDependency(prodDbStack);
 cdk.Tags.of(prodSchedulerStack).add('Environment', 'Prod');
 Object.entries(standardTags).forEach(([key, value]) => cdk.Tags.of(prodSchedulerStack).add(key, value));
 
-// Get prod email configuration from context (environment-specific with fallback)
-const prodEmailDomain = app.node.tryGetContext('prodEmailDomain') || app.node.tryGetContext('emailDomain');
-const prodSesIdentityExists = app.node.tryGetContext('prodSesIdentityExists') === 'true' ||
-                              app.node.tryGetContext('sesIdentityExists') === 'true';
-const prodUseDomainIdentity = app.node.tryGetContext('prodUseDomainIdentity') !== 'false';
+// EmailNotificationStack (AWS SES + Lambda) fully removed — see dev block above for rationale.
 
-// Only create prod email notification stack if emailDomain is provided
-if (prodEmailDomain && !baseDomain) {
-  throw new Error(
-    'CDK context: baseDomain is required when emailDomain is set (used for appBaseUrl). ' +
-    'Deploy with: --context baseDomain=<your-domain> --context prodEmailDomain=<email-domain>'
-  );
-}
-let prodEmailNotificationStack: EmailNotificationStack | undefined;
-if (prodEmailDomain) {
-  prodEmailNotificationStack = new EmailNotificationStack(app, 'AIStudio-EmailNotificationStack-Prod', {
-    environment: 'prod',
-    databaseResourceArn: prodDbStack.databaseResourceArn,
-    databaseSecretArn: prodDbStack.databaseSecretArn,
-    // Production SES configuration from context
-    createSesIdentity: !prodSesIdentityExists,
-    emailDomain: prodEmailDomain,
-    fromEmail: `noreply@${prodEmailDomain}`,
-    appBaseUrl: `https://${baseDomain}`, // baseDomain is guaranteed non-null by guard above
-    useDomainIdentity: prodUseDomainIdentity, // Defaults to true for production
-    // Branding for email templates (passed as Lambda env vars)
-    brandingOrgName,
-    brandingAppName,
-    env: { account: process.env.CDK_DEFAULT_ACCOUNT, region: process.env.CDK_DEFAULT_REGION },
-  });
-  prodEmailNotificationStack.addDependency(prodDbStack);
-  cdk.Tags.of(prodEmailNotificationStack).add('Environment', 'Prod');
-  Object.entries(standardTags).forEach(([key, value]) => cdk.Tags.of(prodEmailNotificationStack!).add(key, value));
-}
 // Frontend stacks - ECS Fargate with ALB for streaming support
 if (baseDomain) {
   // Skip DNS/certificate setup in CI (when baseDomain is a dummy value like example.com)
@@ -391,11 +373,13 @@ if (baseDomain) {
     documentsBucketName: devStorageStack.documentsBucketName,
     useExistingVpc: setupDns, // Use VPC sharing in real deployments, create new VPC for CI validation
     setupDns, // Enable DNS/certificate setup (false for CI validation with example.com)
+    isLegacyAwsDeploy, // Gates Fn::ImportValue for Cognito exports (AuthStack required when true)
     env: { account: process.env.CDK_DEFAULT_ACCOUNT, region: process.env.CDK_DEFAULT_REGION },
   });
   devFrontendStack.addDependency(devDbStack); // Need VPC from DB stack
   devFrontendStack.addDependency(devStorageStack); // Need bucket name
-  devFrontendStack.addDependency(devAuthStack); // Need auth secret ARN export
+  // devFrontendStack.addDependency(devAuthStack) — removed; AuthStack is gated behind
+  // --context legacy=true (Cognito is not deployed in the GCP fork).
   devFrontendStack.addDependency(devGuardrailsStack); // Need guardrails config exports
   cdk.Tags.of(devFrontendStack).add('Environment', 'Dev');
   Object.entries(standardTags).forEach(([key, value]) => cdk.Tags.of(devFrontendStack).add(key, value));
@@ -410,11 +394,13 @@ if (baseDomain) {
     documentsBucketName: prodStorageStack.documentsBucketName,
     useExistingVpc: setupDns, // Use VPC sharing in real deployments, create new VPC for CI validation
     setupDns, // Enable DNS/certificate setup (false for CI validation with example.com)
+    isLegacyAwsDeploy, // Gates Fn::ImportValue for Cognito exports (AuthStack required when true)
     env: { account: process.env.CDK_DEFAULT_ACCOUNT, region: process.env.CDK_DEFAULT_REGION },
   });
   prodFrontendStack.addDependency(prodDbStack); // Need VPC from DB stack
   prodFrontendStack.addDependency(prodStorageStack); // Need bucket name
-  prodFrontendStack.addDependency(prodAuthStack); // Need auth secret ARN export
+  // prodFrontendStack.addDependency(prodAuthStack) — removed; AuthStack is gated behind
+  // --context legacy=true (Cognito is not deployed in the GCP fork).
   prodFrontendStack.addDependency(prodGuardrailsStack); // Need guardrails config exports
   cdk.Tags.of(prodFrontendStack).add('Environment', 'Prod');
   Object.entries(standardTags).forEach(([key, value]) => cdk.Tags.of(prodFrontendStack).add(key, value));

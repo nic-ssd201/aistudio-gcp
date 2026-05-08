@@ -4,14 +4,19 @@
  */
 
 import { createLogger } from '@/lib/logger';
-import type { CognitoSession } from '@/lib/auth/server-session';
+import type { UserSession } from '@/lib/auth/server-session';
+import { POLLING_CACHE_MAX_ENTRIES } from '@/lib/auth/token-refresh-config';
 
 const log = createLogger({ module: 'polling-session-cache' });
 
 interface CachedSession {
-  session: CognitoSession;
+  session: UserSession;
   userId: number;
-  userRoles: string[];
+  // readonly string[] prevents callers from pushing to the cached array and
+  // silently corrupting the cache entry.  Readonly<CachedSession> only protects
+  // top-level property assignments; without this annotation a caller could do
+  // getCachedSession(key).userRoles.push("admin") and mutate the live entry.
+  userRoles: readonly string[];
   cachedAt: number;
   expiresAt: number;
   requestCount: number;
@@ -19,7 +24,7 @@ interface CachedSession {
 
 interface SessionCacheOptions {
   maxAge?: number; // Cache duration in ms (default: 5 minutes)
-  maxEntries?: number; // Max cached sessions (default: 1000)
+  maxEntries?: number; // Max cached sessions (default: 500)
   cleanupInterval?: number; // Cleanup frequency in ms (default: 2 minutes)
 }
 
@@ -31,7 +36,7 @@ export class PollingSessionCache {
   constructor(options: SessionCacheOptions = {}) {
     this.options = {
       maxAge: options.maxAge || 5 * 60 * 1000, // 5 minutes
-      maxEntries: options.maxEntries || 1000,
+      maxEntries: options.maxEntries || 500,
       cleanupInterval: options.cleanupInterval || 2 * 60 * 1000, // 2 minutes
     };
 
@@ -40,9 +45,20 @@ export class PollingSessionCache {
   }
 
   /**
-   * Get cached session for a user, bypassing auth checks if valid
+   * Get cached session for a user, bypassing auth checks if valid.
+   *
+   * **Side effect**: increments `entry.requestCount` on every cache hit for
+   * metrics purposes.  The returned object is the live cache entry (not a copy),
+   * so callers must not mutate it.
    */
-  getCachedSession(sessionId: string): CachedSession | null {
+  // Returns Readonly<CachedSession> for compile-time mutation prevention.
+  // Object.freeze() is intentionally NOT applied: the returned object is the
+  // live cache entry, and getCachedSession itself mutates entry.requestCount++
+  // for metrics.  Freezing the entry here would make the next call's
+  // requestCount++ a silent no-op (non-strict) or throw (strict mode).
+  // The TypeScript Readonly type is sufficient to prevent caller mutations at
+  // the type-checking layer.
+  getCachedSession(sessionId: string): Readonly<CachedSession> | null {
     const cached = this.cache.get(sessionId);
 
     if (!cached) {
@@ -76,21 +92,45 @@ export class PollingSessionCache {
    */
   setCachedSession(
     sessionId: string,
-    session: CognitoSession,
+    session: UserSession,
     userId: number,
     userRoles: string[]
   ): void {
     const now = Date.now();
 
-    // Implement LRU eviction if cache is full
+    // FIFO eviction when cache is full: evicts the entry with the oldest
+    // cachedAt (creation time), not the least-recently-accessed.  For a
+    // 5-min TTL the difference is small in practice; true LRU would require
+    // tracking lastAccessedAt and is not worth the overhead here.
     if (this.cache.size >= this.options.maxEntries) {
       this.evictOldest();
     }
 
+    // Delete-before-set: if sessionId already exists in the Map, Map.set()
+    // updates the value in place but preserves the entry's original insertion
+    // position.  A second session for the same key (e.g. after a cache-miss
+    // on a refreshed session) would therefore appear "older" than entries
+    // inserted after the original, breaking evictOldest()'s FIFO invariant.
+    // Deleting first forces re-insertion at the tail so the entry sorts as
+    // "newest" — consistent with the "just cached" semantics of this call.
+    this.cache.delete(sessionId);
+    // INVARIANT: this.cache.set() must always follow a this.cache.delete() for
+    // the same key so that the new entry is appended at the Map's tail.
+    // evictOldest() (below) relies on Map insertion order being FIFO — the first
+    // key returned by this.cache.keys() is assumed to be the oldest entry.
+    // Breaking this pattern (e.g. calling set() without the preceding delete()
+    // for an existing key) silently violates the FIFO invariant and causes
+    // evictOldest() to evict the wrong entry.
     this.cache.set(sessionId, {
       session,
       userId,
-      userRoles,
+      // Shallow copy so mutations to the caller's array after this call cannot
+      // corrupt the cached entry.  getCachedSession() already returns
+      // `readonly string[]` to block mutation on the read path; copying here
+      // closes the write-path gap for callers that retain a reference to the
+      // original array.  The copy is O(roles) — negligible for typical role
+      // counts (1–5 strings) relative to the DB round-trip this call replaces.
+      userRoles: [...userRoles],
       cachedAt: now,
       expiresAt: now + this.options.maxAge,
       requestCount: 1
@@ -105,12 +145,69 @@ export class PollingSessionCache {
   }
 
   /**
-   * Invalidate cached session (on logout, role changes, etc.)
+   * Invalidate a specific cache entry by its full key.
    */
   invalidateSession(sessionId: string): void {
     const deleted = this.cache.delete(sessionId);
     if (deleted) {
       log.info('Session cache invalidated', { sessionId });
+    }
+  }
+
+  /**
+   * Invalidate ALL polling cache entries for a given user `sub`.
+   *
+   * Because the cache is keyed on `session:${sub}:${iat}`, a single user may
+   * have multiple entries (one per distinct login within the TTL window).
+   * This method scans for all matching prefixes and removes them — use it
+   * from role-change actions so revocations propagate immediately rather
+   * than waiting for the 5-minute TTL to expire.
+   *
+   * Also handles the legacy `session:${sub}` (no iat) format in case any
+   * entries were cached before the key format was updated.
+   *
+   * **Complexity:** O(N) where N is the total number of cached entries (up to
+   * `maxEntries`, default 500). This is acceptable for an admin-triggered
+   * operation that runs at most once per role-change event.  Do not call from
+   * a hot path (e.g. per-request middleware).
+   *
+   * **Multi-instance note:** this method only flushes the in-process cache of
+   * the instance that handles the role-change request.  On Cloud Run (or any
+   * deployment with N > 1 instances), the other N-1 instances continue serving
+   * stale roles for up to 5 minutes (the TTL).  This is the accepted trade-off
+   * for the polling-auth perf improvement; a cross-instance invalidation signal
+   * (e.g. Pub/Sub or a shared Redis cache) would eliminate the window if
+   * sub-5-minute revocation propagation becomes a hard requirement.
+   */
+  // HOT_PATH_UNSAFE: O(N) over all cache entries.
+  // Acceptable today because invalidateUser() is only called from admin-triggered
+  // role-change operations (updateUser / deleteUser) — never on a hot request path.
+  // If a future cross-instance invalidation (e.g. Pub/Sub-driven) calls this on
+  // every incoming request, replace with a sub-keyed Map<sub, Map<key, entry>>
+  // to make invalidation O(sessions-per-user) instead of O(total-sessions).
+  invalidateUser(sub: string): void {
+    const prefix = `session:${sub}:`;
+    // Legacy key (pre-iat format, session:sub without iat suffix): no current
+    // code path can produce an entry under this key.  generateSessionCacheKey()
+    // always returns either session:sub:iat (when loginIat is present and non-zero)
+    // or null (causing the caller to skip caching entirely when loginIat is absent).
+    // The null path means no write ever occurs, so a "legacy" entry could only exist
+    // if it was written by a version of this code that predated the loginIat fix and
+    // survived in the same process across a hot-deploy.  Kept defensively; a future
+    // cleanup PR may remove this branch once all deployments have been restarted
+    // with loginIat-aware code and TTL-expired any pre-fix entries.
+    const legacyKey = `session:${sub}`;
+    let count = 0;
+
+    for (const key of this.cache.keys()) {
+      if (key.startsWith(prefix) || key === legacyKey) {
+        this.cache.delete(key);
+        count++;
+      }
+    }
+
+    if (count > 0) {
+      log.info('Polling cache entries invalidated for user', { sub, count });
     }
   }
 
@@ -133,23 +230,28 @@ export class PollingSessionCache {
       totalEntries: this.cache.size,
       validEntries,
       totalRequests,
-      hitRate: validEntries > 0 ? (totalRequests / validEntries).toFixed(2) : '0.00',
+      // Named avgRequestsPerEntry rather than hitRate: this is totalRequests / validEntries
+      // (average lookups per live cache slot), not a true hit/(hit+miss) ratio.
+      // A real hit-rate would require separate hit/miss counters in getCachedSession().
+      avgRequestsPerEntry: validEntries > 0 ? (totalRequests / validEntries).toFixed(2) : '0.00',
       memoryUsage: this.estimateMemoryUsage()
     };
   }
 
   private evictOldest(): void {
-    let oldestKey: string | null = null;
-    let oldestTime = Infinity;
-
-    for (const [key, entry] of this.cache.entries()) {
-      if (entry.cachedAt < oldestTime) {
-        oldestTime = entry.cachedAt;
-        oldestKey = key;
-      }
-    }
-
-    if (oldestKey) {
+    // Map preserves insertion order, so the first key is always the oldest
+    // by creation time — identical semantics to the previous O(N) min-scan
+    // over cachedAt, but O(1) instead.
+    //
+    // Assumption: setCachedSession always inserts new keys (Map.set appends);
+    // it does not update an existing key in-place.  If a future change ever
+    // updates an entry for an existing sessionId without deleting+re-inserting
+    // first, that entry would retain its original insertion position and the
+    // "first key = oldest" invariant would silently break (a newer session
+    // could be evicted ahead of an older one).  Keep this in mind if
+    // setCachedSession's write pattern ever changes.
+    const oldestKey = this.cache.keys().next().value;
+    if (oldestKey !== undefined) {
       this.cache.delete(oldestKey);
       log.debug('Evicted oldest cache entry', { sessionId: oldestKey });
     }
@@ -174,7 +276,14 @@ export class PollingSessionCache {
   }
 
   private estimateMemoryUsage(): string {
-    const avgEntrySize = 500; // Estimated bytes per cache entry
+    // 2 048 B/entry (~2 KB) is a rough mid-point estimate for a CachedSession.
+    // A Google OIDC id_token alone is typically 1–2 KB (three base64url segments);
+    // adding sub (~30 B), email (~30 B), loginIat/roleVersion numbers, userId,
+    // a 1–5 string userRoles array, and the cachedAt/expiresAt/requestCount
+    // numbers brings a realistic entry to 1.5–3 KB.  At 500 entries × 2 KB ≈ 1 MB —
+    // acceptable, and the displayed value is intentionally an approximation.
+    // Treat the returned value as an order-of-magnitude indicator, not accounting.
+    const avgEntrySize = 2048; // bytes — see comment above
     const totalBytes = this.cache.size * avgEntrySize;
 
     if (totalBytes < 1024) return `${totalBytes}B`;
@@ -191,23 +300,68 @@ export class PollingSessionCache {
       this.cleanupTimer = undefined;
     }
     this.cache.clear();
+    // Clear the globalThis anchor so a subsequent import (e.g. in a test that
+    // calls destroy() then re-imports) gets a fresh instance rather than the
+    // already-destroyed one (cleared cache, no cleanup timer).
+    if (globalThis.__pollingSessionCache__ === this) {
+      globalThis.__pollingSessionCache__ = undefined;
+    }
     log.info('Session cache destroyed');
   }
 }
 
-// Singleton instance for application-wide use
-export const pollingSessionCache = new PollingSessionCache({
-  maxAge: 5 * 60 * 1000, // 5 minutes - longer than typical polling sessions
-  maxEntries: 500, // Reasonable for concurrent users
-  cleanupInterval: 2 * 60 * 1000, // 2 minutes
-});
+// Singleton instance for application-wide use.
+//
+// Stored on globalThis to survive Next.js HMR module reloads in development.
+// Without this, every hot-reload registers a new setInterval (from startCleanup)
+// while the old interval is never cleared (destroy() is only called in tests),
+// causing timer accumulation and stale cache entries surviving across reloads.
+// globalThis persists across HMR reloads within the same Node process, so the
+// single instance (and its interval) is reused rather than duplicated.
+// In production there is no HMR; the pattern is a no-op (just reads the cached
+// value on every import).
+declare global {
+  // eslint-disable-next-line no-var -- globalThis augmentation requires var
+  var __pollingSessionCache__: PollingSessionCache | undefined
+}
+
+export const pollingSessionCache: PollingSessionCache =
+  globalThis.__pollingSessionCache__ ??
+  (globalThis.__pollingSessionCache__ = new PollingSessionCache({
+    maxAge: 5 * 60 * 1000, // 5 minutes - longer than typical polling sessions
+    maxEntries: POLLING_CACHE_MAX_ENTRIES, // shared with refresh-google-token.ts dedup cap
+    cleanupInterval: 2 * 60 * 1000, // 2 minutes
+  }));
 
 /**
- * Generate cache key from session data
+ * Generate cache key from session data.
+ *
+ * Keyed on `sub:iat` to prevent cross-session collisions: if a user signs out
+ * and back in within the 5-minute TTL window, the new login produces a fresh
+ * `iat` (issued-at), so the cache entry for the previous session is bypassed
+ * automatically — without needing an explicit invalidation on sign-out.
+ *
+ * `loginIat` is propagated from the JWT's `loginIat` custom claim through the
+ * NextAuth session callback and `getServerSession()`.  A missing or zero loginIat
+ * indicates broken propagation — in that case we return `null` so callers skip
+ * the cache entirely rather than caching under the degenerate key `session:sub:0`.
+ *
+ * Fail-closed: a cache miss on every request is preferable to multiple concurrent
+ * sessions for the same sub sharing one entry and potentially receiving stale roles.
+ *
+ * @returns The cache key string, or `null` when `loginIat` is absent or zero
+ *          (treat as cache miss — do not call getCachedSession with the result).
  */
-export function generateSessionCacheKey(session: CognitoSession): string {
-  // Use sub (user ID) + iat (issued at time) for uniqueness and security
-  // This prevents cache key collisions and adds session-specific entropy
-  const iat = (session as CognitoSession & { iat?: number }).iat || Date.now();
-  return `session:${session.sub}:${iat}`;
+export function generateSessionCacheKey(session: UserSession): string | null {
+  // Intentionally falsy-checks loginIat: both `undefined` and `0` are rejected.
+  // The token-JWT path preserves `decoded.iat ?? Date.now()/1000` so loginIat=0
+  // (Unix epoch) is physically possible but astronomically unlikely in practice.
+  // Treating 0 as absent is correct: a session:sub:0 key would collide across
+  // every zero-loginIat session for the same sub, serving stale roles across
+  // different login events.  The unit test "returns null when loginIat is 0"
+  // (polling-session-cache.test.ts) pins this behavior explicitly.
+  if (!session.loginIat) {
+    return null;
+  }
+  return `session:${session.sub}:${session.loginIat}`;
 }

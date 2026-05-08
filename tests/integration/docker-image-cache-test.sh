@@ -80,12 +80,11 @@ docker run --rm \
   -v /tmp/nextjs-cache-test:/app/.next/cache \
   --name aistudio-test-cache \
   -e DOCUMENTS_BUCKET_NAME=test-bucket \
-  -e RDS_RESOURCE_ARN=arn:aws:rds:us-east-1:000000000000:cluster:test \
-  -e RDS_SECRET_ARN=arn:aws:secretsmanager:us-east-1:000000000000:secret:test \
+  -e DATABASE_URL=postgresql://test:test@localhost:5432/test \
   -e AUTH_SECRET=test-secret-12345678901234567890123456789012 \
   -e AUTH_URL=http://localhost:3000 \
-  -e AUTH_COGNITO_CLIENT_ID=test-client \
-  -e AUTH_COGNITO_ISSUER=https://cognito.amazonaws.com/test \
+  -e AUTH_GOOGLE_ID=test-google-id \
+  -e AUTH_GOOGLE_SECRET=test-google-secret \
   aistudio-test:latest \
   sh -c 'ls -la /app/.next/cache && ls -la /app/.next/cache/images && touch /app/.next/cache/images/test.txt && echo "SUCCESS: Image cache writable"' || {
   echo "ERROR: Write test failed"
@@ -126,12 +125,11 @@ CONTAINER_ID=$(docker run -d --rm \
   --platform="$PLATFORM" \
   -v /tmp/nextjs-cache-test:/app/.next/cache \
   -e DOCUMENTS_BUCKET_NAME=test-bucket \
-  -e RDS_RESOURCE_ARN=arn:aws:rds:us-east-1:000000000000:cluster:test \
-  -e RDS_SECRET_ARN=arn:aws:secretsmanager:us-east-1:000000000000:secret:test \
+  -e DATABASE_URL=postgresql://test:test@localhost:5432/test \
   -e AUTH_SECRET=test-secret-12345678901234567890123456789012 \
   -e AUTH_URL=http://localhost:3000 \
-  -e AUTH_COGNITO_CLIENT_ID=test-client \
-  -e AUTH_COGNITO_ISSUER=https://cognito.amazonaws.com/test \
+  -e AUTH_GOOGLE_ID=test-google-id \
+  -e AUTH_GOOGLE_SECRET=test-google-secret \
   aistudio-test:latest)
 
 # Wait for container to start

@@ -35,7 +35,7 @@ export async function POST(req: NextRequest) {
       uploadId, 
       jobId, 
       partCount: parts.length,
-      userId: session.userId 
+      userId: session.sub 
     });
     
     // Get job details to verify ownership

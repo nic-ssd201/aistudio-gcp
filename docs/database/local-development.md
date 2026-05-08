@@ -43,22 +43,24 @@ npm run dev:local
 Create a `.env.local` file with the following for local development:
 
 ```bash
-# Database - Local PostgreSQL
+# Database — Local PostgreSQL
 DATABASE_URL=postgresql://postgres:postgres@localhost:5432/aistudio
 DB_SSL=false
 
-# Authentication (use AWS Cognito dev pool)
+# Authentication — Google OIDC via NextAuth v5
+# Create credentials at: https://console.cloud.google.com/apis/credentials
+# Authorized redirect URI: http://localhost:3000/api/auth/callback/google
 AUTH_URL=http://localhost:3000
-AUTH_SECRET=your-local-secret-here
-AUTH_COGNITO_CLIENT_ID=your-cognito-client-id
-AUTH_COGNITO_ISSUER=https://cognito-idp.us-west-2.amazonaws.com/your-pool-id
-NEXT_PUBLIC_COGNITO_USER_POOL_ID=your-pool-id
-NEXT_PUBLIC_COGNITO_CLIENT_ID=your-cognito-client-id
-NEXT_PUBLIC_COGNITO_DOMAIN=your-domain.auth.us-west-2.amazoncognito.com
-NEXT_PUBLIC_AWS_REGION=us-west-2
+AUTH_SECRET=dev-secret-change-in-prod   # openssl rand -base64 32
+AUTH_GOOGLE_ID=your-google-client-id
+AUTH_GOOGLE_SECRET=your-google-client-secret
 
-# AI Providers (optional)
+# Storage — Google Cloud Storage
+GCS_BUCKET=your-dev-bucket-name
+
+# AI Providers (optional — fallback if not set in admin DB)
 OPENAI_API_KEY=sk-...
+ANTHROPIC_API_KEY=sk-ant-...
 GOOGLE_API_KEY=...
 ```
 
@@ -72,7 +74,7 @@ After running `npm run db:seed`, the following test accounts are created:
 | staff@example.com | staff | Staff tools |
 | student@example.com | student | Basic access |
 
-Note: These users require Cognito authentication in the actual app. For local testing without Cognito, you may need to mock the authentication layer.
+Sign in via Google OAuth at `http://localhost:3000`. The seed accounts must be signed in with real Google accounts sharing the same email address.
 
 ## Database Architecture
 
@@ -80,9 +82,9 @@ Note: These users require Cognito authentication in the actual app. For local te
 
 | Environment | Database | SSL | Migration Method |
 |-------------|----------|-----|------------------|
-| Local Docker | PostgreSQL 16 Alpine | disabled | init-local.sh (auto on first start) |
-| AWS Dev | Aurora Serverless v2 | required | Lambda (CDK deploy) |
-| AWS Prod | Aurora Serverless v2 | required | Lambda (CDK deploy) |
+| Local Docker | PostgreSQL 16 Alpine | disabled (`DB_SSL=false`) | init-local.sh (auto on first start) |
+| GCP Dev | Cloud SQL PostgreSQL | required | Lambda / migration runner (CDK deploy) |
+| GCP Prod | Cloud SQL PostgreSQL | required | Lambda / migration runner (CDK deploy) |
 
 ### Migration Workflow
 
@@ -166,20 +168,19 @@ export DB_SSL=false
 npm run dev:local
 ```
 
-## Data Sync from AWS (Advanced)
+## Data Sync from GCP Dev (Advanced)
 
-For syncing reference data (models, tools) from AWS dev:
+For syncing reference data (models, tools) from the GCP dev Cloud SQL instance:
 
 ```bash
-# Set AWS credentials
-export AWS_DEV_DB_HOST=your-aurora-cluster.rds.amazonaws.com
-export AWS_DEV_DB_USER=your_user
-export AWS_DEV_DB_PASSWORD=your_password
+export DEV_DB_HOST=your-cloud-sql-ip
+export DEV_DB_USER=your_user
+export DEV_DB_PASSWORD=your_password
 
-npm run db:sync-dev
+bun run db:sync-dev
 ```
 
-Note: User data is NOT synced for privacy. Use `npm run db:seed` for test users.
+Note: User data is NOT synced for privacy. Use `bun run db:seed` for test users.
 
 ## Related Documentation
 

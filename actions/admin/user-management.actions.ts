@@ -14,12 +14,14 @@ import {
 import type { ActionState } from "@/types"
 import { getServerSession } from "@/lib/auth/server-session"
 import { requireRole } from "@/lib/auth/role-helpers"
+import { getUserIdByCognitoSubAsNumber } from "@/lib/db/drizzle"
 import { executeQuery, executeTransaction } from "@/lib/db/drizzle-client"
 import { eq, sql, desc, count, inArray, ilike, or, and, type SQL } from "drizzle-orm"
 import { users, userRoles, roles } from "@/lib/db/schema"
 import { nexusConversations } from "@/lib/db/schema/tables/nexus-conversations"
 import { promptUsageEvents } from "@/lib/db/schema/tables/prompt-usage-events"
 import { getDateThreshold } from "@/lib/date-utils"
+import { pollingSessionCache } from "@/lib/auth/polling-session-cache"
 
 // Constants
 const ACTIVE_USER_THRESHOLD_DAYS = 30 // Users who signed in within this many days are considered "active"
@@ -487,49 +489,108 @@ export async function updateUser(
       throw ErrorFactories.missingRequiredField("roles")
     }
 
-    // Update user and role assignments in a transaction
-    // All validation happens inside transaction to prevent race conditions
-    await executeTransaction(
+    // Dedup at the boundary so the `roleList.length !== data.roles.length` check
+    // inside the transaction is not load-bearing for duplicate inputs.
+    // Without this, roles: ['student', 'student'] (size 2) would fail the length
+    // check because inArray returns one row per distinct name (size 1).
+    const dedupedRoles = [...new Set(data.roles)]
+
+    // Update user and role assignments in a transaction.
+    // All validation happens inside the transaction to prevent race conditions.
+    // The transaction returns { sub, rolesChanged } so both values are available
+    // as consts post-commit — no mutable outer variables that could be silently
+    // clobbered by a concurrent call on the same event-loop tick.
+    const txResult = await executeTransaction(
       async (tx) => {
-        // Update user basic info - verify user exists
+        // ── 1. Fetch current role assignments ────────────────────────────────
+        // Done first so we can (a) diff against incoming roles before the UPDATE
+        // and (b) reuse the result for the admin-removal guard below without a
+        // second round-trip.
+        const currentUserRoles = await tx
+          .select({ roleName: roles.name })
+          .from(userRoles)
+          .innerJoin(roles, eq(userRoles.roleId, roles.id))
+          .where(eq(userRoles.userId, userId))
+
+        const currentRoleNames = new Set(currentUserRoles.map((r) => r.roleName))
+        const incomingRoleNames = new Set(dedupedRoles)
+        // A role diff exists when the sets differ in size OR any incoming name
+        // is absent from the current set.  Symmetric: if sizes match and all
+        // incoming names are present, the sets are identical.
+        const rolesChanged =
+          currentRoleNames.size !== incomingRoleNames.size ||
+          [...incomingRoleNames].some((name) => !currentRoleNames.has(name))
+
+        // ── 2. Update user basic info ────────────────────────────────────────
+        // Include cognitoSub in .returning() so it is available post-commit for
+        // pollingSessionCache.invalidateUser() without an additional DB query.
+        //
+        // roleVersion is bumped only when roles actually changed.  An unnecessary
+        // bump on a name-only edit triggers /api/auth/refresh-session fleet-wide
+        // (every instance whose JWT carries an older roleVersion will force re-auth
+        // for that user) — disruptive for a purely cosmetic change.
+        //
+        // Safety: other code paths that mutate roles without going through updateUser
+        // (e.g. lib/db/drizzle/user-roles.ts addUserRole / removeUserRole /
+        // replaceUserRoles) bump roleVersion themselves inside their own transactions,
+        // so skipping the bump here on a name-only edit does not create a gap —
+        // roles aren't changing.
+        //
+        // NOTE: those helpers do NOT call pollingSessionCache.invalidateUser() — they
+        // rely on the roleVersion bump + /api/auth/refresh-session as the cross-instance
+        // invalidation path.  Their current callers are JIT provisioning only (no
+        // pre-existing cache entry), so this is safe today.  Any future admin-facing
+        // caller that uses addUserRole/removeUserRole directly must call
+        // pollingSessionCache.invalidateUser(sub) post-commit to flush the local cache.
         const result = await tx
           .update(users)
           .set({
             firstName: data.firstName.trim(),
             lastName: data.lastName.trim(),
+            // updatedAt must be set explicitly — the users table has no ON UPDATE
+            // PostgreSQL trigger (unlike user_roles which has one from migration 017).
+            // Without this, updatedAt stays frozen at row-creation time on every edit.
+            updatedAt: new Date(),
+            // Conditional bump: only when roles actually differ.
+            // Without this bump on role changes, the multi-instance stale-role
+            // fallback (/api/auth/refresh-session) never fires — the in-process
+            // pollingSessionCache.invalidateUser() only flushes the local cache.
+            // COALESCE guards against NULL + 1 = NULL on rows whose role_version
+            // column was NULL before migration 020 populated it — matches the same
+            // pattern used in lib/db/drizzle/user-roles.ts replaceUserRoles().
+            ...(rolesChanged ? { roleVersion: sql`COALESCE(${users.roleVersion}, 0) + 1` } : {}),
           })
           .where(eq(users.id, userId))
-          .returning({ id: users.id })
+          // TODO(#8): rename users.cognitoSub → users.authSub once the column rename lands
+          .returning({ id: users.id, cognitoSub: users.cognitoSub })
 
         // Throw if user doesn't exist
         if (result.length === 0) {
           throw ErrorFactories.dbRecordNotFound("users", userId)
         }
 
+        const capturedSub = result[0].cognitoSub ?? null;
+
+        // ── 3. Validate incoming role names ──────────────────────────────────
         // Get role IDs from role names (inside transaction to prevent race condition)
         const roleList = await tx
           .select({ id: roles.id, name: roles.name })
           .from(roles)
-          .where(inArray(roles.name, data.roles))
+          .where(inArray(roles.name, dedupedRoles))
 
-        if (roleList.length !== data.roles.length) {
+        if (roleList.length !== dedupedRoles.length) {
           throw ErrorFactories.invalidInput(
             "roles",
-            data.roles,
+            dedupedRoles,
             "One or more role names are invalid"
           )
         }
 
-        // Prevent removing admin role from last administrator (would lock everyone out)
-        const isRemovingAdmin = !data.roles.includes("administrator")
+        // ── 4. Admin-removal guard ───────────────────────────────────────────
+        // Prevent removing admin role from last administrator (would lock everyone out).
+        // Reuse currentUserRoles fetched in step 1 — no extra query needed.
+        const isRemovingAdmin = !dedupedRoles.includes("administrator")
         if (isRemovingAdmin) {
-          // Check if user currently has admin role
-          const currentUserRoles = await tx
-            .select({ roleName: roles.name })
-            .from(userRoles)
-            .innerJoin(roles, eq(userRoles.roleId, roles.id))
-            .where(eq(userRoles.userId, userId))
-
           const isCurrentlyAdmin = currentUserRoles.some((r) => r.roleName === "administrator")
 
           if (isCurrentlyAdmin) {
@@ -551,6 +612,7 @@ export async function updateUser(
           }
         }
 
+        // ── 5. Replace role assignments ──────────────────────────────────────
         // Delete existing role assignments
         await tx.delete(userRoles).where(eq(userRoles.userId, userId))
 
@@ -561,9 +623,48 @@ export async function updateUser(
             roleId: role.id,
           }))
         )
+
+        // Return both sub and rolesChanged so the post-commit cache-flush can be
+        // gated on actual role changes — a name-only edit should not evict the
+        // cache, symmetric with the conditional roleVersion bump above.
+        // Returning as a const object avoids a closed-over mutable variable that
+        // could be clobbered if two requests for the same user overlap on the same
+        // event-loop tick.
+        return { sub: capturedSub, rolesChanged }
       },
       "updateUser-transaction"
     )
+
+    const { sub: subFromTx, rolesChanged: didRolesChange } = txResult
+
+    // Flush polling cache only when roles actually changed, to mirror the
+    // conditional roleVersion bump above.  A name-only edit does not alter
+    // the user's role set — evicting the cache would serve no purpose and
+    // wastes one TTL worth of warm cache for a cosmetic operation.
+    // subFromTx is captured inside the transaction and returned as the tx
+    // result; no extra post-commit DB query is needed and a post-commit
+    // failure cannot mask a successful commit.
+    // NOTE: only the current process's in-process cache is flushed. On Cloud Run
+    // (or any multi-instance deployment), the other N-1 instances continue serving
+    // stale roles for up to 5 minutes (the TTL).  This is the accepted trade-off
+    // for the polling-auth perf improvement; a cross-instance signal (Pub/Sub,
+    // Redis invalidation) would eliminate the window but is out of scope here.
+    if (subFromTx && didRolesChange) {
+      // Wrap in try/catch: cache invalidation is best-effort. invalidateUser()
+      // is currently synchronous Map iteration with no realistic throw path,
+      // but the try/catch future-proofs for any async or more complex extension
+      // of the cache module. If it does throw, we log a warning rather than
+      // turning a successful committed role change into an apparent failure.
+      try {
+        pollingSessionCache.invalidateUser(subFromTx)
+        log.info("Polling cache flushed after role update", { userId })
+      } catch (cacheErr) {
+        log.warn("Polling cache flush failed after role update (non-fatal)", {
+          userId,
+          error: cacheErr instanceof Error ? cacheErr.message : String(cacheErr),
+        })
+      }
+    }
 
     timer({ status: "success" })
     log.info("User updated successfully", { userId })
@@ -599,14 +700,30 @@ export async function deleteUser(userId: number): Promise<ActionState<void>> {
       throw ErrorFactories.authNoSession()
     }
 
-    // Prevent self-deletion
-    // Type guard: NextAuth types session.user as {}, but it contains id at runtime
-    const sessionUserId =
-      session.user && typeof session.user === "object" && "id" in session.user
-        ? (session.user as { id: number }).id
-        : null
-
-    if (sessionUserId === userId) {
+    // Prevent self-deletion.
+    // session.sub is the Google OIDC sub (a string); userId is a numeric DB row
+    // ID. Comparing them directly (`session.user.id === userId`) is always false
+    // because string !== number — the guard was silently broken.
+    // Fix: resolve sub → numeric DB ID first, then compare.
+    //
+    // A null result (admin's own record missing) is treated as a hard block,
+    // not a pass-through.  Allowing the delete when null would mean a
+    // DB-connectivity blip or a JIT failure silently disables the self-deletion
+    // guard — a safer posture is fail-closed: block and log, forcing an operator
+    // to investigate rather than allowing a potentially self-destructive action.
+    const currentAdminDbId = await getUserIdByCognitoSubAsNumber(session.sub)
+    if (currentAdminDbId === null) {
+      log.error("deleteUser: could not resolve admin sub to DB id — blocking delete as fail-closed", {
+        adminSub: session.sub,
+        targetUserId: userId,
+      })
+      throw ErrorFactories.bizInvalidState(
+        "deleteUser",
+        "admin record not found",
+        "Unable to verify identity — please try again or contact support"
+      )
+    }
+    if (currentAdminDbId === userId) {
       throw ErrorFactories.bizInvalidState(
         "deleteUser",
         "self-deletion attempted",
@@ -614,9 +731,12 @@ export async function deleteUser(userId: number): Promise<ActionState<void>> {
       )
     }
 
-    // Delete user and role assignments in a transaction
-    // Admin check inside transaction prevents TOCTOU race condition
-    await executeTransaction(
+    // Delete user and role assignments in a transaction.
+    // Admin check inside transaction prevents TOCTOU race condition.
+    // cognitoSub is returned from the transaction body (not closed over) so the
+    // binding is a const and there is no mutable outer variable that could be
+    // silently clobbered by a concurrent call on the same event-loop tick.
+    const subFromTx = await executeTransaction(
       async (tx) => {
         // Check if user being deleted is an admin (inside transaction to prevent race)
         const userToDelete = await tx
@@ -647,15 +767,41 @@ export async function deleteUser(userId: number): Promise<ActionState<void>> {
         // Delete user role assignments first (foreign key constraint)
         await tx.delete(userRoles).where(eq(userRoles.userId, userId))
 
-        // Delete the user and check if it existed
-        const result = await tx.delete(users).where(eq(users.id, userId)).returning()
+        // Delete the user and capture cognitoSub for post-commit cache flush.
+        // .returning() includes cognitoSub so no extra round-trip is needed.
+        const result = await tx
+          .delete(users)
+          .where(eq(users.id, userId))
+          // TODO(#8): rename users.cognitoSub → users.authSub once the column rename lands
+          .returning({ id: users.id, cognitoSub: users.cognitoSub })
 
         if (result.length === 0) {
           throw ErrorFactories.dbRecordNotFound("users", userId)
         }
+
+        // Return cognitoSub so it is available as a const post-commit (see updateUser).
+        return result[0].cognitoSub ?? null
       },
       "deleteUser-transaction"
     )
+
+    // Flush the polling cache so the deleted user's cached session cannot be
+    // used by polling endpoints until the 5-minute TTL expires naturally.
+    // Symmetric with updateUser — only the current instance is flushed; see
+    // pollingSessionCache.invalidateUser JSDoc for multi-instance trade-off.
+    if (subFromTx) {
+      // Best-effort: wrap in try/catch so a cache-module exception does not
+      // surface as "Failed to delete user" for a commit that already succeeded.
+      try {
+        pollingSessionCache.invalidateUser(subFromTx)
+        log.info("Polling cache flushed after user deletion", { userId })
+      } catch (cacheErr) {
+        log.warn("Polling cache flush failed after user deletion (non-fatal)", {
+          userId,
+          error: cacheErr instanceof Error ? cacheErr.message : String(cacheErr),
+        })
+      }
+    }
 
     timer({ status: "success" })
     log.info("User deleted successfully", { userId })

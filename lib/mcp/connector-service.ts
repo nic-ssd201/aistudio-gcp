@@ -15,6 +15,7 @@
 import { createMCPClient } from "@ai-sdk/mcp"
 import { eq, and, or, sql } from "drizzle-orm"
 import { createLogger, generateRequestId, startTimer } from "@/lib/logger"
+import { getRequiredEnv } from "@/lib/env-validation"
 import { executeQuery, executeTransaction } from "@/lib/db/drizzle-client"
 import {
   nexusMcpServers,
@@ -230,12 +231,14 @@ export async function getConnectorTools(
       }
     }
   } else if (authType === "cognito_passthrough") {
-    // Cognito passthrough: forward session idToken as Bearer header.
+    // Session passthrough: forward the Google OIDC idToken as a Bearer header.
     // idToken is populated in auth.ts jwt callback (account.id_token → token.idToken)
-    // and surfaced via session callback (session.idToken → CognitoSession.idToken).
+    // and surfaced via session callback (session.idToken → UserSession.idToken).
+    // Note: the auth type name 'cognito_passthrough' is a historical misnomer;
+    // it will be renamed to 'session_passthrough' in a follow-up migration.
     if (!options?.idToken) {
       throw new Error(
-        "Cognito passthrough requires an active session with an ID token. " +
+        "Session passthrough requires an active session with an ID token. " +
         "If this persists, reload the page to refresh your session."
       )
     }
@@ -760,8 +763,15 @@ let secretsClient: SecretManagerServiceClient | null = null
 
 function getSecretsClient(): SecretManagerServiceClient {
   if (!secretsClient) {
+    // GCP Secret Manager SDK resolves project + endpoint from Application Default
+    // Credentials (ADC) on Cloud Run automatically. `projectId` can be supplied
+    // explicitly for local dev where ADC may not embed a project.
+    // The previous `region` option was an AWS SDK artefact — GCP does not accept
+    // it and silently ignored it; removed to avoid misleading future readers.
     secretsClient = new SecretManagerServiceClient({
-      region: process.env.AWS_REGION ?? process.env.AWS_DEFAULT_REGION ?? "us-west-2",
+      ...(process.env.GCP_PROJECT_ID
+        ? { projectId: process.env.GCP_PROJECT_ID }
+        : {}),
     })
   }
   return secretsClient
@@ -785,8 +795,13 @@ export async function loadOAuthCredentials(
     return cached.value
   }
 
-  // GCP Secret Manager: convert DB key path to GCP secret name format
-  const gcpSecretName = `projects/${process.env.GCP_PROJECT_ID || 'your-project'}/secrets/${credentialsKey.replace("/", "-")}/versions/latest`
+  // GCP Secret Manager: convert DB key path to GCP secret name format.
+  // Fail-loud: a missing GCP_PROJECT_ID would silently target 'your-project'
+  // and surface as a confusing "secret not found" error at request time.
+  // Replace ALL slashes in the key (String.replace(string) only replaces the
+  // first occurrence; a key like "oauth/github/client-1" would produce a
+  // malformed secret name with leftover slashes and silently misroute the lookup).
+  const gcpSecretName = `projects/${getRequiredEnv('GCP_PROJECT_ID')}/secrets/${credentialsKey.replace(/\//g, "-")}/versions/latest`
   const [version] = await getSecretsClient().accessSecretVersion({ name: gcpSecretName })
   if (!version?.payload?.data) {
     // version not available; JSON.parse("") will throw below

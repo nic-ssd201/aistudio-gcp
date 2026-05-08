@@ -114,7 +114,8 @@ export function ConnectorsPageClient({ initialServers, fetchError: initialFetchE
       case "jwt":
         return "JWT"
       case "cognito_passthrough":
-        return "Cognito Passthrough"
+        // Label updated; DB enum rename tracked in nic-ssd201/aistudio-gcp#8.
+        return "Session Passthrough"
       case "none":
         return "None"
       default:

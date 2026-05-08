@@ -261,31 +261,36 @@ describe('Drizzle Client Configuration', () => {
   })
 
   describe('Environment Configuration', () => {
-    it('should document required environment variables', () => {
-      const requiredEnvVars = [
-        'RDS_SECRET_ARN',
-        'RDS_RESOURCE_ARN',
-      ]
+    it('should document supported database connection modes (GCP deployment)', () => {
+      // Three mutually exclusive connection modes — at least one must be set.
+      const connectionModes = {
+        // 1. Direct URL — local dev and simple deployments
+        databaseUrl: 'DATABASE_URL',
+        // 2. TCP / Cloud SQL via IP
+        tcpConfig: ['DB_HOST', 'DB_USER', 'DB_PASSWORD'],
+        // 3. Cloud SQL Unix socket (Cloud Run)
+        socketConfig: ['CLOUD_SQL_SOCKET_PATH', 'DB_USER', 'DB_PASSWORD'],
+      }
 
+      expect(connectionModes.databaseUrl).toBe('DATABASE_URL')
+      expect(connectionModes.tcpConfig).toContain('DB_HOST')
+      expect(connectionModes.socketConfig).toContain('CLOUD_SQL_SOCKET_PATH')
+    })
+
+    it('should document optional database variables', () => {
       const optionalEnvVars = [
-        'RDS_DATABASE_NAME', // defaults to 'aistudio'
-        'AWS_REGION', // defaults to 'us-east-1'
+        'DB_NAME',    // defaults to 'aistudio'
+        'DB_SSL',     // defaults to true for TCP connections
+        'DB_PORT',    // defaults to 5432
       ]
 
-      expect(requiredEnvVars).toContain('RDS_SECRET_ARN')
-      expect(requiredEnvVars).toContain('RDS_RESOURCE_ARN')
-      expect(optionalEnvVars).toContain('RDS_DATABASE_NAME')
-      expect(optionalEnvVars).toContain('AWS_REGION')
+      expect(optionalEnvVars).toContain('DB_NAME')
+      expect(optionalEnvVars).toContain('DB_SSL')
     })
 
     it('should document default database name', () => {
       const DEFAULT_DATABASE_NAME = 'aistudio'
       expect(DEFAULT_DATABASE_NAME).toBe('aistudio')
-    })
-
-    it('should document default AWS region', () => {
-      const DEFAULT_AWS_REGION = 'us-east-1'
-      expect(DEFAULT_AWS_REGION).toBe('us-east-1')
     })
   })
 })
@@ -369,12 +374,11 @@ describe('executeTransaction behavior documentation', () => {
 describe('validateDatabaseConnection behavior documentation', () => {
   it('should document connection validation purpose', () => {
     // validateDatabaseConnection is used for health checks to verify:
-    // - Environment variables are configured (RDS_SECRET_ARN, RDS_RESOURCE_ARN)
-    // - AWS credentials are valid
-    // - Database is accessible and responding
+    // - At least one database connection mode is configured
+    // - The postgres.js driver can reach the database
+    // - The database is responding to queries
     const validationChecks = {
       environmentVariables: true,
-      awsCredentials: true,
       databaseAccessibility: true,
       responseTime: true,
     }
@@ -384,42 +388,46 @@ describe('validateDatabaseConnection behavior documentation', () => {
   })
 
   it('should document success response structure', () => {
-    // Successful validation returns:
+    // Successful validation returns (GCP / postgres.js shape):
     interface SuccessResponse {
       success: true
       message: string
       config: {
-        region: string | undefined
-        hasResourceArn: boolean
-        hasSecretArn: boolean
+        hasDatabaseUrl: boolean
+        hasDbHost: boolean
+        hasCloudSqlSocket: boolean
+        maxConnections: string
         database: string
       }
     }
 
     const exampleSuccess: SuccessResponse = {
       success: true,
-      message: 'Database connection validated successfully',
+      message: 'Database connection validated successfully (postgres.js)',
       config: {
-        region: 'us-east-1',
-        hasResourceArn: true,
-        hasSecretArn: true,
+        hasDatabaseUrl: false,
+        hasDbHost: false,
+        hasCloudSqlSocket: true,
+        maxConnections: '20',
         database: 'aistudio',
       },
     }
 
     expect(exampleSuccess.success).toBe(true)
     expect(exampleSuccess.config.database).toBe('aistudio')
+    expect(exampleSuccess.config.hasCloudSqlSocket).toBe(true)
   })
 
   it('should document failure response structure', () => {
-    // Failed validation returns:
+    // Failed validation returns (GCP / postgres.js shape):
     interface FailureResponse {
       success: false
       message: string
       config: {
-        region: string | undefined
-        hasResourceArn: boolean
-        hasSecretArn: boolean
+        hasDatabaseUrl: boolean
+        hasDbHost: boolean
+        hasCloudSqlSocket: boolean
+        maxConnections: string
         database: string
       }
       error: string
@@ -429,12 +437,13 @@ describe('validateDatabaseConnection behavior documentation', () => {
       success: false,
       message: 'Database connection validation failed',
       config: {
-        region: 'us-east-1',
-        hasResourceArn: true,
-        hasSecretArn: false,
+        hasDatabaseUrl: false,
+        hasDbHost: false,
+        hasCloudSqlSocket: false,
+        maxConnections: '20',
         database: 'aistudio',
       },
-      error: 'Missing RDS_SECRET_ARN environment variable',
+      error: 'connect ECONNREFUSED 127.0.0.1:5432',
     }
 
     expect(exampleFailure.success).toBe(false)
@@ -444,32 +453,25 @@ describe('validateDatabaseConnection behavior documentation', () => {
   it('should document validation query', () => {
     // Executes simple test query: SELECT 1 as test
     // This verifies:
-    // - RDS Data API connectivity
-    // - Secret Manager authentication
-    // - Database availability
-    // - Network routing through VPC
+    // - postgres.js driver connectivity
+    // - Database authentication (DB_USER / DB_PASSWORD)
+    // - Network routing (Cloud SQL socket or TCP)
     const testQuery = 'SELECT 1 as test'
-    const expectedResult = { rows: [{ test: 1 }] }
 
     expect(testQuery).toBe('SELECT 1 as test')
-    expect(expectedResult.rows).toHaveLength(1)
   })
 
-  it('should document environment variable precedence', () => {
-    // Region resolution order:
-    // 1. AWS_REGION (server-side)
-    // 2. AWS_DEFAULT_REGION
-    // 3. NEXT_PUBLIC_AWS_REGION
-    // 4. Default: 'us-east-1'
-    const regionPrecedence = [
-      'AWS_REGION',
-      'AWS_DEFAULT_REGION',
-      'NEXT_PUBLIC_AWS_REGION',
-      'us-east-1 (default)',
-    ]
+  it('should document connection-mode config fields', () => {
+    // The `config` object in the response reflects which connection mode is active:
+    // - hasDatabaseUrl: true      → DATABASE_URL (local dev / direct URL)
+    // - hasDbHost: true           → DB_HOST (TCP or Cloud SQL via IP)
+    // - hasCloudSqlSocket: true   → CLOUD_SQL_SOCKET_PATH (Cloud Run socket)
+    const configFields = ['hasDatabaseUrl', 'hasDbHost', 'hasCloudSqlSocket', 'maxConnections', 'database']
 
-    expect(regionPrecedence).toHaveLength(4)
-    expect(regionPrecedence[0]).toBe('AWS_REGION')
-    expect(regionPrecedence[3]).toBe('us-east-1 (default)')
+    expect(configFields).toContain('hasDatabaseUrl')
+    expect(configFields).toContain('hasDbHost')
+    expect(configFields).toContain('hasCloudSqlSocket')
+    expect(configFields).toContain('maxConnections')
+    expect(configFields).toContain('database')
   })
 })

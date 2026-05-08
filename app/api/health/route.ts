@@ -2,268 +2,187 @@ import { NextResponse } from "next/server"
 import { validateDatabaseConnection } from "@/lib/db/drizzle-client"
 import { getServerSession } from "@/lib/auth/server-session"
 import { createLogger, generateRequestId, startTimer } from "@/lib/logger"
+import { validateEnv } from "@/lib/env-validation"
+
 /**
- * Health Check API Endpoint
- * 
+ * Health Check API Endpoint — SSD201 GCP deployment
+ *
  * Validates:
- * - Environment variable configuration
- * - AWS credentials and region setup
- * - RDS Data API connectivity
- * - Basic database query execution
- * 
- * Returns detailed diagnostic information to help troubleshoot deployment issues
+ * - Environment variable configuration (Google OIDC + GCS)
+ * - Database connectivity (postgres.js — DATABASE_URL, TCP, or Cloud SQL socket)
+ * - Authentication (NextAuth v5 + Google OIDC)
+ *
+ * **Response design (info-leak mitigation):**
+ * Load-balancer and Docker probes only need the HTTP status code (200/503).
+ * The response body is intentionally minimal for production callers so that
+ * unauthenticated probers cannot enumerate which credentials are missing or
+ * infer the infrastructure topology from the response body.
+ *
+ * - All environments: `{status, timestamp, checks: {<name>: {status}}}`.
+ * - Non-production only: `hasSession` (boolean), `missingVariables[]`,
+ *   per-check `connectionType`, and `diagnostics.hints[]` are included to ease
+ *   local debugging. `hasSession` is omitted in production — probes need only
+ *   the HTTP status code; the boolean adds no value over the `status` field.
+ *
+ * **Probe semantics:** a 200 response is a point-in-time snapshot — it confirms
+ * the checks passed at probe time, not that every subsequent request will succeed.
+ * Do not add request-blocking I/O or heavy validation here; Cloud Run and k8s
+ * treat a slow health endpoint as a liveness failure and restart the container.
  */
 export async function GET() {
   const requestId = generateRequestId();
   const timer = startTimer("api.health");
   const log = createLogger({ requestId, route: "api.health" });
-  
+  // Use `=== 'development'` (not `!== 'production'`) so staging environments
+  // get production-shaped responses and accurate LB probe behavior by default.
+  const isDev = process.env.NODE_ENV === 'development';
+
   log.info("GET /api/health - Health check requested");
-  
-  // For production, you may want to add authentication or IP restriction
-  // For now, we'll allow access but you can uncomment the following to restrict:
-  /*
-  const session = await getServerSession()
-  if (!session) {
-    return NextResponse.json(
-      { error: "Unauthorized" },
-      { status: 401 }
-    )
-  }
-  */
 
-  interface HealthCheckResult {
-    timestamp: string;
-    status: string;
-    checks: {
-      environment: {
-        status: string;
-        missingVariables?: string[];
-        awsRegion?: string;
-        nodeEnv?: string;
-        details?: Record<string, unknown>;
-        error?: string;
-      };
-      authentication: {
-        status: string;
-        hasSession?: boolean;
-        sessionUser?: string;
-        authConfigured?: boolean;
-        error?: string;
-        hint?: string;
-      };
-      database: {
-        status: string;
-        success?: boolean;
-        configured?: boolean;
-        hint?: string;
-        error?: unknown;
-        [key: string]: unknown;
-      };
-    };
-    diagnostics?: {
-      hints: string[];
-      deploymentChecklist?: string[];
-    };
-  }
+  // Run all three checks in parallel so the endpoint is fast for LB probes.
+  const [envResult, sessionResult, dbResult] = await Promise.allSettled([
+    // ── 1. Environment ────────────────────────────────────────────────────────
+    (async () => {
+      const { isValid, missing } = validateEnv()
+      log.debug("Environment check completed", { missingVars: missing.length });
+      return { isValid, missing }
+    })(),
 
-  const healthCheck: HealthCheckResult = {
-    timestamp: new Date().toISOString(),
-    status: "checking",
-    checks: {
-      environment: { status: "pending" },
-      authentication: { status: "pending" },
-      database: { status: "pending" }
-    }
-  }
-
-  // 1. Check environment variables
-  try {
-    const requiredEnvVars = [
-      'AUTH_URL',
-      'AUTH_SECRET',
-      'AUTH_COGNITO_CLIENT_ID',
-      'AUTH_COGNITO_ISSUER',
-      'NEXT_PUBLIC_COGNITO_USER_POOL_ID',
-      'NEXT_PUBLIC_COGNITO_CLIENT_ID',
-      'NEXT_PUBLIC_COGNITO_DOMAIN',
-      'NEXT_PUBLIC_AWS_REGION'
-      // Database config checked separately: DATABASE_URL (local) or DB_HOST (AWS)
-    ]
-
-    const missingVars = requiredEnvVars.filter(varName => !process.env[varName])
-    // AWS Amplify provides AWS_REGION and AWS_DEFAULT_REGION at runtime
-    const region = process.env.AWS_REGION || 
-                   process.env.AWS_DEFAULT_REGION || 
-                   process.env.NEXT_PUBLIC_AWS_REGION
-
-    log.debug("Environment check completed", { 
-      missingVars: missingVars.length,
-      hasRegion: !!region 
-    });
-    
-    healthCheck.checks.environment = {
-      status: missingVars.length === 0 ? "healthy" : "unhealthy",
-      missingVariables: missingVars,
-      awsRegion: region || "not configured (AWS Amplify should provide)",
-      nodeEnv: process.env.NODE_ENV,
-      details: {
-        hasAuthUrl: !!process.env.AUTH_URL,
-        hasAuthSecret: !!process.env.AUTH_SECRET,
-        hasCognitoConfig: !!process.env.AUTH_COGNITO_CLIENT_ID && !!process.env.AUTH_COGNITO_ISSUER,
-        // Database: postgres.js driver (Issue #603)
-        hasDatabaseUrl: !!process.env.DATABASE_URL,
-        hasDbHost: !!process.env.DB_HOST,
-        dbConfigured: !!process.env.DATABASE_URL || !!process.env.DB_HOST,
-        hasAwsRegion: !!region,
-        hasAwsExecution: !!process.env.AWS_EXECUTION_ENV,
-        awsRegionSource: process.env.AWS_REGION ? 'AWS_REGION (Amplify)' :
-                        process.env.AWS_DEFAULT_REGION ? 'AWS_DEFAULT_REGION (Amplify)' :
-                        process.env.NEXT_PUBLIC_AWS_REGION ? 'NEXT_PUBLIC_AWS_REGION (User)' :
-                        'none'
+    // ── 2. Authentication ─────────────────────────────────────────────────────
+    // Only attempt if the Google OIDC vars are present; otherwise the
+    // NextAuth config itself would be invalid.
+    (async () => {
+      if (
+        !process.env.AUTH_SECRET ||
+        !process.env.AUTH_GOOGLE_ID ||
+        !process.env.AUTH_GOOGLE_SECRET
+      ) {
+        return { configured: false, hasSession: false }
       }
-    }
-  } catch (error) {
-    log.error("Environment check failed", error);
-    healthCheck.checks.environment = {
-      status: "error",
-      error: error instanceof Error ? error.message : "Unknown error"
-    }
-  }
-
-  // 2. Check authentication (skip if missing auth config to avoid errors)
-  if (process.env.AUTH_SECRET && process.env.AUTH_COGNITO_CLIENT_ID) {
-    try {
       const session = await getServerSession()
       log.debug("Authentication check completed", { hasSession: !!session });
-      healthCheck.checks.authentication = {
-        status: "healthy",
-        hasSession: !!session,
-        sessionUser: session?.email || "no session",
-        authConfigured: true
-      }
-    } catch (error) {
-      log.error("Authentication check failed", error);
-      healthCheck.checks.authentication = {
-        status: "error",
-        error: error instanceof Error ? error.message : "Unknown error",
-        hint: "Authentication system may not be properly configured"
-      }
-    }
-  } else {
-    healthCheck.checks.authentication = {
-      status: "unhealthy",
-      authConfigured: false,
-      hint: "Authentication environment variables not set"
-    }
-  }
+      // Never expose session user identity (email, name, sub) in the response
+      // body — only confirm whether a valid session exists.
+      return { configured: true, hasSession: !!session }
+    })(),
 
-  // 3. Check database connectivity (postgres.js driver - Issue #603)
-  // Either DATABASE_URL (local dev) or DB_HOST (AWS ECS) must be configured
-  const hasDatabaseUrl = !!process.env.DATABASE_URL;
-  const hasAwsDbConfig = !!process.env.DB_HOST;
+    // ── 3. Database ───────────────────────────────────────────────────────────
+    (async () => {
+      const hasDatabaseUrl = !!process.env.DATABASE_URL;
+      const hasDbHost = !!process.env.DB_HOST;
+      const hasCloudSqlSocket = !!process.env.CLOUD_SQL_SOCKET_PATH;
 
-  if (hasDatabaseUrl || hasAwsDbConfig) {
-    try {
-      const dbValidation = await validateDatabaseConnection()
-      log.debug("Database check completed", { success: dbValidation.success });
-      healthCheck.checks.database = {
-        status: dbValidation.success ? "healthy" : "unhealthy",
-        connectionType: hasDatabaseUrl ? 'DATABASE_URL (local)' : 'DB_HOST (AWS)',
-        ...dbValidation
-      }
-    } catch (error) {
-      log.error("Database check failed", error);
-      healthCheck.checks.database = {
-        status: "error",
-        error: error instanceof Error ? {
-          name: error.name,
-          message: error.message,
-          stack: process.env.NODE_ENV !== 'production' ?
-            error.stack?.split('\n').slice(0, 5).join('\n') : undefined
-        } : "Unknown error"
-      }
-    }
-  } else {
-    healthCheck.checks.database = {
-      status: "unhealthy",
-      configured: false,
-      hint: "Database not configured. Set DATABASE_URL (local dev) or DB_HOST (AWS ECS)"
-    }
-  }
+      // Priority mirrors getPgClient() in lib/db/drizzle-client.ts:
+      //   1. CLOUD_SQL_SOCKET_PATH (Cloud Run Unix socket — checked first)
+      //   2. DATABASE_URL          (full connection string via getDatabaseUrl())
+      //   3. DB_HOST               (TCP, also resolved by getDatabaseUrl())
+      // Reporting a different priority would cause diagnostics to disagree with
+      // the pool actually in use when multiple vars are set simultaneously.
+      const connectionType = hasCloudSqlSocket
+        ? 'CLOUD_SQL_SOCKET_PATH'
+        : hasDatabaseUrl
+          ? 'DATABASE_URL'
+          : hasDbHost
+            ? 'DB_HOST'
+            : null;
 
-  // 4. Overall health status
-  const allHealthy = Object.values(healthCheck.checks).every(
-    (check) => check.status === "healthy"
-  )
-  
-  healthCheck.status = allHealthy ? "healthy" : "unhealthy"
-  
-  log.info("Health check completed", { 
-    status: healthCheck.status,
-    environmentStatus: healthCheck.checks.environment.status,
-    authStatus: healthCheck.checks.authentication.status,
-    databaseStatus: healthCheck.checks.database.status
+      if (!connectionType) {
+        return { connected: false, connectionType: null }
+      }
+
+      const validation = await validateDatabaseConnection()
+      log.debug("Database check completed", { success: validation.success });
+      return { connected: validation.success, connectionType }
+    })(),
+  ]);
+
+  // ── Build check statuses ───────────────────────────────────────────────────
+
+  const envCheck = envResult.status === 'fulfilled' ? envResult.value : null
+  const sessionCheck = sessionResult.status === 'fulfilled' ? sessionResult.value : null
+  const dbCheck = dbResult.status === 'fulfilled' ? dbResult.value : null
+
+  const envStatus = envResult.status === 'rejected'
+    ? 'error'
+    : envCheck!.isValid ? 'healthy' : 'unhealthy'
+
+  const authStatus = sessionResult.status === 'rejected'
+    ? 'error'
+    : sessionCheck!.configured ? 'healthy' : 'unhealthy'
+
+  const dbStatus = dbResult.status === 'rejected'
+    ? 'error'
+    : dbCheck!.connected ? 'healthy' : 'unhealthy'
+
+  const allHealthy = envStatus === 'healthy' && authStatus === 'healthy' && dbStatus === 'healthy'
+
+  log.info("Health check completed", {
+    status: allHealthy ? 'healthy' : 'unhealthy',
+    envStatus,
+    authStatus,
+    dbStatus,
   });
-  
   timer({ status: allHealthy ? "success" : "unhealthy" });
-  
-  // 5. Add diagnostic hints if unhealthy
-  if (!allHealthy) {
-    healthCheck.diagnostics = {
-      hints: []
+
+  // ── Response body ──────────────────────────────────────────────────────────
+  // Production: check statuses only — sufficient for LB probes, no info leak.
+  // Non-production: add missing-var names, connection type, and hints to ease
+  // local debugging.
+
+  const body: Record<string, unknown> = {
+    status: allHealthy ? 'healthy' : 'unhealthy',
+    timestamp: new Date().toISOString(),
+    checks: {
+      environment: {
+        status: envStatus,
+        // Missing var names exposed in dev only — the names alone don't reveal
+        // credential values but do reveal which infra vars are expected.
+        ...(isDev && envCheck?.missing.length
+          ? { missingVariables: envCheck.missing }
+          : {}),
+      },
+      authentication: {
+        status: authStatus,
+        // hasSession exposed in dev only — probes need only the HTTP status
+        // code; the boolean doesn't add information beyond the status field
+        // and is omitted from production to keep the surface minimal.
+        ...(isDev ? { hasSession: sessionCheck?.hasSession ?? false } : {}),
+      },
+      database: {
+        status: dbStatus,
+        // Connection type exposed in dev: reveals infrastructure topology.
+        ...(isDev && dbCheck?.connectionType
+          ? { connectionType: dbCheck.connectionType }
+          : {}),
+      },
+    },
+  }
+
+  // Append lightweight hints in non-production to help developers diagnose failures.
+  if (isDev && !allHealthy) {
+    const hints: string[] = []
+    if (envStatus !== 'healthy') {
+      hints.push("Check env vars: AUTH_URL, AUTH_SECRET, AUTH_GOOGLE_ID, AUTH_GOOGLE_SECRET, GCS_BUCKET, and one of DATABASE_URL / DB_HOST / CLOUD_SQL_SOCKET_PATH.")
     }
-    
-    if (healthCheck.checks.environment.status !== "healthy") {
-      healthCheck.diagnostics.hints.push(
-        "Missing environment variables. Check AWS Amplify console environment variables configuration."
+    if (authStatus !== 'healthy') {
+      hints.push("AUTH_SECRET and both AUTH_GOOGLE_ID / AUTH_GOOGLE_SECRET must be set.")
+    }
+    if (dbStatus !== 'healthy') {
+      hints.push(
+        dbCheck?.connectionType
+          ? "Database connectivity issue. Check credentials and that the instance is reachable."
+          : "No database mode configured. Set DATABASE_URL (local), DB_HOST (TCP), or CLOUD_SQL_SOCKET_PATH (Cloud Run)."
       )
     }
-    
-    if (healthCheck.checks.database.status !== "healthy") {
-      const dbError = healthCheck.checks.database.error;
-      if (typeof dbError === 'object' && dbError !== null && 'message' in dbError && 
-          typeof (dbError as {message: string}).message === 'string' && 
-          (dbError as {message: string}).message.includes("credentials")) {
-        healthCheck.diagnostics.hints.push(
-          "AWS credentials issue. Verify Amplify service role has RDS Data API permissions."
-        )
-      } else if (typeof dbError === 'object' && dbError !== null && 'message' in dbError && 
-                 typeof (dbError as {message: string}).message === 'string' && 
-                 (dbError as {message: string}).message.includes("region")) {
-        healthCheck.diagnostics.hints.push(
-          "AWS region not configured. AWS Amplify should provide AWS_REGION automatically. Ensure NEXT_PUBLIC_AWS_REGION is set as fallback."
-        )
-      } else if (!healthCheck.checks.database.configured) {
-        healthCheck.diagnostics.hints.push(
-          "Database not configured. Set DATABASE_URL (local dev) or DB_HOST (AWS ECS)."
-        )
-      } else {
-        healthCheck.diagnostics.hints.push(
-          "Database connectivity issue. Check DATABASE_URL or DB_HOST/DB_USER/DB_PASSWORD values."
-        )
-      }
-    }
-    
-    // Add deployment checklist
-    healthCheck.diagnostics.deploymentChecklist = [
-      "1. Set all required environment variables in AWS ECS task definition",
-      "2. For AWS: DB_HOST, DB_USER, DB_PASSWORD are injected from Secrets Manager",
-      "3. For local dev: Set DATABASE_URL in .env.local",
-      "4. Check CloudWatch/container logs for detailed error messages",
-      "5. Verify security group allows traffic from ECS to Aurora on port 5432"
-    ]
+    if (hints.length) body.diagnostics = { hints }
   }
 
-  return NextResponse.json(
-    healthCheck,
-    { 
-      status: allHealthy ? 200 : 503,
-      headers: {
-        'Cache-Control': 'no-store, no-cache, must-revalidate',
-        'Content-Type': 'application/json',
-        'X-Request-Id': requestId
-      }
-    }
-  )
+  return NextResponse.json(body, {
+    status: allHealthy ? 200 : 503,
+    headers: {
+      'Cache-Control': 'no-store, no-cache, must-revalidate',
+      'Content-Type': 'application/json',
+      'X-Request-Id': requestId,
+    },
+  })
 }
