@@ -64,6 +64,10 @@ export async function getServerSession(): Promise<UserSession | null> {
       givenName: session.user.givenName || undefined,
       familyName: session.user.familyName || undefined,
       idToken: session.idToken || undefined,
+      // `session.iat` is set from `token.loginIat` by the session callback in
+      // auth.ts:413.  When loginIat is absent (stale pre-deploy cookie), auth.ts
+      // uses `delete session.iat` (not assignment of undefined) to avoid type
+      // narrowing issues — hence the explicit typeof guard here rather than `??`.
       iat: typeof session.iat === 'number' ? session.iat : undefined,
       // roleVersion lives on the session root, not on session.user — must be
       // explicitly projected here.  Without this, refresh-session/route.ts always

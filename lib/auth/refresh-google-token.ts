@@ -129,11 +129,26 @@ export async function refreshGoogleToken(token: JWT): Promise<JWT | null> {
   // cannot accidentally remove the new promise. (The safety cap above bypasses
   // rather than evicts, so eviction-race is not the threat today — but the
   // identity check is cheap defense-in-depth for any future change to the cap.)
-  const promise = doRefresh(token, log).finally(() => {
-    if (activeRefreshes.get(sub) === promise) {
-      activeRefreshes.delete(sub)
-    }
-  })
+  //
+  // Defense-in-depth for synchronous throws: doRefresh() is fully `async` so
+  // it always returns a Promise and never throws synchronously in its current
+  // form.  However, if a future edit adds synchronous code before the first
+  // `await`, a synchronous throw would escape the `.finally()` chain and leave
+  // a stale entry in activeRefreshes.  The outer try/catch guarantees cleanup
+  // even in that degenerate case without changing the happy-path behavior.
+  let promise: Promise<JWT | null>
+  try {
+    promise = doRefresh(token, log).finally(() => {
+      if (activeRefreshes.get(sub) === promise) {
+        activeRefreshes.delete(sub)
+      }
+    })
+  } catch (syncErr) {
+    // Synchronous throw from doRefresh (should not happen today — see comment
+    // above).  Do not insert into the map; re-throw to propagate the error.
+    activeRefreshes.delete(sub) // no-op if set() hadn't been called yet
+    throw syncErr
+  }
   activeRefreshes.set(sub, promise)
   return promise
 }

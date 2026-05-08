@@ -49,6 +49,34 @@ This guide covers ongoing operations, monitoring, and management for the AWS inf
 - If stack deployment fails due to missing parameters, provide the required client ID(s) with `--parameters`
 - For missing secrets, create them in AWS Secrets Manager as documented in `DEPLOYMENT.md` (in this directory)
 
+## Polling Session Cache — Role Revocation Behavior (GCP Deployment)
+
+The polling session cache (`lib/auth/polling-session-cache.ts`) is an in-process
+cache that reduces auth overhead from ~500 ms to ~5 ms per request for long-poll
+endpoints. Each Cloud Run instance maintains its own cache with a 5-minute TTL.
+
+### Role revocation latency on multi-instance deployments
+
+When an admin demotes or revokes a user's role via the admin UI:
+
+1. The `updateUser` action calls `pollingSessionCache.invalidateUser(sub)` on the
+   instance handling the admin request — that instance's cache is flushed immediately.
+2. **Other instances are not notified** — they continue serving the old roles for up
+   to 5 minutes (the cache TTL).
+
+**Impact**: On Cloud Run with N > 1 instances, role revocation is not instant.
+A demoted user may retain access for up to 5 minutes on instances that did not
+handle the admin request.
+
+**This is an accepted trade-off** for the polling-auth performance improvement.
+A cross-instance invalidation mechanism (e.g. Cloud Pub/Sub → per-instance flush
+endpoint) would close the window if sub-5-minute revocation becomes a hard requirement.
+
+**Mitigation for urgent revocations**: set `POLLING_SESSION_CACHE_MAX_AGE=0` to
+disable the cache entirely, or scale Cloud Run down to 1 instance temporarily.
+The application functions correctly with the cache disabled — only polling
+performance is affected.
+
 ## Disaster Recovery
 - Restore RDS from automated or manual snapshots as needed.
 - S3 versioning allows recovery of deleted/overwritten documents within the retention window.
