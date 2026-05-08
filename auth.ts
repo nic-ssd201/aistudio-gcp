@@ -642,7 +642,10 @@ export function createAuth() {
 // requireValidEnv() in instrumentation.ts already logs an error for missing creds
 // at startup; that log line is the authoritative startup signal.  A future
 // refactor that makes authMiddleware lazy (computed on first call) would close
-// this gap cleanly — tracked in follow-up alongside the credential-guard audit.
+// this gap cleanly.
+// TODO: implement lazy authMiddleware so assertGoogleCreds() runs before the
+// first JWT decode rather than being silently skipped.  Track alongside the
+// broader credential-guard audit in follow-up to nic-ssd201/aistudio-gcp#6.
 const middlewareAuth = NextAuth(authConfig)
 export const { auth: authMiddleware } = middlewareAuth
 

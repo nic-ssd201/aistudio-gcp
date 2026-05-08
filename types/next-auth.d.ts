@@ -3,8 +3,24 @@ import NextAuth from "next-auth"
 declare module "next-auth" {
   interface Session {
     user: {
-      id: string
-      email: string
+      /**
+       * Google OIDC subject identifier — the stable unique ID for this Google account.
+       * Optional because the session callback can return the session without setting
+       * `user.id` in the absent-email bypass path (stale pre-guard JWT).  In that
+       * case `getServerSession()` treats the session as unauthenticated via
+       * `if (!session?.user?.id) return null`.  Callers that reach code past that
+       * guard can safely assume `id` is a non-empty string (TypeScript narrows it
+       * from `string | undefined` to `string` via the truthy check).
+       */
+      id?: string
+      /**
+       * Google OIDC email address.  Optional for the same reason as `id` — the
+       * absent-email session-callback bypass returns the session without assigning
+       * `user.email`.  All downstream code that needs a verified email should
+       * guard on `session?.user?.email` or operate only after `getServerSession()`
+       * confirms the session is valid (id present).
+       */
+      email?: string
       name?: string | null
       image?: string | null
       givenName?: string | null

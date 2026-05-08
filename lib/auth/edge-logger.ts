@@ -61,6 +61,11 @@ export function createEdgeLogger(context: LogContext): EdgeLogger {
         //   (2) Long bare base64url (no padding): 64+ chars of [A-Za-z0-9_-].
         //       Anything this long is almost certainly a JWT segment or API key;
         //       legitimate debug values (UUIDs, SHAs) are all shorter than 64 chars.
+        //       Known over-redaction cases: long GCS object names (e.g. UUIDs with
+        //       path segments), base64-encoded image data URIs in error messages,
+        //       and long alphanumeric stack-frame identifiers.  The accepted
+        //       trade-off is occasional loss of these identifiers in exchange for
+        //       preventing accidental key/token leakage via error log fields.
         // The previous 20-char catch-all clobbered too much: UUIDs, commit SHAs,
         // package version hashes, and stack-frame names were all silently destroyed.
         sanitized[key] = value

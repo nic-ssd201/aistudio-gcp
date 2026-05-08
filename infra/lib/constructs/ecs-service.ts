@@ -141,6 +141,18 @@ export class EcsServiceConstruct extends Construct {
   constructor(scope: Construct, id: string, props: EcsServiceConstructProps) {
     super(scope, id);
 
+    // TODO(nic-ssd201/aistudio-gcp#8): Add a guard here that throws (or calls
+    // cdk.Annotations.of(this).addError()) when !props.isLegacyAwsDeploy.
+    // EcsServiceConstruct has many ungated Fn.importValue() calls for SQS queues,
+    // DynamoDB tables, and Lambdas that only exist in the upstream AWS deployment.
+    // A stray `cdk deploy AIStudio-FrontendStack-ECS-Dev` without
+    // --context legacy=true fails at CloudFormation deploy time with cryptic
+    // "No export named …" errors rather than a clear message at synth time.
+    // The guard should be implemented alongside gating the FrontendStackEcs
+    // instantiation in infra/bin/infra.ts on isLegacyAwsDeploy (currently always
+    // instantiated when baseDomain is set) so that `cdk synth --all` in GCP mode
+    // does not inadvertently include these dead stacks in the CloudFormation output.
+
     const { vpc, environment, documentsBucketName } = props;
 
     // ============================================================================
