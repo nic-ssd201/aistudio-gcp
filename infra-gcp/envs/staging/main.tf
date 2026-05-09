@@ -304,8 +304,9 @@ module "cloud_run_web" {
     GCP_PROJECT_ID              = var.env_project_id
     GCS_BUCKET                  = module.storage.buckets["attachments"].name
     VERTEX_MODEL_ARMOR_TEMPLATE = module.vertex.model_armor_template_names["aistudio-default"]
-    # Active KMS key version for OAuth2/OIDC JWT signing. Bumped manually after KMS
-    # auto-rotates the key (every 90 days per the kms module's rotation_period).
+    # Active KMS key version for OAuth2/OIDC JWT signing. KMS does NOT auto-rotate
+    # asymmetric keys; when rotation is needed, create a new version with
+    # `gcloud kms keys versions create` and bump this path to cryptoKeyVersions/N.
     KMS_SIGNING_KEY_NAME = "${module.kms.signing_key_ids["jwt-signing"]}/cryptoKeyVersions/1"
     NODE_ENV             = "production"
     ENVIRONMENT          = var.environment

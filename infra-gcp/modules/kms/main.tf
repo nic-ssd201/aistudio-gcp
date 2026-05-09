@@ -114,16 +114,23 @@ resource "google_kms_crypto_key" "signing_keys" {
   name     = each.key
   key_ring = google_kms_key_ring.main.id
 
-  purpose         = "ASYMMETRIC_SIGN"
-  rotation_period = each.value.rotation_period
+  # No rotation_period: Cloud KMS doesn't support automatic rotation for
+  # ASYMMETRIC_SIGN keys (the API rejects rotation_period on this purpose).
+  # New versions are created manually via `gcloud kms keys versions create`
+  # when rotation is needed; the application's KMS_SIGNING_KEY_NAME env var
+  # must then be bumped to point at the new cryptoKeyVersions/N path.
+  purpose = "ASYMMETRIC_SIGN"
 
   version_template {
     algorithm        = each.value.algorithm
     protection_level = "SOFTWARE"
   }
 
+  # GCP label values must match [a-z0-9_-]{0,63} — lowercase + dash/underscore only.
+  # The purpose string is human-readable ("OAuth2/OIDC RS256 JWT signing"), so
+  # downcase and squash slashes/spaces before using it as a label value.
   labels = merge(local.labels, {
-    key-purpose = replace(each.value.purpose, " ", "-")
+    key-purpose = replace(replace(lower(each.value.purpose), " ", "-"), "/", "-")
     key-type    = "asymmetric-sign"
   })
 

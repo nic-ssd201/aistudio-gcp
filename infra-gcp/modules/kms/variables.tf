@@ -47,10 +47,9 @@ variable "labels" {
 
 variable "signing_keys" {
   type = map(object({
-    rotation_period = optional(string, "7776000s") # 90 days
-    algorithm       = optional(string, "RSA_SIGN_PKCS1_2048_SHA256")
-    purpose         = string
+    algorithm = optional(string, "RSA_SIGN_PKCS1_2048_SHA256")
+    purpose   = string
   }))
-  description = "ASYMMETRIC_SIGN keys (separate from CMEK keys above — different purpose, algorithm, and rotation semantics). IAM bindings are intentionally out-of-module: callers wire roles/cloudkms.signerVerifier in their own env file using google_kms_crypto_key_iam_member, so cross-module ordering with service-account modules is explicit."
+  description = "ASYMMETRIC_SIGN keys (separate from CMEK keys above — different purpose, algorithm, and rotation semantics). NOTE: Cloud KMS does NOT support automatic rotation for asymmetric keys (https://cloud.google.com/kms/docs/key-rotation) — new versions must be created manually via gcloud or the API. IAM bindings are intentionally out-of-module: callers wire roles/cloudkms.signerVerifier in their own env file using google_kms_crypto_key_iam_member, so cross-module ordering with service-account modules is explicit."
   default     = {}
 }

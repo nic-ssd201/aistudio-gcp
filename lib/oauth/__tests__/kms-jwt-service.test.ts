@@ -223,6 +223,79 @@ describe("KmsJwtService", () => {
       expect(fake.counts().getPublicKeyCallCount).toBe(1);
     });
 
+    it("refetches after the cache TTL expires", async () => {
+      jest.useFakeTimers();
+      try {
+        const fake = makeFakeKmsClient();
+        const svc = new KmsJwtService(
+          TEST_KEY_PATH,
+          undefined,
+          // @ts-expect-error
+          fake.client,
+        );
+
+        await svc.getPublicKeyJwk();
+        expect(fake.counts().getPublicKeyCallCount).toBe(1);
+
+        // Advance just past the 5-minute TTL.
+        jest.setSystemTime(Date.now() + 5 * 60 * 1000 + 1);
+
+        await svc.getPublicKeyJwk();
+        expect(fake.counts().getPublicKeyCallCount).toBe(2);
+      } finally {
+        jest.useRealTimers();
+      }
+    });
+
+    it("dedupes concurrent cache misses into a single KMS RPC", async () => {
+      const fake = makeFakeKmsClient();
+      const svc = new KmsJwtService(
+        TEST_KEY_PATH,
+        undefined,
+        // @ts-expect-error
+        fake.client,
+      );
+
+      // Five callers race during the cold-start window. Without dedup each would
+      // issue its own getPublicKey RPC — with dedup they share the in-flight one.
+      const results = await Promise.all([
+        svc.getPublicKeyJwk(),
+        svc.getPublicKeyJwk(),
+        svc.getPublicKeyJwk(),
+        svc.getPublicKeyJwk(),
+        svc.getPublicKeyJwk(),
+      ]);
+      expect(fake.counts().getPublicKeyCallCount).toBe(1);
+      // All callers got the same JWK object.
+      results.forEach((r) => expect(r.kid).toBe("jwt-signing-v3"));
+    });
+
+    it("rejects non-RSA public keys (defense-in-depth for algorithm misconfig)", async () => {
+      const ecClient = {
+        async asymmetricSign() {
+          return [{ signature: Buffer.alloc(0) }];
+        },
+        async getPublicKey() {
+          // EC keypair PEM (would only happen if the KMS key was provisioned
+          // with an EC algorithm but KmsJwtService is built only for RS256).
+          const { generateKeyPairSync: g } = require("node:crypto") as typeof import("node:crypto");
+          const { publicKey } = g("ec", {
+            namedCurve: "P-256",
+            publicKeyEncoding: { type: "spki", format: "pem" },
+            privateKeyEncoding: { type: "pkcs8", format: "pem" },
+          });
+          return [{ pem: publicKey }];
+        },
+      };
+      const svc = new KmsJwtService(
+        TEST_KEY_PATH,
+        undefined,
+        // @ts-expect-error
+        ecClient,
+      );
+      await expect(svc.getPublicKeyJwk()).rejects.toThrow(/non-RSA/i);
+    });
+
     it("throws when KMS returns no PEM", async () => {
       const emptyClient = {
         async asymmetricSign() {

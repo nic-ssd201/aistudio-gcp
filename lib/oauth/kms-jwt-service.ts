@@ -49,6 +49,10 @@ interface CachedPublicKey {
   fetchedAt: number
 }
 
+interface PendingFetch {
+  promise: Promise<JwksKey>
+}
+
 // ============================================
 // Constants
 // ============================================
@@ -69,6 +73,7 @@ export class KmsJwtService {
   private readonly kid: string
   private readonly client: KeyManagementServiceClient
   private publicKeyCache: CachedPublicKey | null = null
+  private pendingFetch: PendingFetch | null = null
 
   /**
    * @param keyName    Fully-qualified KMS cryptoKeyVersion resource name.
@@ -147,6 +152,9 @@ export class KmsJwtService {
    * Get the public key in JWK format for the JWKS endpoint.
    * KMS returns a PEM-encoded public key; we parse it locally and re-export as a JWK.
    * Cached with `PUBLIC_KEY_CACHE_TTL_MS` TTL (KMS getPublicKey is cheap but rate-limited).
+   *
+   * Concurrent cache misses share a single in-flight fetch via `pendingFetch` so
+   * N simultaneous JWKS requests during a cold start make exactly one KMS RPC.
    */
   async getPublicKeyJwk(): Promise<JwksKey> {
     const now = Date.now()
@@ -155,6 +163,21 @@ export class KmsJwtService {
       return this.publicKeyCache.jwk
     }
 
+    if (this.pendingFetch) {
+      return this.pendingFetch.promise
+    }
+
+    const fetchPromise = this.fetchPublicKey()
+    this.pendingFetch = { promise: fetchPromise }
+
+    try {
+      return await fetchPromise
+    } finally {
+      this.pendingFetch = null
+    }
+  }
+
+  private async fetchPublicKey(): Promise<JwksKey> {
     const log = createLogger({ action: "KmsJwtService.getPublicKeyJwk" })
 
     const [response] = await this.client.getPublicKey({ name: this.keyName })
@@ -164,8 +187,18 @@ export class KmsJwtService {
 
     const exported = createPublicKey(response.pem).export({ format: "jwk" }) as {
       kty: string
-      n: string
-      e: string
+      n?: string
+      e?: string
+    }
+
+    // Defensive: this service is RS256-only. If a future config swaps the key
+    // algorithm to EC, the JWK shape changes (x/y instead of n/e) and the
+    // downstream JWKS consumer would silently get a malformed key. Fail loud here.
+    if (exported.kty !== "RSA" || !exported.n || !exported.e) {
+      throw new Error(
+        `KMS returned a non-RSA public key (kty="${exported.kty}"); ` +
+          `KmsJwtService only supports RS256 (RSA_SIGN_PKCS1_2048_SHA256).`,
+      )
     }
 
     const jwk: JwksKey = {
@@ -177,7 +210,7 @@ export class KmsJwtService {
       e: exported.e,
     }
 
-    this.publicKeyCache = { jwk, fetchedAt: now }
+    this.publicKeyCache = { jwk, fetchedAt: Date.now() }
     log.info("Refreshed JWT public key from KMS", { kid: this.kid })
     return jwk
   }
