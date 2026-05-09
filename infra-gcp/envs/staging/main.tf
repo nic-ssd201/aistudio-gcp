@@ -87,22 +87,13 @@ module "iam" {
   service_accounts = {}
   role_bindings    = []
 
-  run_invoker_bindings = [
-    {
-      target_kind = "job"
-      target_name = module.doc_processing_job.job_name
-      location    = var.region
-      project_id  = var.env_project_id
-      invoker_sa  = module.sa_scheduler.member
-    },
-  ]
-
-  eventarc_receiver_bindings = [
-    {
-      project_id = var.env_project_id
-      member     = "serviceAccount:${data.google_storage_project_service_account.gcs_sa.email_address}"
-    },
-  ]
+  # run_invoker / eventarc_receiver bindings for the prior cloud-run-job
+  # doc-processing path are gone — the new pipeline uses Cloud Tasks ->
+  # Cloud Run Service with inline google_cloud_run_v2_service_iam_member
+  # grants on the worker (see the doc_processing_queue / doc_processor_worker
+  # block below).
+  run_invoker_bindings       = []
+  eventarc_receiver_bindings = []
 
   labels = { environment = var.environment, managed_by = "terraform" }
 }
@@ -308,48 +299,113 @@ module "cloud_run_web" {
     # asymmetric keys; when rotation is needed, create a new version with
     # `gcloud kms keys versions create` and bump this path to cryptoKeyVersions/N.
     KMS_SIGNING_KEY_NAME = "${module.kms.signing_key_ids["jwt-signing"]}/cryptoKeyVersions/1"
-    NODE_ENV             = "production"
-    ENVIRONMENT          = var.environment
+    # Document-processing pipeline producer wiring. PROCESSING_INVOKER_SA is
+    # the SA Cloud Tasks signs each task as; the worker pins the email claim.
+    PROCESSING_QUEUE_NAME = module.doc_processing_queue.queue_id
+    PROCESSING_TARGET_URL = "${module.doc_processor_worker.service_url}/process-job"
+    PROCESSING_INVOKER_SA = module.sa_doc_proc.email
+    NODE_ENV              = "production"
+    ENVIRONMENT           = var.environment
   }
 
   labels = { environment = var.environment, managed_by = "terraform" }
 }
 
-module "doc_processing_job" {
-  source = "../../modules/cloud-run-job"
+# ---------------------------------------------------------------------------
+# Document-processing pipeline: Cloud Tasks queue -> Cloud Run worker
+#
+# Replaces the prior cloud-run-job + Eventarc setup, which routed GCS
+# OBJECT_FINALIZE events through a Workflow into a Cloud Run Job. The new
+# pipeline is producer-driven (the upload routes call sendToProcessingQueue
+# explicitly after auth/validation), which:
+#   - lets the app gate which uploads actually trigger processing
+#   - carries the jobId in the task payload (no GCS-key -> jobId lookup)
+#   - matches the existing processing-queue.ts API
+# Eventarc is intentionally NOT configured — having both paths would risk
+# double-processing.
+# ---------------------------------------------------------------------------
+
+module "doc_processing_queue" {
+  source = "../../modules/cloud-tasks-queue"
+
+  project_id  = var.env_project_id
+  environment = var.environment
+  region      = var.region
+  queue_name  = "aistudio-doc-processing"
+
+  labels = { environment = var.environment, managed_by = "terraform" }
+}
+
+module "doc_processor_worker" {
+  source = "../../modules/cloud-run-worker"
 
   project_id            = var.env_project_id
   environment           = var.environment
   region                = var.region
-  job_name              = "aistudio-doc-processor"
+  service_name          = "aistudio-doc-processor"
   service_account_email = module.sa_doc_proc.email
-  image                 = var.container_image
+  image                 = var.doc_processor_image
   vpc_connector         = module.network.serverless_connector_name
 
-  task_timeout_seconds = 3600
-  retries              = 3
+  request_timeout_seconds = 1800
+  memory                  = "2Gi"
+  cpu                     = "2"
 
   secret_refs = {
-    AISTUDIO_MCP_TOKEN = module.secrets.version_refs["aistudio-mcp-token"]
-    DB_PASSWORD        = module.secrets.version_refs["alloydb-initial-password"]
+    DB_PASSWORD = module.secrets.version_refs["alloydb-initial-password"]
   }
 
   env = {
-    DB_HOST    = module.alloydb.primary_private_ip
-    DB_USER    = "postgres"
-    DB_NAME    = "aistudio"
-    GCS_BUCKET = module.storage.buckets["doc-processing-staging"].name
+    DB_HOST              = module.alloydb.primary_private_ip
+    DB_USER              = "postgres"
+    DB_NAME              = "aistudio"
+    GCS_BUCKET           = module.storage.buckets["attachments"].name
+    GOOGLE_CLOUD_PROJECT = var.env_project_id
+    GCP_PROJECT_ID       = var.env_project_id
+    ENVIRONMENT          = var.environment
+    NODE_ENV             = "production"
+    # OIDC verification: the receiver pins email claims to the SAs Cloud
+    # Tasks / Cloud Scheduler sign as. Audience is derived from the
+    # inbound request's host+path (trustworthy under INTERNAL_ONLY ingress)
+    # — pinning audience at deploy would create a Terraform cycle (worker
+    # env referencing its own service_url output).
+    PROCESSOR_INVOKER_SA = module.sa_doc_proc.email
+    CLEANUP_INVOKER_SA   = module.sa_scheduler.email
+    # Days of retention before deleteOldJobs sweeps terminal-status rows.
+    CLEANUP_RETENTION_DAYS = "7"
   }
 
-  eventarc_triggers = [
-    {
-      type       = "gcs"
-      bucket     = module.storage.buckets["attachments"].name
-      event_type = "OBJECT_FINALIZE"
-    }
-  ]
-
   labels = { environment = var.environment, managed_by = "terraform" }
+}
+
+# Producer (cloud-run-web SA) needs to enqueue tasks on the processing queue.
+resource "google_cloud_tasks_queue_iam_member" "web_enqueuer" {
+  project  = var.env_project_id
+  location = var.region
+  name     = module.doc_processing_queue.queue_name
+  role     = "roles/cloudtasks.enqueuer"
+  member   = "serviceAccount:${module.sa_web.email}"
+}
+
+# Cloud Tasks signs each dispatched request as sa_doc_proc; that SA must
+# hold roles/run.invoker on the worker so the request is accepted at the
+# Cloud Run ingress (before our app-layer OIDC check even runs).
+resource "google_cloud_run_v2_service_iam_member" "tasks_invoker" {
+  project  = var.env_project_id
+  location = var.region
+  name     = module.doc_processor_worker.service_name
+  role     = "roles/run.invoker"
+  member   = "serviceAccount:${module.sa_doc_proc.email}"
+}
+
+# Cloud Scheduler signs the cleanup-jobs request as sa_scheduler — same
+# pattern, separate SA so tracing makes the call origin obvious.
+resource "google_cloud_run_v2_service_iam_member" "scheduler_invoker" {
+  project  = var.env_project_id
+  location = var.region
+  name     = module.doc_processor_worker.service_name
+  role     = "roles/run.invoker"
+  member   = "serviceAccount:${module.sa_scheduler.email}"
 }
 
 # ---------------------------------------------------------------------------
@@ -385,11 +441,15 @@ module "scheduler" {
   scheduler_sa_email = module.sa_scheduler.email
 
   jobs = {
-    "doc-processing-nightly" = {
+    # Daily sweep of terminal-status document_jobs older than CLEANUP_RETENTION_DAYS.
+    # Replaces the prior cloud_run_job nightly trigger; the new processor is a
+    # Cloud Run Service so the scheduler hits it via HTTP with OIDC auth.
+    "doc-jobs-cleanup-nightly" = {
       schedule    = "0 2 * * *"
       time_zone   = "America/Los_Angeles"
-      target_type = "cloud_run_job"
-      job_name    = module.doc_processing_job.job_name
+      target_type = "url"
+      url         = "${module.doc_processor_worker.service_url}/admin/cleanup-jobs"
+      http_method = "POST"
     }
   }
 
@@ -438,12 +498,10 @@ module "vpc_sc" {
   labels = { environment = var.environment, managed_by = "terraform" }
 }
 
-# GCS service agent member — looked up here so module.iam can reference it.
-data "google_storage_project_service_account" "gcs_sa" {
-  project = var.env_project_id
-}
-# Cross-cutting IAM bindings (scheduler → job invoker, GCS SA → eventarc receiver)
-# are now wired via module.iam run_invoker_bindings / eventarc_receiver_bindings above.
+# (The prior google_storage_project_service_account data source + cross-cutting
+# eventarc/run_invoker bindings were removed when the doc-processing pipeline
+# moved from cloud-run-job + Eventarc to Cloud Tasks + cloud-run-worker.
+# IAM grants for the new pipeline are inline next to the worker module.)
 #
 # §6.6: Budget is managed in envs/bootstrap. The breakglass_channel_id output is available
 # from data.terraform_remote_state.bootstrap.outputs.breakglass_channel_id and can be

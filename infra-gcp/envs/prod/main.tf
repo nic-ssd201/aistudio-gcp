@@ -89,22 +89,10 @@ module "iam" {
   service_accounts = {}
   role_bindings    = []
 
-  run_invoker_bindings = [
-    {
-      target_kind = "job"
-      target_name = module.doc_processing_job.job_name
-      location    = var.region
-      project_id  = var.env_project_id
-      invoker_sa  = module.sa_scheduler.member
-    },
-  ]
-
-  eventarc_receiver_bindings = [
-    {
-      project_id = var.env_project_id
-      member     = "serviceAccount:${data.google_storage_project_service_account.gcs_sa.email_address}"
-    },
-  ]
+  # Bindings for the prior cloud-run-job pipeline are gone — see staging/main.tf
+  # for the rationale; the new path uses inline google_cloud_run_v2_service_iam_member.
+  run_invoker_bindings       = []
+  eventarc_receiver_bindings = []
 
   labels = { environment = var.environment, managed_by = "terraform" }
 }
@@ -315,46 +303,95 @@ module "cloud_run_web" {
     # asymmetric keys; when rotation is needed, create a new version with
     # `gcloud kms keys versions create` and bump this path to cryptoKeyVersions/N.
     KMS_SIGNING_KEY_NAME = "${module.kms.signing_key_ids["jwt-signing"]}/cryptoKeyVersions/1"
+    # Document-processing pipeline producer wiring (see staging for rationale).
+    PROCESSING_QUEUE_NAME = module.doc_processing_queue.queue_id
+    PROCESSING_TARGET_URL = "${module.doc_processor_worker.service_url}/process-job"
+    PROCESSING_INVOKER_SA = module.sa_doc_proc.email
   }
 
   labels = { environment = var.environment, managed_by = "terraform" }
 }
 
-module "doc_processing_job" {
-  source = "../../modules/cloud-run-job"
+# ---------------------------------------------------------------------------
+# Document-processing pipeline (see staging/main.tf for the design rationale).
+# ---------------------------------------------------------------------------
+
+module "doc_processing_queue" {
+  source = "../../modules/cloud-tasks-queue"
+
+  project_id  = var.env_project_id
+  environment = var.environment
+  region      = var.region
+  queue_name  = "aistudio-doc-processing"
+
+  # Prod: lift caps slightly to handle a busier fleet, but still bound to
+  # protect the worker from a runaway producer.
+  max_dispatches_per_second = 25
+  max_concurrent_dispatches = 20
+
+  labels = { environment = var.environment, managed_by = "terraform" }
+}
+
+module "doc_processor_worker" {
+  source = "../../modules/cloud-run-worker"
 
   project_id            = var.env_project_id
   environment           = var.environment
   region                = var.region
-  job_name              = "aistudio-doc-processor"
+  service_name          = "aistudio-doc-processor"
   service_account_email = module.sa_doc_proc.email
-  image                 = var.container_image
+  image                 = var.doc_processor_image
   vpc_connector         = module.network.serverless_connector_name
 
-  task_timeout_seconds = 3600
-  retries              = 3
+  request_timeout_seconds = 1800
+  memory                  = "4Gi"
+  cpu                     = "2"
+  max_instances           = 50
 
   secret_refs = {
-    AISTUDIO_MCP_TOKEN = module.secrets.version_refs["aistudio-mcp-token"]
-    DB_PASSWORD        = module.secrets.version_refs["alloydb-initial-password"]
+    DB_PASSWORD = module.secrets.version_refs["alloydb-initial-password"]
   }
 
   env = {
-    DB_HOST    = module.alloydb.primary_private_ip
-    DB_USER    = "postgres"
-    DB_NAME    = "aistudio"
-    GCS_BUCKET = module.storage.buckets["doc-processing-staging"].name
+    DB_HOST              = module.alloydb.primary_private_ip
+    DB_USER              = "postgres"
+    DB_NAME              = "aistudio"
+    GCS_BUCKET           = module.storage.buckets["attachments"].name
+    GOOGLE_CLOUD_PROJECT = var.env_project_id
+    GCP_PROJECT_ID       = var.env_project_id
+    ENVIRONMENT          = var.environment
+    NODE_ENV             = "production"
+    # See staging/main.tf for audience-derivation rationale.
+    PROCESSOR_INVOKER_SA   = module.sa_doc_proc.email
+    CLEANUP_INVOKER_SA     = module.sa_scheduler.email
+    CLEANUP_RETENTION_DAYS = "7"
   }
 
-  eventarc_triggers = [
-    {
-      type       = "gcs"
-      bucket     = module.storage.buckets["attachments"].name
-      event_type = "OBJECT_FINALIZE"
-    }
-  ]
-
   labels = { environment = var.environment, managed_by = "terraform" }
+}
+
+resource "google_cloud_tasks_queue_iam_member" "web_enqueuer" {
+  project  = var.env_project_id
+  location = var.region
+  name     = module.doc_processing_queue.queue_name
+  role     = "roles/cloudtasks.enqueuer"
+  member   = "serviceAccount:${module.sa_web.email}"
+}
+
+resource "google_cloud_run_v2_service_iam_member" "tasks_invoker" {
+  project  = var.env_project_id
+  location = var.region
+  name     = module.doc_processor_worker.service_name
+  role     = "roles/run.invoker"
+  member   = "serviceAccount:${module.sa_doc_proc.email}"
+}
+
+resource "google_cloud_run_v2_service_iam_member" "scheduler_invoker" {
+  project  = var.env_project_id
+  location = var.region
+  name     = module.doc_processor_worker.service_name
+  role     = "roles/run.invoker"
+  member   = "serviceAccount:${module.sa_scheduler.email}"
 }
 
 # ---------------------------------------------------------------------------
@@ -390,11 +427,12 @@ module "scheduler" {
   scheduler_sa_email = module.sa_scheduler.email
 
   jobs = {
-    "doc-processing-nightly" = {
+    "doc-jobs-cleanup-nightly" = {
       schedule    = "0 2 * * *"
       time_zone   = "America/Los_Angeles"
-      target_type = "cloud_run_job"
-      job_name    = module.doc_processing_job.job_name
+      target_type = "url"
+      url         = "${module.doc_processor_worker.service_url}/admin/cleanup-jobs"
+      http_method = "POST"
     }
   }
 
@@ -450,11 +488,10 @@ module "vpc_sc" {
 }
 
 # GCS service agent member — looked up here so module.iam can reference it.
-data "google_storage_project_service_account" "gcs_sa" {
-  project = var.env_project_id
-}
-# Cross-cutting IAM bindings (scheduler → job invoker, GCS SA → eventarc receiver)
-# are now wired via module.iam run_invoker_bindings / eventarc_receiver_bindings above.
+# (The prior google_storage_project_service_account data source + cross-cutting
+# eventarc/run_invoker bindings were removed when the doc-processing pipeline
+# moved from cloud-run-job + Eventarc to Cloud Tasks + cloud-run-worker.
+# IAM grants for the new pipeline are inline next to the worker module.)
 #
 # §6.6: Budget is managed in envs/bootstrap. The breakglass_channel_id output is available
 # from data.terraform_remote_state.bootstrap.outputs.breakglass_channel_id and can be

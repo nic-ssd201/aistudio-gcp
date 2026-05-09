@@ -34,6 +34,15 @@ variable "container_image" {
   description = "Artifact Registry image URI for the web service"
 }
 
+variable "doc_processor_image" {
+  type        = string
+  description = "Artifact Registry image URI for the document-processor Cloud Run worker"
+  # Placeholder so first apply succeeds before the image is built — Terraform
+  # ignores image changes thereafter (cloud-run-worker module sets
+  # lifecycle.ignore_changes), so the real image lands via CI.
+  default = "us-docker.pkg.dev/cloudrun/container/hello"
+}
+
 variable "vpc_sc_access_policy_name" {
   type        = string
   description = "Numeric org-level VPC-SC access policy name"
