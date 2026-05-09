@@ -35,6 +35,20 @@ work rather than user-facing request handling.
 | `service_name` | Cloud Run service name |
 | `service_url` | HTTPS endpoint Cloud Tasks / Scheduler dispatch to |
 
+## VPC egress
+
+The worker is wired with `vpc_access.egress = "ALL_TRAFFIC"`. This routes
+**every** outbound request through the VPC connector — including:
+- AlloyDB connections (the actual reason the connector is required)
+- GCS reads / writes
+- OIDC token verification fetches against `googleapis.com/oauth2/v3/certs`
+
+If you change this to `PRIVATE_RANGES_ONLY` to save VPC connector quota
+(e.g. on a small dev env), the worker can no longer reach Google's public
+JWKS endpoint and **OIDC verification will fail closed on every request**.
+Keep `ALL_TRAFFIC` unless you have a Private Google Access path configured
+end-to-end.
+
 ## Image lifecycle
 
 The module sets `lifecycle.ignore_changes = [image]` on the Cloud Run
