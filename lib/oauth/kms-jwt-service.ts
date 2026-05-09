@@ -152,6 +152,12 @@ export class KmsJwtService {
           ? Buffer.from(response.signature, "base64")
           : Buffer.from(response.signature)
 
+      // Empty Buffer is truthy and would slip past the !response.signature
+      // check above, producing a JWT with an empty signature segment.
+      if (signatureBytes.length === 0) {
+        throw new Error("KMS asymmetricSign returned an empty signature")
+      }
+
       // KMS echoes back the digest CRC it computed on its side; mismatch means
       // the digest got corrupted in flight from us to KMS.
       if (response.verifiedDigestCrc32c !== true) {
@@ -161,14 +167,15 @@ export class KmsJwtService {
       }
       // The signature CRC must match what we computed on the bytes we received;
       // mismatch means corruption from KMS back to us. Real KMS always populates
-      // signatureCrc32c — a missing wrapper signals either a downgraded response
-      // shape or a misbehaving mock; log it so the drift is observable.
+      // signatureCrc32c — fail closed if it's absent, since a downgraded response
+      // shape would otherwise silently bypass integrity verification.
       const expectedSigCrc = readCrc32cValue(response.signatureCrc32c)
       if (expectedSigCrc === null) {
-        log.warn("KMS asymmetricSign omitted signatureCrc32c; integrity check skipped", {
-          kid: this.kid,
-        })
-      } else if (expectedSigCrc !== crc32c(signatureBytes)) {
+        throw new Error(
+          "KMS asymmetricSign omitted signatureCrc32c; cannot verify response integrity",
+        )
+      }
+      if (expectedSigCrc !== crc32c(signatureBytes)) {
         throw new Error(
           "KMS asymmetricSign signatureCrc32c mismatch — response may have been corrupted in transit",
         )
@@ -200,6 +207,9 @@ export class KmsJwtService {
     }
 
     if (this.pendingFetch) {
+      // Followers share the in-flight promise. If the fetch rejects, every
+      // follower receives the same rejection — no per-follower cleanup needed
+      // because the slot is cleared in the leader's finally block.
       return this.pendingFetch
     }
 
@@ -220,14 +230,15 @@ export class KmsJwtService {
     }
 
     // CRC32C integrity check on the PEM bytes — same data-integrity guideline
-    // as asymmetricSign. Real KMS always populates pemCrc32c; a missing wrapper
-    // signals either a downgraded response shape or a misbehaving mock, log it.
+    // as asymmetricSign. Real KMS always populates pemCrc32c; fail closed if
+    // it's absent so a downgraded response shape can't silently bypass the check.
     const expectedPemCrc = readCrc32cValue(response.pemCrc32c)
     if (expectedPemCrc === null) {
-      log.warn("KMS getPublicKey omitted pemCrc32c; integrity check skipped", {
-        kid: this.kid,
-      })
-    } else if (expectedPemCrc !== crc32c(Buffer.from(response.pem, "utf8"))) {
+      throw new Error(
+        "KMS getPublicKey omitted pemCrc32c; cannot verify response integrity",
+      )
+    }
+    if (expectedPemCrc !== crc32c(Buffer.from(response.pem, "utf8"))) {
       throw new Error(
         "KMS getPublicKey pemCrc32c mismatch — response may have been corrupted in transit",
       )

@@ -303,7 +303,11 @@ describe("KmsJwtService", () => {
             publicKeyEncoding: { type: "spki", format: "pem" },
             privateKeyEncoding: { type: "pkcs8", format: "pem" },
           });
-          return [{ pem: publicKey }];
+          // Real KMS always populates pemCrc32c — must include it now that
+          // fetchPublicKey fails closed when the wrapper is missing.
+          return [
+            { pem: publicKey, pemCrc32c: { value: crc32c(Buffer.from(publicKey, "utf8")) } },
+          ];
         },
       };
       const svc = new KmsJwtService(
@@ -313,6 +317,30 @@ describe("KmsJwtService", () => {
         ecClient,
       );
       await expect(svc.getPublicKeyJwk()).rejects.toThrow(/non-RSA/i);
+    });
+
+    it("fails closed when pemCrc32c wrapper is absent", async () => {
+      const downgradedClient = {
+        async asymmetricSign() {
+          return [{ signature: Buffer.alloc(0) }];
+        },
+        async getPublicKey() {
+          const { publicKey } = generateKeyPairSync("rsa", {
+            modulusLength: 2048,
+            privateKeyEncoding: { type: "pkcs8", format: "pem" },
+            publicKeyEncoding: { type: "spki", format: "pem" },
+          });
+          // Drop pemCrc32c entirely (simulates a downgraded KMS response shape).
+          return [{ pem: publicKey }];
+        },
+      };
+      const svc = new KmsJwtService(
+        TEST_KEY_PATH,
+        undefined,
+        // @ts-expect-error
+        downgradedClient,
+      );
+      await expect(svc.getPublicKeyJwk()).rejects.toThrow(/omitted pemCrc32c/i);
     });
 
     it("throws when KMS returns no PEM", async () => {
@@ -406,6 +434,56 @@ describe("KmsJwtService", () => {
         corruptingClient,
       );
       await expect(svc.signJwt({ sub: "u" })).rejects.toThrow(/signatureCrc32c mismatch/i);
+    });
+
+    it("fails closed when signatureCrc32c wrapper is absent", async () => {
+      const downgradedClient = {
+        async asymmetricSign() {
+          return [
+            {
+              signature: Buffer.from("dummy-signature-bytes"),
+              verifiedDigestCrc32c: true,
+              // No signatureCrc32c at all (simulates a downgraded KMS response shape).
+            },
+          ];
+        },
+        async getPublicKey() {
+          return [{ pem: "" }];
+        },
+      };
+      const svc = new KmsJwtService(
+        TEST_KEY_PATH,
+        undefined,
+        // @ts-expect-error
+        downgradedClient,
+      );
+      await expect(svc.signJwt({ sub: "u" })).rejects.toThrow(/omitted signatureCrc32c/i);
+    });
+
+    it("rejects empty signature (Buffer.alloc(0) defense)", async () => {
+      const emptySigClient = {
+        async asymmetricSign() {
+          // signature is a real (truthy) Buffer but zero length — would slip
+          // past the !response.signature check without the explicit length guard.
+          return [
+            {
+              signature: Buffer.alloc(0),
+              verifiedDigestCrc32c: true,
+              signatureCrc32c: { value: crc32c(Buffer.alloc(0)) },
+            },
+          ];
+        },
+        async getPublicKey() {
+          return [{ pem: "" }];
+        },
+      };
+      const svc = new KmsJwtService(
+        TEST_KEY_PATH,
+        undefined,
+        // @ts-expect-error
+        emptySigClient,
+      );
+      await expect(svc.signJwt({ sub: "u" })).rejects.toThrow(/empty signature/i);
     });
   });
 });
