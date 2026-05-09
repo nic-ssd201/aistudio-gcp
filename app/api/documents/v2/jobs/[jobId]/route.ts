@@ -1,7 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { z } from 'zod';
 import { getServerSession } from '@/lib/auth/server-session';
 import { getJobForUser, fetchResultFromGcs } from '@/lib/services/document-job-service';
 import { createLogger, generateRequestId, startTimer } from '@/lib/logger';
+
+// Validate the path param before hitting the DB. document_jobs.id is UUID; an
+// unvalidated jobId would surface as a generic 500 (Postgres throws "invalid
+// input syntax for type uuid") and add log noise from URL probing.
+const JobIdSchema = z.string().uuid();
 
 export async function GET(
   req: NextRequest,
@@ -21,8 +27,13 @@ export async function GET(
     }
     
     const resolvedParams = await params;
-    const jobId = resolvedParams.jobId;
-    
+    const parseResult = JobIdSchema.safeParse(resolvedParams.jobId);
+    if (!parseResult.success) {
+      log.warn('Malformed jobId in path', { jobId: resolvedParams.jobId });
+      return NextResponse.json({ error: 'Invalid jobId' }, { status: 400 });
+    }
+    const jobId = parseResult.data;
+
     // Get job with user ID for security
     const job = await getJobForUser(session.sub, jobId);
     

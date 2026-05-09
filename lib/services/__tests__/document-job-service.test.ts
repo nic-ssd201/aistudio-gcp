@@ -13,7 +13,7 @@
 import { executeQuery } from "@/lib/db/drizzle-client";
 import {
   createDocumentJob,
-  getJobStatus,
+  getJobStatusUnscoped,
   getJobForUser,
   updateJobStatus,
   confirmDocumentUpload,
@@ -128,16 +128,16 @@ describe("createDocumentJob", () => {
   });
 });
 
-describe("getJobStatus (unscoped — internal use)", () => {
+describe("getJobStatusUnscoped (internal use only)", () => {
   it("returns the job when found", async () => {
     mockExecuteQuery.mockResolvedValueOnce([makeRow({ status: "processing" })]);
-    const job = await getJobStatus("job-1");
+    const job = await getJobStatusUnscoped("job-1");
     expect(job?.status).toBe("processing");
   });
 
   it("returns null when no row matches", async () => {
     mockExecuteQuery.mockResolvedValueOnce([]);
-    const job = await getJobStatus("missing-id");
+    const job = await getJobStatusUnscoped("missing-id");
     expect(job).toBeNull();
   });
 });
@@ -244,12 +244,18 @@ describe("updateJobStatus", () => {
 });
 
 describe("confirmDocumentUpload", () => {
-  it("transitions the job to processing with stage=upload_confirmed and progress=10", async () => {
+  it("transitions and returns true when the job is in 'pending'", async () => {
     mockExecuteQuery.mockResolvedValueOnce([{ id: "job-1" }]);
-    await expect(
-      confirmDocumentUpload("job-1", "upload-abc"),
-    ).resolves.toBeUndefined();
+    await expect(confirmDocumentUpload("job-1", "upload-abc")).resolves.toBe(true);
     expect(mockExecuteQuery).toHaveBeenCalledTimes(1);
+  });
+
+  it("returns false (no-op) when the job is no longer in 'pending'", async () => {
+    // The WHERE filters on status='pending'; if the file-processor already
+    // moved the job to 'completed' or 'failed', the UPDATE matches 0 rows
+    // and this is an idempotent no-op rather than a status regression.
+    mockExecuteQuery.mockResolvedValueOnce([]);
+    await expect(confirmDocumentUpload("job-1", "upload-abc")).resolves.toBe(false);
   });
 });
 
@@ -312,6 +318,31 @@ describe("deleteOldJobs", () => {
     mockExecuteQuery.mockResolvedValueOnce([{ id: "j1" }, { id: "j2" }, { id: "j3" }]);
     const n = await deleteOldJobs(7);
     expect(n).toBe(3);
+  });
+
+  it("filters by terminal status (regression detector for the 'don't nuke active rows' guard)", async () => {
+    // Drizzle's `and(...)` returns an opaque chunk; we can introspect its
+    // queryChunks to confirm the WHERE arg is an AND of multiple operands —
+    // a regression to lt(createdAt, cutoff) only would have a strictly
+    // shorter chunk list.
+    let capturedWhereChunks: unknown[] | undefined;
+    const db = {
+      delete: jest.fn().mockReturnThis(),
+      where: jest.fn(function (this: unknown, arg: unknown) {
+        capturedWhereChunks = (arg as { queryChunks?: unknown[] }).queryChunks;
+        return this;
+      }),
+      returning: jest.fn().mockResolvedValue([]),
+    };
+    mockExecuteQuery.mockImplementationOnce(async (cb) => cb(db as never));
+
+    await deleteOldJobs(7);
+
+    expect(capturedWhereChunks).toBeDefined();
+    // and(lt(...), inArray(...)) wraps two operands; a single lt() would
+    // produce a meaningfully shorter chunk array. Using a relative threshold
+    // because Drizzle's exact chunk layout shifts across versions.
+    expect((capturedWhereChunks ?? []).length).toBeGreaterThan(2);
   });
 });
 

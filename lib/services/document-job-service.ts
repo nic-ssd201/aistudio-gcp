@@ -86,7 +86,7 @@ function toDocumentJob(row: Row): DocumentJob {
     progress: row.progress ?? undefined,
     processingStage: row.processingStage ?? undefined,
     result: row.result ?? undefined,
-    resultLocation: (row.resultLocation as "inline" | "gcs" | null) ?? undefined,
+    resultLocation: row.resultLocation ?? undefined,
     resultGcsKey: row.resultGcsKey ?? undefined,
     errorMessage: row.errorMessage ?? undefined,
     createdAt: row.createdAt.toISOString(),
@@ -167,8 +167,13 @@ export async function getJobForUser(
  * sweeps, admin tooling). NEVER call this from a request-scoped path —
  * a stolen jobId would let any authenticated user read the row. Use
  * `getJobForUser(userId, jobId)` from any user-facing route.
+ *
+ * The "Unscoped" suffix is deliberate: the name is meant to scream at
+ * code review. If you're tempted to use this from a route handler, stop.
  */
-export async function getJobStatus(jobId: string): Promise<DocumentJob | null> {
+export async function getJobStatusUnscoped(
+  jobId: string,
+): Promise<DocumentJob | null> {
   const rows = await executeQuery(
     (db) =>
       db
@@ -176,7 +181,7 @@ export async function getJobStatus(jobId: string): Promise<DocumentJob | null> {
         .from(documentJobs)
         .where(eq(documentJobs.id, jobId))
         .limit(1),
-    "getJobStatus",
+    "getJobStatusUnscoped",
   )
   return rows[0] ? toDocumentJob(rows[0]) : null
 }
@@ -245,16 +250,46 @@ export async function updateJobStatus(
   log.info("Job status updated", { jobId, status })
 }
 
+/**
+ * Mark a job as upload-confirmed (status -> 'processing'). Idempotent and
+ * monotone: only fires when the row is currently 'pending', so retrying
+ * confirm-upload after the file-processor has already moved the job to
+ * 'failed' or 'completed' won't silently rewind it back to 'processing'.
+ *
+ * Returns whether the transition actually happened (useful for callers that
+ * want to react differently to an idempotent retry vs. a first-time confirm).
+ */
 export async function confirmDocumentUpload(
   jobId: string,
   uploadId: string,
-): Promise<void> {
+): Promise<boolean> {
   const log = createLogger({ action: "confirmDocumentUpload" })
-  await updateJobStatus(jobId, "processing", {
-    processingStage: "upload_confirmed",
-    progress: 10,
-  })
+
+  const transitioned = await executeQuery(
+    (db) =>
+      db
+        .update(documentJobs)
+        .set({
+          status: "processing",
+          processingStage: "upload_confirmed",
+          progress: 10,
+        })
+        .where(
+          and(eq(documentJobs.id, jobId), eq(documentJobs.status, "pending")),
+        )
+        .returning({ id: documentJobs.id }),
+    "confirmDocumentUpload",
+  )
+
+  if (transitioned.length === 0) {
+    log.info("confirmDocumentUpload no-op (job not in 'pending' state)", {
+      jobId,
+      uploadId,
+    })
+    return false
+  }
   log.info("Document upload confirmed", { jobId, uploadId })
+  return true
 }
 
 /**
@@ -300,6 +335,10 @@ export async function getUserJobs(
   }
 }
 
+/** Hard ceiling on cross-user listings — clamps the requested limit so a
+ *  buggy admin caller can't ask for hundreds of thousands of rows. */
+const MAX_BULK_LIMIT = 500
+
 /**
  * List jobs by status across ALL users. Intended for administrative use
  * (cleanup sweeps, monitoring stuck-in-processing rows). Do NOT expose
@@ -309,6 +348,7 @@ export async function getJobsByStatus(
   status: DocumentJob["status"],
   limit = 50,
 ): Promise<DocumentJob[]> {
+  const safeLimit = Math.min(Math.max(limit, 1), MAX_BULK_LIMIT)
   const rows = await executeQuery(
     (db) =>
       db
@@ -316,7 +356,7 @@ export async function getJobsByStatus(
         .from(documentJobs)
         .where(eq(documentJobs.status, status))
         .orderBy(desc(documentJobs.createdAt))
-        .limit(limit),
+        .limit(safeLimit),
     "getJobsByStatus",
   )
   return rows.map(toDocumentJob)

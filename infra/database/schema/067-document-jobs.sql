@@ -20,6 +20,12 @@ CREATE TABLE IF NOT EXISTS document_jobs (
   -- subject identifiers and callers pass session.sub. Keeping the same shape avoids
   -- a sub->users.id lookup at every call site. Document jobs are short-lived (7-day
   -- TTL in the original; we'll honor that via a periodic cleanup job, not RI).
+  --
+  -- Data-retention note: because there's no FK, user-deletion (GDPR / "delete my
+  -- data") will NOT cascade to this table. deleteOldJobs only sweeps TERMINAL
+  -- statuses, so a user deleted while a job is pending/processing leaves the row
+  -- pointing at their orphaned `sub` indefinitely. The user-deletion path
+  -- (see migration 041 cascade work) needs a separate sweep against this table.
   user_id             VARCHAR(255) NOT NULL,
 
   file_name           TEXT         NOT NULL,
