@@ -10,14 +10,11 @@
  * within Postgres capacity, and we get to reuse the existing Drizzle/migration
  * patterns and test infrastructure.
  *
- * Public API kept stable for callers in app/api/documents/v2/*. Two field-level
- * changes carried through to the DocumentJob type:
- *   resultS3Key           -> resultGcsKey
- *   resultLocation: 's3'  -> 'gcs'        (and 'dynamodb' -> 'inline')
- *
- * `fetchResultFromS3` is renamed to `fetchResultFromGcs` (the old name is
- * kept as a deprecated alias so the route caller can migrate in a separate
- * patch). Both pull from GCS via the existing gcs-client.
+Public API kept stable for callers in app/api/documents/v2/* with three rename-shaped changes:
+ *   resultS3Key            -> resultGcsKey
+ *   resultLocation: 's3'   -> 'gcs'        (and 'dynamodb' -> 'inline')
+ *   fetchResultFromS3      -> fetchResultFromGcs
+ * The route caller is updated in this same PR; no deprecation alias is kept.
  */
 
 import { eq, and, desc, lt, sql } from "drizzle-orm"
@@ -167,6 +164,12 @@ export async function getJobStatus(
  * `completed_at` is auto-set when transitioning to `completed` unless the
  * caller passes it explicitly. The `updated_at` column is maintained by the
  * `update_document_jobs_updated_at` trigger (see migration 067).
+ *
+ * **Authorization:** this function does NOT check ownership — the WHERE matches
+ * solely on jobId. Callers MUST verify `job.userId === session.sub` first
+ * (typically via `getJobStatus(jobId, session.sub)`) before invoking this from
+ * a request-scoped path. Trusted internal callers (file-processor, scheduled
+ * cleanup) are exempt.
  */
 export async function updateJobStatus(
   jobId: string,
@@ -275,6 +278,11 @@ export async function getUserJobs(
   }
 }
 
+/**
+ * List jobs by status across ALL users. Intended for administrative use
+ * (cleanup sweeps, monitoring stuck-in-processing rows). Do NOT expose
+ * directly from a user-facing route — there is no userId scoping.
+ */
 export async function getJobsByStatus(
   status: DocumentJob["status"],
   limit = 50,
@@ -342,8 +350,3 @@ export async function fetchResultFromGcs(
   }
 }
 
-/**
- * @deprecated Use `fetchResultFromGcs`. Preserved temporarily so the
- * /api/documents/v2/jobs/[jobId] route can migrate in a separate patch.
- */
-export const fetchResultFromS3 = fetchResultFromGcs

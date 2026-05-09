@@ -30,8 +30,11 @@ CREATE TABLE IF NOT EXISTS document_jobs (
     CHECK (purpose IN ('chat', 'repository', 'assistant')),
 
   -- ProcessingOptions: extractText, convertToMarkdown, extractImages,
-  -- generateEmbeddings, ocrEnabled. JSONB so future options don't require migrations.
-  processing_options  JSONB        NOT NULL DEFAULT '{}'::jsonb,
+  -- generateEmbeddings, ocrEnabled. JSONB so future options don't require
+  -- migrations. No DEFAULT — the TS type declares 5 required booleans, so a
+  -- '{}'::jsonb default would silently violate the contract; callers always
+  -- supply the object.
+  processing_options  JSONB        NOT NULL,
 
   status              VARCHAR(50)  NOT NULL DEFAULT 'pending'
     CHECK (status IN ('pending', 'processing', 'completed', 'failed')),
@@ -40,8 +43,9 @@ CREATE TABLE IF NOT EXISTS document_jobs (
   processing_stage    VARCHAR(255),
 
   -- Results: either inline (small, fits in JSONB) or in object storage.
-  -- result_location distinguishes the two; result is non-null when 'inline',
-  -- result_gcs_key is non-null when 'gcs'.
+  -- result_location distinguishes the two; the invariant that the right
+  -- companion column is populated for each location is enforced by the
+  -- result_location_consistency CHECK constraint below.
   result              JSONB,
   result_location     VARCHAR(50)
     CHECK (result_location IS NULL OR result_location IN ('inline', 'gcs')),
@@ -51,7 +55,16 @@ CREATE TABLE IF NOT EXISTS document_jobs (
 
   created_at          TIMESTAMP    NOT NULL DEFAULT NOW(),
   completed_at        TIMESTAMP,
-  updated_at          TIMESTAMP    NOT NULL DEFAULT NOW()
+  updated_at          TIMESTAMP    NOT NULL DEFAULT NOW(),
+
+  -- Tie result_location to its companion column. Without this, the
+  -- file-processor (PR B) could silently set result_location='gcs' but forget
+  -- to write result_gcs_key, and the read path would 404 every fetch.
+  CONSTRAINT result_location_consistency CHECK (
+    result_location IS NULL
+    OR (result_location = 'inline' AND result IS NOT NULL)
+    OR (result_location = 'gcs'    AND result_gcs_key IS NOT NULL)
+  )
 );
 
 -- Per-user listing (UI shows recent uploads), newest first.

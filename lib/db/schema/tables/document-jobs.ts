@@ -47,10 +47,12 @@ export const documentJobs = pgTable(
     purpose: varchar("purpose", { length: 50 })
       .notNull()
       .$type<"chat" | "repository" | "assistant">(),
+    // No default — the type promises 5 required booleans, and `'{}'::jsonb`
+    // would silently violate that. Callers (createDocumentJob) always supply
+    // the object; the migration matches by not setting a column DEFAULT either.
     processingOptions: jsonb("processing_options")
       .$type<DocumentJobProcessingOptions>()
-      .notNull()
-      .default(sql`'{}'::jsonb`),
+      .notNull(),
     status: varchar("status", { length: 50 })
       .notNull()
       .default("pending")
@@ -58,9 +60,7 @@ export const documentJobs = pgTable(
     progress: integer("progress"),
     processingStage: varchar("processing_stage", { length: 255 }),
     result: jsonb("result").$type<DocumentJobResult>(),
-    resultLocation: varchar("result_location", { length: 50 }).$type<
-      "inline" | "gcs" | null
-    >(),
+    resultLocation: varchar("result_location", { length: 50 }).$type<"inline" | "gcs">(),
     resultGcsKey: varchar("result_gcs_key", { length: 500 }),
     errorMessage: text("error_message"),
     createdAt: timestamp("created_at").notNull().defaultNow(),

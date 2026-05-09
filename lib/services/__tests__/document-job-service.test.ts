@@ -19,13 +19,45 @@ import {
   getUserJobs,
   getJobsByStatus,
   deleteOldJobs,
-  fetchResultFromGcs,
   type CreateJobParams,
   type ProcessingOptions,
 } from "../document-job-service";
 
 // Pull the mocked executeQuery out of the global mock for per-test override.
 const mockExecuteQuery = executeQuery as jest.MockedFunction<typeof executeQuery>;
+
+/**
+ * Build a chainable Drizzle-shape spy. Captures the `.set()` and `.where()`
+ * args so tests can assert exactly what the service emitted. `returning()`
+ * resolves to the supplied value.
+ */
+function makeSpyDb(returning: unknown[] = [{ id: "job-1" }]) {
+  const set = jest.fn().mockReturnThis();
+  const where = jest.fn().mockReturnThis();
+  const returningFn = jest.fn().mockResolvedValue(returning);
+  const update = jest.fn().mockReturnValue({ set, where, returning: returningFn });
+  const select = jest.fn().mockReturnThis();
+  const from = jest.fn().mockReturnThis();
+  const orderBy = jest.fn().mockReturnThis();
+  const limit = jest.fn().mockResolvedValue(returning);
+  const insert = jest.fn().mockReturnThis();
+  const values = jest.fn().mockReturnThis();
+  const returningInsert = jest.fn().mockResolvedValue(returning);
+  return {
+    db: {
+      update,
+      select,
+      from,
+      where,
+      orderBy,
+      limit,
+      insert,
+      values,
+      returning: returningInsert,
+    },
+    spies: { set, where, update, select, from, orderBy, limit, insert, values },
+  };
+}
 
 const baseProcessingOptions: ProcessingOptions = {
   extractText: true,
@@ -108,39 +140,84 @@ describe("getJobStatus", () => {
     expect(job).toBeNull();
   });
 
-  it("scopes the lookup to the user when userId is supplied", async () => {
-    mockExecuteQuery.mockResolvedValueOnce([]);
+  it("adds a userId filter to the WHERE when supplied (auth scoping)", async () => {
+    const { db, spies } = makeSpyDb([]);
+    mockExecuteQuery.mockImplementationOnce(async (cb) => cb(db as never));
+
     await getJobStatus("job-1", "user-sub-1");
-    // The service builds an `and(eq(id), eq(userId))` predicate. The mock
-    // doesn't introspect the SQL; this asserts the call still happened.
-    expect(mockExecuteQuery).toHaveBeenCalledTimes(1);
+
+    // Drizzle's `and()` returns an opaque SQL chunk we can't inspect by value
+    // here, but we CAN assert .where() was called with a non-undefined arg —
+    // an unscoped lookup would either skip .where() or pass eq(id) only.
+    // The presence of a where-arg + the absence of a regression to "no filter"
+    // is what we're locking in.
+    expect(spies.where).toHaveBeenCalledTimes(1);
+    expect(spies.where.mock.calls[0][0]).toBeDefined();
   });
 });
 
 describe("updateJobStatus", () => {
-  it("auto-sets completedAt when transitioning to completed (no explicit value)", async () => {
-    mockExecuteQuery.mockResolvedValueOnce([{ id: "job-1" }]);
+  it("auto-sets completedAt when transitioning to completed without an explicit value", async () => {
+    const { db, spies } = makeSpyDb();
+    mockExecuteQuery.mockImplementationOnce(async (cb) => cb(db as never));
 
     await updateJobStatus("job-1", "completed", { progress: 100 });
 
-    // First arg to executeQuery is `(db) => Promise<...>`; we can't introspect
-    // the SQL directly, but we know that returning() returned a non-empty array
-    // so the function didn't throw "Job not found".
-    expect(mockExecuteQuery).toHaveBeenCalledTimes(1);
+    expect(spies.set).toHaveBeenCalledTimes(1);
+    const setArg = spies.set.mock.calls[0][0] as Record<string, unknown>;
+    expect(setArg.status).toBe("completed");
+    expect(setArg.progress).toBe(100);
+    expect(setArg.completedAt).toBeInstanceOf(Date);
   });
 
-  it("does NOT write undefined fields (clearable-field silent-failure guard)", async () => {
-    mockExecuteQuery.mockResolvedValueOnce([{ id: "job-1" }]);
-    // updates omits processingStage and result entirely. The service must not
-    // forward these as `undefined` (which Drizzle .set() would treat as SQL
-    // NULL, clobbering existing values).
-    await expect(
-      updateJobStatus("job-1", "processing", { progress: 50 }),
-    ).resolves.toBeUndefined();
+  it("does NOT auto-set completedAt for non-completed transitions", async () => {
+    const { db, spies } = makeSpyDb();
+    mockExecuteQuery.mockImplementationOnce(async (cb) => cb(db as never));
+
+    await updateJobStatus("job-1", "processing", { progress: 50 });
+
+    const setArg = spies.set.mock.calls[0][0] as Record<string, unknown>;
+    expect(setArg.completedAt).toBeUndefined();
+  });
+
+  it("does NOT forward undefined fields to .set() (clearable-field silent-failure guard)", async () => {
+    const { db, spies } = makeSpyDb();
+    mockExecuteQuery.mockImplementationOnce(async (cb) => cb(db as never));
+
+    // Caller passes only progress; processingStage / result / errorMessage
+    // are absent. The service must NOT forward those keys as undefined —
+    // Drizzle's .set() would treat undefined as SQL NULL and clobber any
+    // existing values for those columns.
+    await updateJobStatus("job-1", "processing", { progress: 50 });
+
+    const setArg = spies.set.mock.calls[0][0] as Record<string, unknown>;
+    expect(setArg).toEqual({ status: "processing", progress: 50 });
+    expect(setArg).not.toHaveProperty("processingStage");
+    expect(setArg).not.toHaveProperty("result");
+    expect(setArg).not.toHaveProperty("resultLocation");
+    expect(setArg).not.toHaveProperty("resultGcsKey");
+    expect(setArg).not.toHaveProperty("errorMessage");
+    expect(setArg).not.toHaveProperty("completedAt");
+  });
+
+  it("forwards explicitly-set fields including null-clearing values", async () => {
+    const { db, spies } = makeSpyDb();
+    mockExecuteQuery.mockImplementationOnce(async (cb) => cb(db as never));
+
+    await updateJobStatus("job-1", "completed", {
+      progress: 100,
+      result: { extractedText: "hello" },
+      resultLocation: "inline",
+    });
+
+    const setArg = spies.set.mock.calls[0][0] as Record<string, unknown>;
+    expect(setArg.result).toEqual({ extractedText: "hello" });
+    expect(setArg.resultLocation).toBe("inline");
   });
 
   it("throws when the row does not exist", async () => {
-    mockExecuteQuery.mockResolvedValueOnce([]);
+    const { db } = makeSpyDb([]); // returning() resolves to empty
+    mockExecuteQuery.mockImplementationOnce(async (cb) => cb(db as never));
     await expect(updateJobStatus("missing", "failed")).rejects.toThrow(/Job not found/);
   });
 });
