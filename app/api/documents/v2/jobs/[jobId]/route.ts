@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getServerSession } from '@/lib/auth/server-session';
-import { getJobStatus, fetchResultFromS3 } from '@/lib/services/document-job-service';
+import { getJobStatus, fetchResultFromGcs } from '@/lib/services/document-job-service';
 import { createLogger, generateRequestId, startTimer } from '@/lib/logger';
 
 export async function GET(
@@ -31,13 +31,15 @@ export async function GET(
       return NextResponse.json({ error: 'Job not found' }, { status: 404 });
     }
     
-    // Check if results are in S3 (for large results)
+    // Large results live in GCS rather than inline JSONB. The file-processor
+    // sets resultLocation = 'gcs' + resultGcsKey when the extracted output
+    // exceeds the inline threshold; small results stay in `job.result`.
     let result = job.result;
-    if (job.resultLocation === 's3' && job.resultS3Key) {
+    if (job.resultLocation === 'gcs' && job.resultGcsKey) {
       try {
-        result = await fetchResultFromS3(job.resultS3Key);
+        result = await fetchResultFromGcs(job.resultGcsKey);
       } catch (error) {
-        log.error('Failed to fetch result from S3', { error, jobId, s3Key: job.resultS3Key });
+        log.error('Failed to fetch result from GCS', { error, jobId, gcsKey: job.resultGcsKey });
         // Continue with undefined result rather than failing the request
         result = undefined;
       }

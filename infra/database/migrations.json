@@ -61,6 +61,7 @@
     "063-prompt-library-settings.sql",
     "064-add-voice-mode-tool.sql",
     "065-agent-telemetry-tables.sql",
-    "066-rename-cognito-passthrough-to-session-passthrough.sql"
+    "066-rename-cognito-passthrough-to-session-passthrough.sql",
+    "067-document-jobs.sql"
   ]
 }
