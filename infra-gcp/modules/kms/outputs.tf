@@ -19,9 +19,11 @@ output "key_names" {
 }
 
 # Asymmetric signing keys — same shape as `key_ids` but for signing keys only.
-# Note: the application typically wants the cryptoKeyVersion path (the active
-# version is auto-managed by KMS), which the consumer can derive as
-# `${signing_key_ids[name]}/cryptoKeyVersions/<v>` or fetch via the KMS API.
+# Note: callers typically need the cryptoKeyVersion path (the actual sign target),
+# which they construct as `${signing_key_ids[name]}/cryptoKeyVersions/<N>`. KMS does
+# NOT auto-manage the version for asymmetric keys (no auto-rotation); the consumer
+# pins the version explicitly and bumps it manually after creating a new version
+# via gcloud or the API.
 output "signing_key_ids" {
   description = "Map of signing-key names to fully-qualified cryptoKey IDs"
   value       = { for k, v in google_kms_crypto_key.signing_keys : k => v.id }

@@ -160,9 +160,15 @@ export class KmsJwtService {
         )
       }
       // The signature CRC must match what we computed on the bytes we received;
-      // mismatch means corruption from KMS back to us.
+      // mismatch means corruption from KMS back to us. Real KMS always populates
+      // signatureCrc32c — a missing wrapper signals either a downgraded response
+      // shape or a misbehaving mock; log it so the drift is observable.
       const expectedSigCrc = readCrc32cValue(response.signatureCrc32c)
-      if (expectedSigCrc !== null && expectedSigCrc !== crc32c(signatureBytes)) {
+      if (expectedSigCrc === null) {
+        log.warn("KMS asymmetricSign omitted signatureCrc32c; integrity check skipped", {
+          kid: this.kid,
+        })
+      } else if (expectedSigCrc !== crc32c(signatureBytes)) {
         throw new Error(
           "KMS asymmetricSign signatureCrc32c mismatch — response may have been corrupted in transit",
         )
@@ -214,10 +220,14 @@ export class KmsJwtService {
     }
 
     // CRC32C integrity check on the PEM bytes — same data-integrity guideline
-    // as asymmetricSign: KMS includes pemCrc32c on the response so we can
-    // detect corruption between KMS and us.
+    // as asymmetricSign. Real KMS always populates pemCrc32c; a missing wrapper
+    // signals either a downgraded response shape or a misbehaving mock, log it.
     const expectedPemCrc = readCrc32cValue(response.pemCrc32c)
-    if (expectedPemCrc !== null && expectedPemCrc !== crc32c(Buffer.from(response.pem, "utf8"))) {
+    if (expectedPemCrc === null) {
+      log.warn("KMS getPublicKey omitted pemCrc32c; integrity check skipped", {
+        kid: this.kid,
+      })
+    } else if (expectedPemCrc !== crc32c(Buffer.from(response.pem, "utf8"))) {
       throw new Error(
         "KMS getPublicKey pemCrc32c mismatch — response may have been corrupted in transit",
       )
