@@ -293,6 +293,7 @@ module "cloud_run_web" {
     IDP_TENANT_ID               = module.identity_platform.tenant_id
     VERTEX_MODEL_ARMOR_TEMPLATE = module.vertex.model_armor_template_names["aistudio-default"]
     NODE_ENV                    = "production"
+    GOOGLE_CLOUD_PROJECT        = var.env_project_id
     GCP_PROJECT_ID              = var.env_project_id
     ENVIRONMENT                 = var.environment
   }
