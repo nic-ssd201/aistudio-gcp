@@ -34,6 +34,12 @@ variable "container_image" {
   description = "Artifact Registry image URI for the web service (e.g. us-west1-docker.pkg.dev/aistudio-shared/aistudio/aistudio-web:dev-latest)"
 }
 
+variable "doc_processor_image" {
+  type        = string
+  description = "Artifact Registry image URI for the document-processor Cloud Run worker"
+  default     = "us-docker.pkg.dev/cloudrun/container/hello"
+}
+
 variable "vpc_sc_access_policy_name" {
   type        = string
   description = "Numeric org-level VPC-SC access policy name (obtained from gcloud access-context-manager policies list)"

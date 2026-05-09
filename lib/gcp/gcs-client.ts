@@ -16,6 +16,18 @@ import { createError } from "@/lib/error-utils"
 import { Settings } from "@/lib/settings-manager"
 import type { Readable } from "node:stream"
 
+/**
+ * Build the GCS object key under which uploadServerProxyDocument writes
+ * a server-proxy upload. Exported so the document-processor can compute
+ * the same key when reading back without duplicating the regex (the prior
+ * shape was reconstructed inline in the processor; if either side drifted,
+ * GET silently 404'd). Single source of truth.
+ */
+export function getUploadGcsKey(jobId: string, fileName: string): string {
+  const sanitizedFileName = fileName.replace(/[^a-zA-Z0-9._-]/g, "_")
+  return `v2/uploads/${jobId}/${sanitizedFileName}`
+}
+
 // Cache GCS config to avoid repeated async calls
 let gcsConfigCache: { bucket: string | null; region: string | null } | null = null
 let gcsClientCache: Storage | null = null
@@ -402,6 +414,41 @@ export async function extractKeyFromUrl(url: string): Promise<string | null> {
   }
 }
 
+/**
+ * Upload bytes to GCS at an explicit, caller-supplied key. Use when you
+ * need the key to be deterministic (e.g. a result blob keyed by jobId
+ * that should overwrite on re-process) — uploadDocument and
+ * uploadServerProxyDocument generate their own key shapes.
+ */
+export async function uploadDocumentAtKey({
+  key,
+  fileBuffer,
+  contentType,
+  metadata = {},
+}: {
+  key: string
+  fileBuffer: Buffer | Uint8Array | string
+  contentType: string
+  metadata?: Record<string, string>
+}): Promise<{ key: string; bucket: string }> {
+  const config = await getGCSConfig()
+  const bucketName = config.bucket!
+
+  await ensureDocumentsBucket()
+
+  const gcsClient = await getGCSClient()
+  const bucket = gcsClient.bucket(bucketName)
+  const file = bucket.file(key)
+
+  await file.save(fileBuffer, {
+    contentType,
+    resumable: false,
+    metadata: { metadata },
+  })
+
+  return { key, bucket: bucketName }
+}
+
 // Upload a document for server-proxy (stable key based on jobId)
 export async function uploadServerProxyDocument({
   jobId,
@@ -417,9 +464,9 @@ export async function uploadServerProxyDocument({
   const config = await getGCSConfig()
   const bucketName = config.bucket!
 
-  // Sanitize filename (replace spaces with underscores)
-  const sanitizedFileName = fileName.replace(/[^a-zA-Z0-9._-]/g, '_')
-  const key = `v2/uploads/${jobId}/${sanitizedFileName}`
+  const key = getUploadGcsKey(jobId, fileName)
+  // Recompute the sanitized name for the return shape (callers consume it).
+  const sanitizedFileName = fileName.replace(/[^a-zA-Z0-9._-]/g, "_")
 
   await ensureDocumentsBucket()
 
