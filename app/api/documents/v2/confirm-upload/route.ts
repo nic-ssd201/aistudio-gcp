@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getServerSession } from '@/lib/auth/server-session';
-import { confirmDocumentUpload, getJobStatus } from '@/lib/services/document-job-service';
+import { confirmDocumentUpload, getJobForUser } from '@/lib/services/document-job-service';
 import { sendToProcessingQueue } from '@/lib/gcp/processing-queue';
 import { getDocumentUploadBucketName, resolveUploadedDocumentKey } from '@/lib/services/document-upload-service';
 import { createLogger, generateRequestId, startTimer } from '@/lib/logger';
@@ -29,14 +29,14 @@ export async function POST(req: NextRequest) {
     log.info('Confirming upload', { uploadId, jobId, userId: session.sub });
     
     // Get job details to verify ownership and get processing info
-    const job = await getJobStatus(jobId, session.sub);
+    const job = await getJobForUser(session.sub, jobId);
     if (!job) {
       log.warn('Job not found for confirmation', { jobId, userId: session.sub });
       return NextResponse.json({ error: 'Job not found' }, { status: 404 });
     }
     
     // Confirm upload in job tracking
-    await confirmDocumentUpload(jobId, uploadId);
+    await confirmDocumentUpload(session.sub, jobId, uploadId);
     
     const storageKey = resolveUploadedDocumentKey({ uploadId, jobId, fileName: job.fileName });
     const bucketName = getDocumentUploadBucketName();

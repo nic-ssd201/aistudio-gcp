@@ -7,11 +7,11 @@ jest.mock('@aws-sdk/client-sqs');
 jest.mock('@aws-sdk/s3-request-presigner');
 
 // NOW import the modules that use the AWS SDK
-import { 
-  createDocumentJob, 
-  getJobStatus, 
+import {
+  createDocumentJob,
+  getJobStatusUnscoped,
   updateJobStatus,
-  confirmDocumentUpload 
+  confirmDocumentUpload,
 } from '@/lib/services/document-job-service';
 import { generatePresignedUrl, generateMultipartUrls } from '@/lib/aws/document-upload';
 import { sendToProcessingQueue } from '@/lib/gcp/processing-queue';
@@ -131,7 +131,7 @@ describe.skip('Document Job Service', () => {
         Items: [mockJobData],
       });
 
-      const job = await getJobStatus('job-123', 'user-123');
+      const job = await getJobStatusUnscoped('job-123');
 
       expect(job).toBeTruthy();
       expect(job?.id).toBe('job-123');
@@ -142,7 +142,7 @@ describe.skip('Document Job Service', () => {
     it('should return null for non-existent job', async () => {
       mockDynamoDBClient.send.mockResolvedValue({ Items: [] });
 
-      const job = await getJobStatus('non-existent-job', 'user-123');
+      const job = await getJobStatusUnscoped('non-existent-job');
 
       expect(job).toBeNull();
     });
@@ -250,7 +250,7 @@ describe.skip('Integration Tests', () => {
     expect(uploadConfig.url).toBe('https://upload-url.com');
 
     // 3. Confirm upload
-    await confirmDocumentUpload(job.id, uploadConfig.uploadId);
+    await confirmDocumentUpload(mockJobParams.userId, job.id, uploadConfig.uploadId);
 
     // 4. Trigger processing
     await sendToProcessingQueue({

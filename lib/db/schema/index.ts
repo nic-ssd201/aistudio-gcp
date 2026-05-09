@@ -148,6 +148,11 @@ export * from "./tables/api-keys";
 export * from "./tables/api-key-usage";
 
 // ============================================
+// Document Processing Pipeline
+// ============================================
+export * from "./tables/document-jobs";
+
+// ============================================
 // OAuth2/OIDC Provider (#686)
 // ============================================
 export * from "./tables/oauth-clients";

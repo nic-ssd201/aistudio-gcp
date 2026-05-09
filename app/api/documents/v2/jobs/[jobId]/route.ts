@@ -1,7 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { z } from 'zod';
 import { getServerSession } from '@/lib/auth/server-session';
-import { getJobStatus, fetchResultFromS3 } from '@/lib/services/document-job-service';
+import { getJobForUser, fetchResultFromGcs } from '@/lib/services/document-job-service';
 import { createLogger, generateRequestId, startTimer } from '@/lib/logger';
+
+// Validate the path param before hitting the DB. document_jobs.id is UUID; an
+// unvalidated jobId would surface as a generic 500 (Postgres throws "invalid
+// input syntax for type uuid") and add log noise from URL probing.
+const JobIdSchema = z.string().uuid();
 
 export async function GET(
   req: NextRequest,
@@ -21,23 +27,30 @@ export async function GET(
     }
     
     const resolvedParams = await params;
-    const jobId = resolvedParams.jobId;
-    
+    const parseResult = JobIdSchema.safeParse(resolvedParams.jobId);
+    if (!parseResult.success) {
+      log.warn('Malformed jobId in path', { jobId: resolvedParams.jobId });
+      return NextResponse.json({ error: 'Invalid jobId' }, { status: 400 });
+    }
+    const jobId = parseResult.data;
+
     // Get job with user ID for security
-    const job = await getJobStatus(jobId, session.sub);
+    const job = await getJobForUser(session.sub, jobId);
     
     if (!job) {
       log.warn('Job not found', { jobId, userId: session.sub });
       return NextResponse.json({ error: 'Job not found' }, { status: 404 });
     }
     
-    // Check if results are in S3 (for large results)
+    // Large results live in GCS rather than inline JSONB. The file-processor
+    // sets resultLocation = 'gcs' + resultGcsKey when the extracted output
+    // exceeds the inline threshold; small results stay in `job.result`.
     let result = job.result;
-    if (job.resultLocation === 's3' && job.resultS3Key) {
+    if (job.resultLocation === 'gcs' && job.resultGcsKey) {
       try {
-        result = await fetchResultFromS3(job.resultS3Key);
+        result = await fetchResultFromGcs(job.resultGcsKey);
       } catch (error) {
-        log.error('Failed to fetch result from S3', { error, jobId, s3Key: job.resultS3Key });
+        log.error('Failed to fetch result from GCS', { error, jobId, gcsKey: job.resultGcsKey });
         // Continue with undefined result rather than failing the request
         result = undefined;
       }
