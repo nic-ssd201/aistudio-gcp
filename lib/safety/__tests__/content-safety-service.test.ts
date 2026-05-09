@@ -6,11 +6,11 @@
 
 import { ContentSafetyService } from '../content-safety-service';
 
-// Mock AWS SDK clients
+// Mock AWS SDK clients still in package.json (the dynamodb mock was
+// removed alongside @aws-sdk/client-dynamodb in PR C — dead scaffolding).
 jest.mock('@aws-sdk/client-bedrock-runtime');
 jest.mock('@aws-sdk/client-sns');
 jest.mock('@aws-sdk/client-comprehend');
-jest.mock('@aws-sdk/client-dynamodb');
 
 describe('ContentSafetyService', () => {
   let service: ContentSafetyService;

@@ -6,19 +6,11 @@
 
 import { PIITokenizationService } from '../pii-tokenization-service';
 
-// Mock AWS SDK clients
+// Mock AWS SDK client (the comprehend dep is still in package.json; the
+// dynamodb mock was removed alongside @aws-sdk/client-dynamodb in PR C
+// since neither this test nor production code actually exercises it —
+// the imports + dead MockBatchGetItemInput interface were stale scaffolding).
 jest.mock('@aws-sdk/client-comprehend');
-jest.mock('@aws-sdk/client-dynamodb');
-
-import { DynamoDBClient, BatchGetItemCommand } from '@aws-sdk/client-dynamodb';
-
-interface MockBatchGetItemInput {
-  RequestItems: {
-    [tableName: string]: {
-      Keys: Array<{ token: { S: string }; sessionId: { S: string } }>;
-    };
-  };
-}
 
 describe('PIITokenizationService', () => {
   let service: PIITokenizationService;

@@ -203,7 +203,7 @@ async function uploadHandler(req: NextRequest) {
       userId: session.sub
     });
 
-    // Step 1: Create job in DynamoDB
+    // Step 1: Create job (Postgres-backed since PR A; document_jobs table)
     const job = await createDocumentJob({
       fileName,
       fileSize,
