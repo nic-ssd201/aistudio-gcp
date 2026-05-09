@@ -232,7 +232,7 @@ async function uploadHandler(req: NextRequest) {
     // We intentionally use job.id for both jobId and uploadId here. The confirmDocumentUpload
     // function accepts both parameters to maintain API compatibility with the presigned URL flow,
     // but in this server-side upload pattern, they are the same identifier.
-    await confirmDocumentUpload(job.id, job.id);
+    await confirmDocumentUpload(session.sub, job.id, job.id);
 
     // Step 4: Send to processing queue (matching confirm-upload flow)
     const bucketName = getActiveStorageBucketName();

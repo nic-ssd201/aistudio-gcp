@@ -36,7 +36,7 @@ export async function POST(req: NextRequest) {
     }
     
     // Confirm upload in job tracking
-    await confirmDocumentUpload(jobId, uploadId);
+    await confirmDocumentUpload(session.sub, jobId, uploadId);
     
     const storageKey = resolveUploadedDocumentKey({ uploadId, jobId, fileName: job.fileName });
     const bucketName = getDocumentUploadBucketName();

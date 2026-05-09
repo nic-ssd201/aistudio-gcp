@@ -250,7 +250,7 @@ describe.skip('Integration Tests', () => {
     expect(uploadConfig.url).toBe('https://upload-url.com');
 
     // 3. Confirm upload
-    await confirmDocumentUpload(job.id, uploadConfig.uploadId);
+    await confirmDocumentUpload(mockJobParams.userId, job.id, uploadConfig.uploadId);
 
     // 4. Trigger processing
     await sendToProcessingQueue({

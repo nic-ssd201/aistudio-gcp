@@ -59,7 +59,7 @@ export async function POST(req: NextRequest) {
        }
 
        // Confirm upload in job tracking
-    await confirmDocumentUpload(jobId, uploadId);
+    await confirmDocumentUpload(session.sub, jobId, uploadId);
 
        // Generate storage key (provider-agnostic)
     const storageKey = `uploads/${jobId}/${sanitizedFileName}`;

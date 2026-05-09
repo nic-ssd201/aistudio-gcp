@@ -10,7 +10,8 @@
  * within Postgres capacity, and we get to reuse the existing Drizzle/migration
  * patterns and test infrastructure.
  *
-Public API kept stable for callers in app/api/documents/v2/* with three rename-shaped changes:
+ * Public API kept stable for callers in app/api/documents/v2/* with three
+ * rename-shaped changes:
  *   resultS3Key            -> resultGcsKey
  *   resultLocation: 's3'   -> 'gcs'        (and 'dynamodb' -> 'inline')
  *   fetchResultFromS3      -> fetchResultFromGcs
@@ -251,15 +252,20 @@ export async function updateJobStatus(
 }
 
 /**
- * Mark a job as upload-confirmed (status -> 'processing'). Idempotent and
- * monotone: only fires when the row is currently 'pending', so retrying
- * confirm-upload after the file-processor has already moved the job to
- * 'failed' or 'completed' won't silently rewind it back to 'processing'.
+ * Mark a job as upload-confirmed (status -> 'processing'). The WHERE filters
+ * on ALL THREE of (id, userId, status='pending'), so:
+ *   - a stolen jobId cannot transition another user's row (defense-in-depth
+ *     even though current callers also `getJobForUser` first; a future caller
+ *     that forgets the read still can't escape ownership scoping);
+ *   - retrying after the file-processor has moved the row to 'failed' or
+ *     'completed' is an idempotent no-op rather than a silent regression
+ *     back to 'processing'.
  *
  * Returns whether the transition actually happened (useful for callers that
  * want to react differently to an idempotent retry vs. a first-time confirm).
  */
 export async function confirmDocumentUpload(
+  userId: string,
   jobId: string,
   uploadId: string,
 ): Promise<boolean> {
@@ -275,14 +281,18 @@ export async function confirmDocumentUpload(
           progress: 10,
         })
         .where(
-          and(eq(documentJobs.id, jobId), eq(documentJobs.status, "pending")),
+          and(
+            eq(documentJobs.id, jobId),
+            eq(documentJobs.userId, userId),
+            eq(documentJobs.status, "pending"),
+          ),
         )
         .returning({ id: documentJobs.id }),
     "confirmDocumentUpload",
   )
 
   if (transitioned.length === 0) {
-    log.info("confirmDocumentUpload no-op (job not in 'pending' state)", {
+    log.info("confirmDocumentUpload no-op (no matching pending job for user)", {
       jobId,
       uploadId,
     })
@@ -307,9 +317,19 @@ export async function getUserJobs(
 ): Promise<{ jobs: DocumentJob[]; nextCursor?: JobsCursor }> {
   const conditions = [eq(documentJobs.userId, userId)]
   if (cursor) {
+    // Validate the createdAt cursor before letting it reach Postgres — a bad
+    // string would otherwise surface as "invalid input syntax for type
+    // timestamp" via a generic 500. Route handlers also validate at the
+    // boundary, but defending here too keeps internal callers safe.
+    const cursorDate = new Date(cursor.createdAt)
+    if (Number.isNaN(cursorDate.getTime())) {
+      throw new TypeError(
+        `getUserJobs: cursor.createdAt is not a parseable date — got "${cursor.createdAt}"`,
+      )
+    }
     // (created_at, id) < (cursor.createdAt, cursor.id) under DESC ordering.
     conditions.push(
-      sql`(${documentJobs.createdAt}, ${documentJobs.id}) < (${new Date(cursor.createdAt)}, ${cursor.id})`,
+      sql`(${documentJobs.createdAt}, ${documentJobs.id}) < (${cursorDate}, ${cursor.id})`,
     )
   }
 
@@ -416,9 +436,11 @@ export async function fetchResultFromGcs(
       gcsKey,
       error: error instanceof Error ? error.message : String(error),
     })
-    throw new Error(
-      `Failed to fetch result from GCS: ${error instanceof Error ? error.message : "Unknown error"}`,
-    )
+    // Preserve cause chain so downstream catchers / log handlers can inspect
+    // the original GCS error (NoSuchKey, PermissionDenied, network blip, …).
+    throw new Error(`Failed to fetch result from GCS: ${gcsKey}`, {
+      cause: error,
+    })
   }
 }
 
