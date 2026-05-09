@@ -257,7 +257,16 @@ async function handleCleanupJobs(
     return
   }
 
-  const days = Number.parseInt(process.env.CLEANUP_RETENTION_DAYS ?? "7", 10)
+  // Fail-loud on garbage input rather than silently sweeping nothing
+  // (parseInt("abc") = NaN; deleteOldJobs(NaN) matches zero rows).
+  const raw = process.env.CLEANUP_RETENTION_DAYS ?? "7"
+  const parsed = Number.parseInt(raw, 10)
+  const days = Number.isFinite(parsed) && parsed > 0 ? parsed : 7
+  if (parsed !== days) {
+    reqLog.warn("CLEANUP_RETENTION_DAYS is not a positive integer; defaulting to 7", {
+      raw,
+    })
+  }
 
   try {
     const deleted = await deleteOldJobs(days)
@@ -382,3 +391,29 @@ const server = createServer((req, res) => {
 server.listen(PORT, () => {
   log.info("document-processor listening", { port: PORT })
 })
+
+// Cloud Run sends SIGTERM on revision swap and waits up to 10s before
+// SIGKILL. server.close() stops accepting new connections and waits for
+// in-flight requests to drain — so a job mid-extraction either completes
+// (if it fits in the grace window) or surfaces as a 5xx that Cloud Tasks
+// will retry against the new revision, rather than getting silently truncated.
+function gracefulShutdown(signal: string): void {
+  log.info("Received shutdown signal; draining", { signal })
+  server.close((err) => {
+    if (err) {
+      log.error("server.close errored during shutdown", { error: err.message })
+      process.exit(1)
+    }
+    log.info("Server drained; exiting")
+    process.exit(0)
+  })
+  // Belt-and-suspenders: if a request hangs past Cloud Run's 10s SIGKILL
+  // budget, force-exit at 9s so we lose the request rather than getting
+  // hard-killed mid-write.
+  setTimeout(() => {
+    log.warn("Drain timeout exceeded; forcing exit")
+    process.exit(1)
+  }, 9000).unref()
+}
+process.on("SIGTERM", () => gracefulShutdown("SIGTERM"))
+process.on("SIGINT", () => gracefulShutdown("SIGINT"))

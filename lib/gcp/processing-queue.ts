@@ -97,19 +97,7 @@ export interface ProcessingJobMessage {
   }
 }
 
-interface SendOpts {
-  /** Optional task name suffix for idempotency. Cloud Tasks dedupes by name within ~1h. */
-  taskNameSuffix?: string
-  /** Delay in seconds before the task becomes eligible for dispatch. Default: 0. */
-  delaySeconds?: number
-  /** Mark as priority (no delay even when defaultDelay env override is set). */
-  priority?: boolean
-}
-
-async function enqueueTask(
-  message: ProcessingJobMessage,
-  opts: SendOpts = {},
-): Promise<void> {
+async function enqueueTask(message: ProcessingJobMessage): Promise<void> {
   const queueQualified = requireEnv(
     "PROCESSING_QUEUE_NAME",
     "projects/test/locations/us-test/queues/test-queue",
@@ -126,26 +114,17 @@ async function enqueueTask(
   const { project, location, queue } = parseQueuePath(queueQualified)
   const parent = getClient().queuePath(project, location, queue)
 
-  // Cloud Tasks supports task names for dedup. We use jobId+suffix so a
-  // double-confirm-upload from a retried client doesn't fire the processor
-  // twice for the same job. Cloud Tasks remembers names for ~1h after dispatch.
-  const suffix = opts.taskNameSuffix ?? "v1"
-  const taskName = `${parent}/tasks/${message.jobId}-${suffix}`
-
-  const scheduleTime =
-    !opts.priority && opts.delaySeconds && opts.delaySeconds > 0
-      ? {
-          seconds:
-            Math.floor(Date.now() / 1000) + Math.floor(opts.delaySeconds),
-        }
-      : undefined
+  // Cloud Tasks supports task names for dedup. The `-v1` suffix is a hook
+  // for future schema changes (bump if the payload shape changes so old
+  // and new dispatches don't collide in the dedup window). Cloud Tasks
+  // remembers names for ~1h after dispatch.
+  const taskName = `${parent}/tasks/${message.jobId}-v1`
 
   try {
     await getClient().createTask({
       parent,
       task: {
         name: taskName,
-        scheduleTime,
         httpRequest: {
           url: targetUrl,
           httpMethod: "POST",
@@ -165,10 +144,7 @@ async function enqueueTask(
     // "JaneDoe-IEP.pdf"). The jobId is sufficient to correlate with the
     // document_jobs row, where filename is stored once with column-level
     // access control rather than spread across log indices.
-    log.info("Enqueued processing task", {
-      jobId: message.jobId,
-      delaySeconds: opts.delaySeconds ?? 0,
-    })
+    log.info("Enqueued processing task", { jobId: message.jobId })
   } catch (error) {
     // ALREADY_EXISTS: Cloud Tasks rejected because we already enqueued this
     // exact name within the dedup window. Treat as success — the task is in
