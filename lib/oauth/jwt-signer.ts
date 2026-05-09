@@ -1,7 +1,13 @@
 /**
  * JWT Signer Factory
- * KMS signer when KMS_SIGNING_KEY_ARN is set, local RSA fallback otherwise.
- * Part of Issue #686 - MCP Server + OAuth2/OIDC Provider (Phase 3)
+ *
+ * Returns a Cloud KMS-backed signer when KMS_SIGNING_KEY_NAME is set
+ * (production / staging), or an in-process RSA keypair signer for local dev.
+ *
+ * KMS_SIGNING_KEY_NAME must be a fully-qualified KMS cryptoKeyVersion path:
+ *   projects/<P>/locations/<L>/keyRings/<R>/cryptoKeys/<K>/cryptoKeyVersions/<V>
+ *
+ * Part of Issue #686 — MCP Server + OAuth2/OIDC Provider (Phase 3).
  */
 
 import { createLogger } from "@/lib/logger"
@@ -93,13 +99,28 @@ export async function getJwtSigner(): Promise<JwtSigner> {
   if (signerInstance) return signerInstance
 
   const log = createLogger({ action: "getJwtSigner" })
-  const kmsArn = process.env.KMS_SIGNING_KEY_ARN
+  // KMS_SIGNING_KEY_NAME is the canonical name (fully-qualified KMS cryptoKeyVersion path).
+  // KMS_SIGNING_KEY_ARN is accepted as an alias for back-compat with any pre-rename
+  // configs, but new deployments should use KMS_SIGNING_KEY_NAME.
+  const kmsKeyName =
+    process.env.KMS_SIGNING_KEY_NAME ?? process.env.KMS_SIGNING_KEY_ARN
 
-  if (kmsArn) {
-    log.info("Using KMS JWT signer", { keyArn: kmsArn.substring(0, 40) + "..." })
+  if (kmsKeyName) {
+    if (!process.env.KMS_SIGNING_KEY_NAME && process.env.KMS_SIGNING_KEY_ARN) {
+      // Surface stale configs in logs so they can be migrated. The fallback works,
+      // but ARN naming is misleading on GCP (no ARNs, just resource paths).
+      log.warn(
+        "Using deprecated KMS_SIGNING_KEY_ARN env var; rename to KMS_SIGNING_KEY_NAME — back-compat may be removed in a future release",
+      )
+    }
+    log.info("Using KMS JWT signer", {
+      keyName: kmsKeyName.substring(0, 80) + (kmsKeyName.length > 80 ? "..." : ""),
+    })
     const { KmsJwtService } = await import("./kms-jwt-service")
-    const kid = process.env.KMS_SIGNING_KEY_KID ?? `kms-${Date.now()}`
-    signerInstance = new KmsJwtService(kmsArn, kid)
+    // kid is derived inside KmsJwtService from the key path; KMS_SIGNING_KEY_KID is
+    // honored as an explicit override only.
+    const kid = process.env.KMS_SIGNING_KEY_KID
+    signerInstance = new KmsJwtService(kmsKeyName, kid)
   } else {
     log.info("Using local RSA JWT signer (dev mode)")
     signerInstance = new LocalJwtSigner()

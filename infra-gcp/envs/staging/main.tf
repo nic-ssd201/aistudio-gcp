@@ -36,7 +36,23 @@ module "kms" {
   region       = var.region
   keyring_name = "aistudio-staging"
 
+  signing_keys = {
+    jwt-signing = {
+      purpose = "OAuth2/OIDC RS256 JWT signing"
+    }
+  }
+
   labels = { environment = var.environment, managed_by = "terraform" }
+}
+
+# Grant the Cloud Run web SA permission to sign JWTs and fetch the public key.
+# Provisioned here (not in the kms module) because module.sa_web is defined
+# below, so binding inside the kms module would create a confusing dependency
+# loop in source-order reading. Behavior is identical.
+resource "google_kms_crypto_key_iam_member" "jwt_signing_signer" {
+  crypto_key_id = module.kms.signing_key_ids["jwt-signing"]
+  role          = "roles/cloudkms.signerVerifier"
+  member        = "serviceAccount:${module.sa_web.email}"
 }
 
 module "network" {
@@ -288,8 +304,12 @@ module "cloud_run_web" {
     GCP_PROJECT_ID              = var.env_project_id
     GCS_BUCKET                  = module.storage.buckets["attachments"].name
     VERTEX_MODEL_ARMOR_TEMPLATE = module.vertex.model_armor_template_names["aistudio-default"]
-    NODE_ENV                    = "production"
-    ENVIRONMENT                 = var.environment
+    # Active KMS key version for OAuth2/OIDC JWT signing. KMS does NOT auto-rotate
+    # asymmetric keys; when rotation is needed, create a new version with
+    # `gcloud kms keys versions create` and bump this path to cryptoKeyVersions/N.
+    KMS_SIGNING_KEY_NAME = "${module.kms.signing_key_ids["jwt-signing"]}/cryptoKeyVersions/1"
+    NODE_ENV             = "production"
+    ENVIRONMENT          = var.environment
   }
 
   labels = { environment = var.environment, managed_by = "terraform" }
