@@ -2,7 +2,7 @@
  * Token Encryption Module (AES-256-GCM)
  *
  * Provides field-level encryption for per-user OAuth tokens and other sensitive
- * connector credentials before database storage. Aurora at-rest encryption alone
+ * connector credentials before database storage. AlloyDB at-rest encryption alone
  * is insufficient for token-level data protection.
  *
  * - Data Encryption Key (DEK) fetched from Google Cloud Secret Manager
@@ -25,6 +25,7 @@
 import { createCipheriv, createDecipheriv, hkdfSync, randomBytes } from "node:crypto"
 import { SecretManagerServiceClient } from "@google-cloud/secret-manager"
 import { createLogger } from "@/lib/logger"
+import { getRequiredEnv } from "@/lib/env-validation"
 
 const log = createLogger({ action: "token-encryption" })
 
@@ -56,29 +57,23 @@ let smClient: SecretManagerServiceClient | null = null
 
 function getSecretManagerServiceClient(): SecretManagerServiceClient {
   if (!smClient) {
-    if (!process.env.AWS_REGION) {
-      log.warn("AWS_REGION not set — Secrets Manager client may target wrong region")
-    }
+    // GCP Secret Manager SDK resolves project + endpoint from Application Default
+    // Credentials (ADC) on Cloud Run automatically. `projectId` can be supplied
+    // explicitly for local dev where ADC may not embed a project. The previous
+    // `region` and `maxAttempts` options were AWS SDK artefacts — GCP does not
+    // accept them and silently ignored both.
     smClient = new SecretManagerServiceClient({
-      region: process.env.AWS_REGION,
-      maxAttempts: 3,
+      ...(process.env.GCP_PROJECT_ID
+        ? { projectId: process.env.GCP_PROJECT_ID }
+        : {}),
     })
   }
   return smClient
 }
 
-/**
- * Resolves the Secrets Manager secret name for the token encryption DEK.
- *
- * Priority: ENVIRONMENT (set by ECS task definition) → DEPLOYMENT_ENV → "dev"
- *
- * Note: NODE_ENV is NOT used because the ECS task definition sets NODE_ENV=production
- * for all environments (dev and prod alike). ENVIRONMENT is the correct discriminator.
- */
-function getSecretName(): string {
-  const env = process.env.ENVIRONMENT || process.env.DEPLOYMENT_ENV || "dev"
-  return `aistudio/${env}/mcp/token-encryption-key`
-}
+/** GCP Secret Manager secret holding the token-encryption DEK. Provisioned by
+ *  Terraform (per-env GCP project, so the secret name is not env-prefixed). */
+const TOKEN_ENCRYPTION_SECRET_NAME = "aistudio-mcp-token-encryption-key"
 
 /**
  * Fetches and caches the DEK. Uses a generation counter to discard results from
@@ -86,17 +81,19 @@ function getSecretName(): string {
  * in-flight, the resolved result is discarded rather than re-populating with stale data).
  */
 async function fetchAndCacheDEK(fetchGeneration: number): Promise<Buffer> {
-  const secretName = getSecretName()
   log.info("Fetching token encryption DEK from Secret Manager")
 
+  // Fail-loud on missing GCP_PROJECT_ID. The previous code defaulted to a
+  // literal "your-project" which silently misrouted lookups to a non-existent
+  // project and surfaced as a confusing 404 at request time.
+  const projectId = getRequiredEnv("GCP_PROJECT_ID")
   const client = getSecretManagerServiceClient()
-    // GCP Secret Manager uses project/secret/versions format
   const [version] = await client.accessSecretVersion({
-    name: `projects/${process.env.GCP_PROJECT_ID || 'your-project'}/secrets/${secretName.replace('/', '-')}/versions/latest`,
+    name: `projects/${projectId}/secrets/${TOKEN_ENCRYPTION_SECRET_NAME}/versions/latest`,
        })
 
   if (!version?.payload?.data) {
-    log.warn("Token encryption DEK secret is empty", { secretName })
+    log.warn("Token encryption DEK secret is empty", { secretName: TOKEN_ENCRYPTION_SECRET_NAME })
     throw new Error("Token encryption DEK is unavailable: secret is empty")
      }
 
@@ -131,8 +128,8 @@ async function fetchAndCacheDEK(fetchGeneration: number): Promise<Buffer> {
 
 /**
  * Derives a DEK from a local env var (MCP_TOKEN_ENCRYPTION_KEY) using the same
- * HKDF flow as the Secrets Manager path. For local dev only — avoids requiring
- * AWS credentials just to encrypt/decrypt MCP tokens.
+ * HKDF flow as the Secret Manager path. For local dev only — avoids requiring
+ * GCP credentials just to encrypt/decrypt MCP tokens.
  */
 function deriveLocalDEK(envKey: string): Buffer {
   return Buffer.from(
@@ -162,13 +159,12 @@ async function getDEK(): Promise<Buffer> {
     return dekCache.key
   }
 
-  // Local dev fallback: derive from env var instead of Secrets Manager.
-  // ENVIRONMENT is set by ECS task definition (always "dev", "staging", or "prod") and is
-  // absent in local dev (Docker Compose / `bun run dev:local`). When ENVIRONMENT is absent,
-  // we're in local dev and MCP_TOKEN_ENCRYPTION_KEY is safe to use. When present, only "dev"
-  // is allowed — all other values (staging, prod) block the env var to force Secrets Manager.
-  // If a future ECS task definition omits ENVIRONMENT, this will fall through to the local
-  // path — ensure ENVIRONMENT is always set in ECS task definitions.
+  // Local dev fallback: derive from env var instead of Secret Manager.
+  // ENVIRONMENT is set by Terraform on the Cloud Run service ("dev" / "staging" /
+  // "prod") and is absent in local dev (`bun run dev:local`). When ENVIRONMENT
+  // is absent, we're in local dev and MCP_TOKEN_ENCRYPTION_KEY is safe to use.
+  // When present, only "dev" is allowed — staging/prod block the env var to
+  // force Secret Manager use.
   const localKey = process.env.MCP_TOKEN_ENCRYPTION_KEY
   if (localKey) {
     const environment = process.env.ENVIRONMENT
