@@ -14,7 +14,14 @@ import {
   constants,
   type JsonWebKey as NodeJsonWebKey,
 } from "node:crypto";
+import { Crc32c } from "@aws-crypto/crc32c";
 import { KmsJwtService } from "../kms-jwt-service";
+
+function crc32c(bytes: Uint8Array): number {
+  const c = new Crc32c();
+  c.update(bytes);
+  return c.digest();
+}
 
 // PKCS#1 v1.5 DigestInfo prefix for SHA-256 (RFC 8017 §9.2 step 2).
 // Cloud KMS's RSA_SIGN_PKCS1_2048_SHA256 algorithm signs this prefix concatenated
@@ -58,14 +65,27 @@ function makeFakeKmsClient() {
         { key: privateKey, padding: constants.RSA_PKCS1_PADDING },
         digestInfo,
       );
-      return [{ signature }];
+      // Mirror real KMS: echo back verifiedDigestCrc32c=true and the CRC of
+      // the signature so the production code's integrity checks pass.
+      return [
+        {
+          signature,
+          verifiedDigestCrc32c: true,
+          signatureCrc32c: { value: crc32c(signature) },
+        },
+      ];
     },
     async getPublicKey(req) {
       getPublicKeyCallCount++;
       if (req.name !== TEST_KEY_PATH) {
         throw new Error(`unexpected key path: ${req.name}`);
       }
-      return [{ pem: publicKey }];
+      return [
+        {
+          pem: publicKey,
+          pemCrc32c: { value: crc32c(Buffer.from(publicKey, "utf8")) },
+        },
+      ];
     },
   };
 
@@ -278,8 +298,7 @@ describe("KmsJwtService", () => {
         async getPublicKey() {
           // EC keypair PEM (would only happen if the KMS key was provisioned
           // with an EC algorithm but KmsJwtService is built only for RS256).
-          const { generateKeyPairSync: g } = require("node:crypto") as typeof import("node:crypto");
-          const { publicKey } = g("ec", {
+          const { publicKey } = generateKeyPairSync("ec", {
             namedCurve: "P-256",
             publicKeyEncoding: { type: "spki", format: "pem" },
             privateKeyEncoding: { type: "pkcs8", format: "pem" },
@@ -312,6 +331,81 @@ describe("KmsJwtService", () => {
         emptyClient,
       );
       await expect(svc.getPublicKeyJwk()).rejects.toThrow(/no PEM/i);
+    });
+
+    it("rejects pemCrc32c mismatch (data-integrity check)", async () => {
+      const corruptingClient = {
+        async asymmetricSign() {
+          return [{ signature: Buffer.alloc(0) }];
+        },
+        async getPublicKey() {
+          const { publicKey } = generateKeyPairSync("rsa", {
+            modulusLength: 2048,
+            privateKeyEncoding: { type: "pkcs8", format: "pem" },
+            publicKeyEncoding: { type: "spki", format: "pem" },
+          });
+          // Return a CRC that doesn't match the PEM bytes — simulates in-flight corruption.
+          return [{ pem: publicKey, pemCrc32c: { value: 12345 } }];
+        },
+      };
+      const svc = new KmsJwtService(
+        TEST_KEY_PATH,
+        undefined,
+        // @ts-expect-error
+        corruptingClient,
+      );
+      await expect(svc.getPublicKeyJwk()).rejects.toThrow(/pemCrc32c mismatch/i);
+    });
+  });
+
+  describe("CRC32C integrity checks on signJwt", () => {
+    it("rejects when KMS reports verifiedDigestCrc32c=false (request-side corruption)", async () => {
+      const refusingClient = {
+        async asymmetricSign() {
+          return [
+            {
+              signature: Buffer.from("dummy"),
+              verifiedDigestCrc32c: false,
+              signatureCrc32c: { value: crc32c(Buffer.from("dummy")) },
+            },
+          ];
+        },
+        async getPublicKey() {
+          return [{ pem: "" }];
+        },
+      };
+      const svc = new KmsJwtService(
+        TEST_KEY_PATH,
+        undefined,
+        // @ts-expect-error
+        refusingClient,
+      );
+      await expect(svc.signJwt({ sub: "u" })).rejects.toThrow(/verify digestCrc32c/i);
+    });
+
+    it("rejects signatureCrc32c mismatch (response-side corruption)", async () => {
+      const corruptingClient = {
+        async asymmetricSign() {
+          return [
+            {
+              signature: Buffer.from("dummy-signature-bytes"),
+              verifiedDigestCrc32c: true,
+              // CRC for some other bytes — should fail the response-side check.
+              signatureCrc32c: { value: 99999 },
+            },
+          ];
+        },
+        async getPublicKey() {
+          return [{ pem: "" }];
+        },
+      };
+      const svc = new KmsJwtService(
+        TEST_KEY_PATH,
+        undefined,
+        // @ts-expect-error
+        corruptingClient,
+      );
+      await expect(svc.signJwt({ sub: "u" })).rejects.toThrow(/signatureCrc32c mismatch/i);
     });
   });
 });

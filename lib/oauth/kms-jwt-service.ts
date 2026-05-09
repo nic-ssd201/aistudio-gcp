@@ -29,7 +29,17 @@
 
 import { createHash, createPublicKey } from "node:crypto"
 import { KeyManagementServiceClient } from "@google-cloud/kms"
+import { Crc32c } from "@aws-crypto/crc32c"
 import { createLogger } from "@/lib/logger"
+
+// Compute CRC32C of a byte sequence. The @aws-crypto/crc32c package exposes a
+// streaming hasher; for our small payloads (digest is 32 bytes, signature is
+// 256 bytes for RSA-2048) a one-shot wrapper is clearer at call sites.
+function crc32c(bytes: Uint8Array): number {
+  const c = new Crc32c()
+  c.update(bytes)
+  return c.digest()
+}
 
 // ============================================
 // Types
@@ -47,10 +57,6 @@ export interface JwksKey {
 interface CachedPublicKey {
   jwk: JwksKey
   fetchedAt: number
-}
-
-interface PendingFetch {
-  promise: Promise<JwksKey>
 }
 
 // ============================================
@@ -73,7 +79,7 @@ export class KmsJwtService {
   private readonly kid: string
   private readonly client: KeyManagementServiceClient
   private publicKeyCache: CachedPublicKey | null = null
-  private pendingFetch: PendingFetch | null = null
+  private pendingFetch: Promise<JwksKey> | null = null
 
   /**
    * @param keyName    Fully-qualified KMS cryptoKeyVersion resource name.
@@ -122,21 +128,45 @@ export class KmsJwtService {
     const signingInput = `${headerB64}.${payloadB64}`
 
     const digest = createHash("sha256").update(signingInput).digest()
+    // CRC32C round-trip per https://cloud.google.com/kms/docs/data-integrity-guidelines:
+    // we send digestCrc32c so KMS can detect transit corruption of the digest, and
+    // we verify verifiedDigestCrc32c (KMS confirms the digest it processed) and
+    // signatureCrc32c (we confirm the signature reached us intact).
+    const digestCrc = crc32c(digest)
 
     try {
       const [response] = await this.client.asymmetricSign({
         name: this.keyName,
         digest: { sha256: digest },
+        digestCrc32c: { value: digestCrc },
       })
 
       if (!response.signature) {
         throw new Error("KMS asymmetricSign returned no signature")
       }
 
-      const signatureBytes =
+      // proto codec returns string (base64) when JSON, Uint8Array when gRPC.
+      // Buffer.from on a Uint8Array views the same memory; on a string it decodes.
+      const signatureBytes: Buffer =
         typeof response.signature === "string"
           ? Buffer.from(response.signature, "base64")
           : Buffer.from(response.signature)
+
+      // KMS echoes back the digest CRC it computed on its side; mismatch means
+      // the digest got corrupted in flight from us to KMS.
+      if (response.verifiedDigestCrc32c !== true) {
+        throw new Error(
+          "KMS asymmetricSign did not verify digestCrc32c — request may have been corrupted in transit",
+        )
+      }
+      // The signature CRC must match what we computed on the bytes we received;
+      // mismatch means corruption from KMS back to us.
+      const expectedSigCrc = readCrc32cValue(response.signatureCrc32c)
+      if (expectedSigCrc !== null && expectedSigCrc !== crc32c(signatureBytes)) {
+        throw new Error(
+          "KMS asymmetricSign signatureCrc32c mismatch — response may have been corrupted in transit",
+        )
+      }
 
       return `${signingInput}.${bufferToBase64Url(signatureBytes)}`
     } catch (error) {
@@ -164,14 +194,12 @@ export class KmsJwtService {
     }
 
     if (this.pendingFetch) {
-      return this.pendingFetch.promise
+      return this.pendingFetch
     }
 
-    const fetchPromise = this.fetchPublicKey()
-    this.pendingFetch = { promise: fetchPromise }
-
+    this.pendingFetch = this.fetchPublicKey()
     try {
-      return await fetchPromise
+      return await this.pendingFetch
     } finally {
       this.pendingFetch = null
     }
@@ -183,6 +211,16 @@ export class KmsJwtService {
     const [response] = await this.client.getPublicKey({ name: this.keyName })
     if (!response.pem) {
       throw new Error("KMS getPublicKey returned no PEM")
+    }
+
+    // CRC32C integrity check on the PEM bytes — same data-integrity guideline
+    // as asymmetricSign: KMS includes pemCrc32c on the response so we can
+    // detect corruption between KMS and us.
+    const expectedPemCrc = readCrc32cValue(response.pemCrc32c)
+    if (expectedPemCrc !== null && expectedPemCrc !== crc32c(Buffer.from(response.pem, "utf8"))) {
+      throw new Error(
+        "KMS getPublicKey pemCrc32c mismatch — response may have been corrupted in transit",
+      )
     }
 
     const exported = createPublicKey(response.pem).export({ format: "jwk" }) as {
@@ -232,10 +270,30 @@ function base64UrlEncode(str: string): string {
     .replace(/=+$/, "")
 }
 
-function bufferToBase64Url(buffer: Uint8Array): string {
-  return Buffer.from(buffer)
+function bufferToBase64Url(buffer: Buffer): string {
+  return buffer
     .toString("base64")
     .replace(/\+/g, "-")
     .replace(/\//g, "_")
     .replace(/=+$/, "")
+}
+
+/**
+ * Pull a CRC32C scalar out of the proto-shaped `Int64Value` wrapper KMS uses
+ * for digestCrc32c / signatureCrc32c / pemCrc32c. The proto codec returns
+ * `{ value: number | string | Long }`; we normalize to a plain number.
+ *
+ * Returns `null` when the wrapper is missing, signaling "no CRC available, skip
+ * the check rather than fail closed" — this preserves compatibility with KMS
+ * responses that legitimately omit the field (e.g. some test/mock paths).
+ */
+function readCrc32cValue(
+  wrapper: { value?: number | string | { toNumber: () => number } | null } | null | undefined,
+): number | null {
+  if (!wrapper || wrapper.value === null || wrapper.value === undefined) return null
+  const v = wrapper.value
+  if (typeof v === "number") return v
+  if (typeof v === "string") return Number.parseInt(v, 10)
+  if (typeof v === "object" && typeof v.toNumber === "function") return v.toNumber()
+  return null
 }

@@ -106,6 +106,13 @@ export async function getJwtSigner(): Promise<JwtSigner> {
     process.env.KMS_SIGNING_KEY_NAME ?? process.env.KMS_SIGNING_KEY_ARN
 
   if (kmsKeyName) {
+    if (!process.env.KMS_SIGNING_KEY_NAME && process.env.KMS_SIGNING_KEY_ARN) {
+      // Surface stale configs in logs so they can be migrated. The fallback works,
+      // but ARN naming is misleading on GCP (no ARNs, just resource paths).
+      log.warn(
+        "Using deprecated KMS_SIGNING_KEY_ARN env var; rename to KMS_SIGNING_KEY_NAME — back-compat may be removed in a future release",
+      )
+    }
     log.info("Using KMS JWT signer", {
       keyName: kmsKeyName.substring(0, 80) + (kmsKeyName.length > 80 ? "..." : ""),
     })
