@@ -274,10 +274,13 @@ module "cloud_run_web" {
   secret_refs = {
     NEXTAUTH_SECRET    = module.secrets.version_refs["aistudio-nextauth-secret"]
     AISTUDIO_MCP_TOKEN = module.secrets.version_refs["aistudio-mcp-token"]
+    DB_PASSWORD        = module.secrets.version_refs["alloydb-initial-password"]
   }
 
   env = {
-    DATABASE_URL                = module.alloydb.connection_string
+    DB_HOST                     = module.alloydb.primary_private_ip
+    DB_USER                     = "postgres"
+    DB_NAME                     = "aistudio"
     IDP_TENANT_ID               = module.identity_platform.tenant_id
     VERTEX_MODEL_ARMOR_TEMPLATE = module.vertex.model_armor_template_names["aistudio-default"]
     NODE_ENV                    = "development"
@@ -302,11 +305,14 @@ module "doc_processing_job" {
 
   secret_refs = {
     AISTUDIO_MCP_TOKEN = module.secrets.version_refs["aistudio-mcp-token"]
+    DB_PASSWORD        = module.secrets.version_refs["alloydb-initial-password"]
   }
 
   env = {
-    DATABASE_URL = module.alloydb.connection_string
-    GCS_BUCKET   = module.storage.buckets["doc-processing-staging"].name
+    DB_HOST    = module.alloydb.primary_private_ip
+    DB_USER    = "postgres"
+    DB_NAME    = "aistudio"
+    GCS_BUCKET = module.storage.buckets["doc-processing-staging"].name
   }
 
   eventarc_triggers = [

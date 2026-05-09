@@ -1,8 +1,7 @@
-// Set required environment variables for Drizzle DB client initialization
-// These must be set BEFORE any imports to prevent initialization errors
-process.env.RDS_SECRET_ARN = 'test-secret-arn';
-process.env.RDS_RESOURCE_ARN = 'test-resource-arn';
-process.env.RDS_DATABASE_NAME = 'test-database';
+// Polyfill setImmediate for google-gax compatibility in Jest jsdom environment
+if (typeof global.setImmediate === 'undefined') {
+  global.setImmediate = (fn, ...args) => setTimeout(fn, 0, ...args);
+}
 
 import '@testing-library/jest-dom';
 
@@ -11,7 +10,7 @@ jest.mock('@/auth', () => ({
   createAuth: jest.fn(() => ({
     auth: jest.fn().mockResolvedValue({
       user: {
-        id: 'test-cognito-sub',
+        id: 'test-oidc-sub',
         email: 'test@example.com'
       }
     }),
@@ -32,18 +31,12 @@ jest.mock('@/lib/auth/request-context', () => ({
   })
 }));
 
-// Mock AWS Cognito authentication
+// Mock Google OIDC session
 jest.mock('@/lib/auth/server-session', () => ({
-  getServerSession: jest.fn(() => Promise.resolve({ 
-    sub: 'test-cognito-sub',
+  getServerSession: jest.fn(() => Promise.resolve({
+    sub: 'test-oidc-sub',
     email: 'test@example.com'
   }))
-}));
-
-jest.mock('aws-amplify', () => ({
-  Amplify: {
-    configure: jest.fn()
-  }
 }));
 
 // Mock logger

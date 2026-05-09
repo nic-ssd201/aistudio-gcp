@@ -278,7 +278,7 @@ export async function uploadBrandingLogoAction(formData: FormData): Promise<Acti
     // Extension derived from server-validated MIME type, never from user-supplied filename
     const fileName = `branding-logo.${typeConfig.ext}`
 
-    const { uploadDocument, getDocumentSignedUrl, deleteDocument } = await import("@/lib/aws/s3-client")
+    const { uploadDocument, getDocumentSignedUrl, deleteDocument } = await import("@/lib/services/document-storage-service")
 
     // Read the previous key before uploading so we can clean it up afterward.
     // Must happen before uploadDocument() to avoid a data-loss window where
@@ -360,7 +360,7 @@ export async function getBrandingLogoUrlAction(): Promise<ActionState<string>> {
     }
 
     // Otherwise it's an S3 key — generate a signed URL
-    const { getDocumentSignedUrl } = await import("@/lib/aws/s3-client")
+    const { getDocumentSignedUrl } = await import("@/lib/services/document-storage-service")
     const signedUrl = await getDocumentSignedUrl({ key: logoValue, expiresIn: 3600 })
 
     timer({ status: "success" })
@@ -400,7 +400,7 @@ export async function resetBrandingLogoAction(): Promise<ActionState<void>> {
     // Delete the current S3 object if one exists, then reset to local default
     const currentKey = await getSetting("BRANDING_LOGO_URL")
     if (currentKey && !currentKey.startsWith("/")) {
-      const { deleteDocument } = await import("@/lib/aws/s3-client")
+      const { deleteDocument } = await import("@/lib/services/document-storage-service")
       try {
         await deleteDocument(currentKey)
         log.debug("Deleted S3 logo during reset", { currentKey })

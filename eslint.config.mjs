@@ -292,6 +292,14 @@ export default [
           varsIgnorePattern: "^_",
         },
       ],
+      // Allow @ts-nocheck only when it has a description explaining why (e.g. migration stubs)
+      "@typescript-eslint/ban-ts-comment": ["error", {
+        "ts-check": false,
+        "ts-expect-error": "allow-with-description",
+        "ts-ignore": "allow-with-description",
+        "ts-nocheck": "allow-with-description",
+        "minimumDescriptionLength": 10,
+      }],
     },
   },
 

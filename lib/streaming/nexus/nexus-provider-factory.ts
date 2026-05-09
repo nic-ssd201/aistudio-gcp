@@ -293,6 +293,7 @@ export class NexusProviderFactory {
         break;
         
       case 'google':
+      case 'google-vertex':
         if (!modelInfo) {
           enhanced.contextCaching = modelId.includes('gemini-2') || modelId.includes('gemini-1.5');
           enhanced.grounding = true;
@@ -572,6 +573,7 @@ export class NexusProviderFactory {
         return 0.000008;
         
       case 'google':
+      case 'google-vertex':
         if (modelId.includes('gemini-2.5')) return 0.0000025;
         if (modelId.includes('gemini-2.0-flash')) return 0.0000015;
         if (modelId.includes('gemini-1.5-pro')) return 0.00000125;
@@ -596,6 +598,7 @@ export class NexusProviderFactory {
       case 'amazon-bedrock':
         return 0.9; // 90% discount with prompt caching
       case 'google':
+      case 'google-vertex':
         return 0.75; // 75% discount with context caching
       default:
         return 0;
@@ -637,6 +640,7 @@ export class NexusProviderFactory {
         if (modelId.includes('deepseek')) return 128000;
         return 100000;
       case 'google':
+      case 'google-vertex':
         if (modelId.includes('gemini-2')) return 2000000;
         if (modelId.includes('gemini-1.5')) return 1000000;
         return 32000;

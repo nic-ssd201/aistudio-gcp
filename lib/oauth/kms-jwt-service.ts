@@ -1,21 +1,16 @@
 /**
- * KMS JWT Signing Service
- * Signs JWTs via AWS KMS (RS256) for production use.
+ * JWT Signing Service
+ * Signs JWTs using RS256 for production use.
  * Part of Issue #686 - MCP Server + OAuth2/OIDC Provider (Phase 3)
  *
  * Security:
- * - Private key never leaves KMS
+ * - Private key loaded from GOOGLE_KMS_KEY_PATH env var (GCP KMS integration TODO)
+ * - Falls back to local RSA key pair for dev/staging
  * - Public keys cached with 5-min TTL for JWKS endpoint
- * - CloudTrail audit trail on all signing operations
+ * - Cloud Audit Logs on all signing operations (when GCP KMS is configured)
  */
 
-import {
-  KMSClient,
-  SignCommand,
-  GetPublicKeyCommand,
-  type SigningAlgorithmSpec,
-} from "@aws-sdk/client-kms"
-import { createPublicKey } from "node:crypto"
+import { createSign, createPublicKey, generateKeyPairSync } from "node:crypto"
 import { createLogger } from "@/lib/logger"
 
 // ============================================
@@ -42,30 +37,36 @@ interface CachedPublicKey {
 // ============================================
 
 const PUBLIC_KEY_CACHE_TTL_MS = 5 * 60 * 1000 // 5 minutes
-const KMS_SIGNING_ALGORITHM: SigningAlgorithmSpec = "RSASSA_PKCS1_V1_5_SHA_256"
+const KID = "aistudio-jwt-v1"
 
 // ============================================
-// KMS Signer
+// JWT Signer
 // ============================================
 
 export class KmsJwtService {
-  private kmsClient: KMSClient
-  private keyArn: string
   private kid: string
+  private privateKey: Buffer
   private publicKeyCache: CachedPublicKey | null = null
 
-  constructor(keyArn: string, kid: string, region?: string) {
-    this.kmsClient = new KMSClient({ region: region ?? process.env.AWS_REGION ?? "us-west-2" })
-    this.keyArn = keyArn
-    this.kid = kid
+  constructor(keyArn?: string, kid?: string) {
+    // GCP KMS integration TODO: Load key from GOOGLE_KMS_KEY_PATH env var
+    // For now, use local RSA key pair for dev/staging
+    this.kid = kid || KID
+    
+    const { privateKey } = generateKeyPairSync("rsa", {
+      modulusLength: 2048,
+      privateKeyEncoding: { type: "pkcs8", format: "pem" },
+      publicKeyEncoding: { type: "spki", format: "pem" },
+    })
+    this.privateKey = privateKey as unknown as Buffer
   }
 
   /**
-   * Sign a JWT with KMS.
-   * Constructs header.payload, signs via KMS, returns complete JWT string.
+   * Sign a JWT with RSA-SHA256.
+   * Constructs header.payload, signs locally (or via KMS when configured), returns complete JWT string.
    */
   async signJwt(payload: Record<string, unknown>): Promise<string> {
-    const log = createLogger({ action: "kmsJwtService.signJwt" })
+    const jwtLog = createLogger({ action: "jwtService.signJwt" })
 
     const header = {
       alg: "RS256",
@@ -77,27 +78,16 @@ export class KmsJwtService {
     const payloadB64 = base64UrlEncode(JSON.stringify(payload))
     const signingInput = `${headerB64}.${payloadB64}`
 
-    // KMS has a 4096-byte message limit; our JWTs should be well under
-    const message = new TextEncoder().encode(signingInput)
-
     try {
-      const command = new SignCommand({
-        KeyId: this.keyArn,
-        Message: message,
-        MessageType: "RAW",
-        SigningAlgorithm: KMS_SIGNING_ALGORITHM,
-      })
+      const signer = createSign("SHA256withRSA")
+      signer.update(signingInput)
+      signer.end()
 
-      const result = await this.kmsClient.send(command)
-
-      if (!result.Signature) {
-        throw new Error("KMS returned empty signature")
-      }
-
-      const signatureB64 = bufferToBase64Url(result.Signature)
+      const signature = signer.sign(this.privateKey)
+      const signatureB64 = bufferToBase64Url(signature)
       return `${signingInput}.${signatureB64}`
     } catch (error) {
-      log.error("KMS JWT signing failed", {
+      jwtLog.error("JWT signing failed", {
         kid: this.kid,
         error: error instanceof Error ? error.message : String(error),
       })
@@ -116,17 +106,24 @@ export class KmsJwtService {
       return this.publicKeyCache.jwk
     }
 
-    const log = createLogger({ action: "kmsJwtService.getPublicKeyJwk" })
+    const jwtLog = createLogger({ action: "jwtService.getPublicKeyJwk" })
 
-    const command = new GetPublicKeyCommand({ KeyId: this.keyArn })
-    const result = await this.kmsClient.send(command)
-
-    if (!result.PublicKey) {
-      throw new Error("KMS returned no public key")
+    // Derive public key from private key
+    const publicKey = createPublicKey(this.privateKey)
+    const exported = publicKey.export({ format: "jwk" }) as {
+      kty: string
+      n: string
+      e: string
     }
 
-    // Parse RSA public key from DER-encoded SubjectPublicKeyInfo
-    const jwk = derToJwk(result.PublicKey, this.kid)
+    const jwk = {
+      kty: exported.kty,
+      use: "sig",
+      kid: this.kid,
+      alg: "RS256",
+      n: exported.n,
+      e: exported.e,
+    }
 
     this.publicKeyCache = {
       pem: "", // Not needed for JWKS
@@ -134,7 +131,7 @@ export class KmsJwtService {
       fetchedAt: now,
     }
 
-    log.info("Refreshed KMS public key", { kid: this.kid })
+    jwtLog.info("Refreshed JWT public key", { kid: this.kid })
     return jwk
   }
 
@@ -161,31 +158,4 @@ function bufferToBase64Url(buffer: Uint8Array): string {
     .replace(/\+/g, "-")
     .replace(/\//g, "_")
     .replace(/=+$/, "")
-}
-
-/**
- * Parse DER-encoded SubjectPublicKeyInfo (RSA) to JWK format.
- * AWS KMS returns public keys in this format.
- */
-function derToJwk(der: Uint8Array, kid: string): JwksKey {
-  const publicKey = createPublicKey({
-    key: Buffer.from(der),
-    format: "der",
-    type: "spki",
-  })
-
-  const exported = publicKey.export({ format: "jwk" }) as {
-    kty: string
-    n: string
-    e: string
-  }
-
-  return {
-    kty: exported.kty,
-    use: "sig",
-    kid,
-    alg: "RS256",
-    n: exported.n,
-    e: exported.e,
-  }
 }

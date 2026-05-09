@@ -24,9 +24,10 @@ export type McpTransportType = "stdio" | "http" | "websocket"
 
 /**
  * Authentication types for MCP server connections.
- * Must match CHECK constraint (updated in 060-mcp-cognito-passthrough-auth.sql).
+ * Must match CHECK constraint (current state set by
+ * 066-rename-cognito-passthrough-to-session-passthrough.sql).
  */
-export type McpAuthType = "api_key" | "oauth" | "jwt" | "none" | "cognito_passthrough"
+export type McpAuthType = "api_key" | "oauth" | "jwt" | "none" | "session_passthrough"
 
 /**
  * How tools are provided for a connector.

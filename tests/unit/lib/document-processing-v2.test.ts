@@ -14,7 +14,7 @@ import {
   confirmDocumentUpload 
 } from '@/lib/services/document-job-service';
 import { generatePresignedUrl, generateMultipartUrls } from '@/lib/aws/document-upload';
-import { sendToProcessingQueue } from '@/lib/aws/lambda-trigger';
+import { sendToProcessingQueue } from '@/lib/gcp/processing-queue';
 
 // Mock environment variables
 const originalEnv = process.env;

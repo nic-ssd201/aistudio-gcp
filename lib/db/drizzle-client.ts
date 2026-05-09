@@ -27,65 +27,60 @@ import {
 import { createLogger, generateRequestId, startTimer } from "@/lib/logger";
 import * as schema from "./schema";
 
+// Module-level logger for connection-lifecycle and PostgreSQL notice events.
+const dbLog = createLogger({ module: 'drizzle-client' })
+
 // ============================================
 // PostgreSQL Connection Configuration
 // ============================================
 
 /**
- * Build DATABASE_URL from environment variables
+ * Build DATABASE_URL from environment variables.
  *
- * Supports two configuration modes:
- * 1. DATABASE_URL: Full connection string (preferred for local dev)
- * 2. Individual vars: DB_HOST, DB_PORT, DB_USER, DB_PASSWORD, DB_NAME
+ * Supported modes:
+ * 1. DATABASE_URL — full connection string (local dev)
+ * 2. DB_HOST + DB_USER + DB_PASSWORD — TCP connection (Cloud SQL via IP)
  *
- * For production on ECS, credentials are injected from Secrets Manager
- * at container startup via the getDatabaseUrl() function.
+ * Cloud SQL Unix socket (CLOUD_SQL_SOCKET_PATH) is handled directly in
+ * getPgClient() and bypasses this function.
  */
 function getDatabaseUrl(): string {
-  // Option 1: Direct DATABASE_URL (local dev or pre-constructed URL)
   if (process.env.DATABASE_URL) {
     return process.env.DATABASE_URL;
   }
 
-  // Option 2: Construct from individual components
   const host = process.env.DB_HOST;
   const port = process.env.DB_PORT || "5432";
   const user = process.env.DB_USER;
   const password = process.env.DB_PASSWORD;
-  const database = process.env.DB_NAME || process.env.RDS_DATABASE_NAME || "aistudio";
+  const database = process.env.DB_NAME || "aistudio";
 
   if (host && user && password) {
-    return `postgresql://${encodeURIComponent(user)}:${encodeURIComponent(password)}@${host}:${port}/${database}?sslmode=require`;
-  }
-
-  // Fallback: Check for legacy RDS Data API config (error with migration guidance)
-  if (process.env.RDS_SECRET_ARN && process.env.RDS_RESOURCE_ARN) {
-    throw new Error(
-      "RDS Data API configuration detected but no DATABASE_URL found. " +
-      "Issue #603 migrated to postgres.js driver. " +
-      "Set DATABASE_URL or DB_HOST/DB_USER/DB_PASSWORD environment variables."
-    );
+    // Omit ?sslmode from the URL — SSL is controlled by the `ssl` option passed
+    // to postgres.js in getPgClient(), which respects DB_SSL=false for local dev.
+    // Duplicating it in the URL would conflict when DB_SSL=false is set.
+    return `postgresql://${encodeURIComponent(user)}:${encodeURIComponent(password)}@${host}:${port}/${database}`;
   }
 
   throw new Error(
     "Database configuration not found. " +
-    "Set DATABASE_URL or DB_HOST/DB_USER/DB_PASSWORD environment variables."
+    "Set DATABASE_URL, CLOUD_SQL_SOCKET_PATH, or DB_HOST/DB_USER/DB_PASSWORD environment variables."
   );
 }
 
 /**
  * Lazy-initialized postgres.js client instance with connection pooling
  *
- * Connection Pool Sizing Calculation:
- * - Aurora Serverless v2 max_connections: ~600 (for 2 ACU in dev), ~1200+ in prod
- * - Expected ECS tasks: 2-10 (dev) to 4-20 (prod) with auto-scaling
- * - Max connections per task: 20 (configurable via DB_MAX_CONNECTIONS)
- * - Total fleet connections: 40-400 (well within Aurora limits)
+ * Connection Pool Sizing Calculation (GCP / Cloud Run):
+ * - Cloud SQL max_connections: typically 100–1000 depending on instance tier
+ * - Expected Cloud Run instances: 1-10 (scales to zero when idle)
+ * - Max connections per instance: 20 (configurable via DB_MAX_CONNECTIONS)
+ * - Total fleet connections: 20-200 (well within Cloud SQL limits)
  *
  * Timeouts:
  * - idle_timeout: 20s (aggressive cleanup for cost optimization in serverless)
- * - max_lifetime: 3600s (1 hour, supports Aurora credential rotation)
- * - connect_timeout: 10s (fail fast on network issues)
+ * - max_lifetime: 3600s (1 hour — reasonable ceiling for long-lived containers)
+ * - connect_timeout: 10s (fail fast on network/socket issues)
  *
  * Lazy initialization is required because Next.js builds pages statically
  * and the database client should only be created at runtime.
@@ -96,24 +91,77 @@ let pgClient: ReturnType<typeof postgres> | null = null;
 
 function getPgClient(): ReturnType<typeof postgres> {
   if (!pgClient) {
-    // SSL configuration: required for AWS Aurora, optional for local development
-    // Set DB_SSL=false for local PostgreSQL without SSL certificates
+    // SSL configuration: required for Cloud SQL TCP connections; set DB_SSL=false
+    // for local PostgreSQL without SSL certificates or Cloud SQL socket mode
     const sslEnabled = process.env.DB_SSL !== "false";
 
     // SQL_LOGGING enables verbose query logging (opt-in for security)
     // Set SQL_LOGGING=true to see all queries in console
     const sqlLoggingEnabled = process.env.SQL_LOGGING === "true";
 
-    pgClient = postgres(getDatabaseUrl(), {
+    const commonOptions = {
       max: Number.parseInt(process.env.DB_MAX_CONNECTIONS || "20", 10),
       idle_timeout: Number.parseInt(process.env.DB_IDLE_TIMEOUT || "20", 10),
       connect_timeout: Number.parseInt(process.env.DB_CONNECT_TIMEOUT || "10", 10),
       max_lifetime: 60 * 60, // 1 hour - forces reconnection for credential rotation
-      prepare: true, // Enable prepared statements for performance
-      ssl: sslEnabled ? "require" : false, // SSL required for AWS, optional for local dev
-      onnotice: () => {}, // Suppress PostgreSQL notices
+      // Prepared statements improve performance via server-side caching, but are
+      // INCOMPATIBLE with PgBouncer in `transaction` pooling mode — you'll see
+      // `prepared statement "s_X" does not exist` errors across pooled connections.
+      // Direct Cloud SQL connections (socket or TCP) are fine.
+      // Set DB_PREPARE=false to disable when running behind PgBouncer.
+      prepare: process.env.DB_PREPARE !== "false",
+      // Route PostgreSQL notices to debug-level logging so they're recoverable
+      // when diagnosing issues (e.g. RAISE NOTICE from triggers, implicit casts,
+      // deprecated-feature warnings) without polluting normal output.
+      onnotice: (notice: { message?: string; severity?: string; detail?: string }): void => {
+        dbLog.debug('PostgreSQL notice', {
+          message: notice.message,
+          severity: notice.severity,
+          detail: notice.detail,
+        })
+      },
       debug: sqlLoggingEnabled, // Opt-in via SQL_LOGGING=true (default: off)
-    });
+    };
+
+    // GCP Cloud SQL Unix socket (Cloud Run / GCE)
+    // Set CLOUD_SQL_SOCKET_PATH to the socket directory, e.g.:
+    //   /cloudsql/my-project:us-central1:my-instance
+    // Cloud Run with Cloud SQL proxy mounts this automatically when you configure
+    // the Cloud SQL connection in the Cloud Run service settings.
+    const cloudSqlSocketPath = process.env.CLOUD_SQL_SOCKET_PATH;
+
+    if (cloudSqlSocketPath) {
+      if (!cloudSqlSocketPath.startsWith("/")) {
+        throw new Error(
+          `CLOUD_SQL_SOCKET_PATH must be an absolute path starting with '/'. ` +
+          `Got: "${cloudSqlSocketPath}". Expected e.g. /cloudsql/project:region:instance`
+        );
+      }
+
+      const user = process.env.DB_USER;
+      const password = process.env.DB_PASSWORD;
+      const database = process.env.DB_NAME || "aistudio";
+
+      if (!user || !password) {
+        throw new Error(
+          "CLOUD_SQL_SOCKET_PATH is set but DB_USER or DB_PASSWORD is missing."
+        );
+      }
+
+      pgClient = postgres({
+        ...commonOptions,
+        host: cloudSqlSocketPath, // postgres.js accepts socket dir as host when it starts with /
+        user,
+        password,
+        database,
+        ssl: false, // Unix socket connections don't use TLS
+      });
+    } else {
+      pgClient = postgres(getDatabaseUrl(), {
+        ...commonOptions,
+        ssl: sslEnabled ? "require" : false, // SSL required for AWS/Cloud SQL TCP, optional for local dev
+      });
+    }
   }
   return pgClient;
 }
@@ -150,6 +198,17 @@ export function getDb(): ReturnType<typeof drizzle<typeof schema>> {
     _db = drizzle(getPgClient(), { schema });
   }
   return _db;
+}
+
+/**
+ * Exported for unit tests only — validates and returns the postgres.js client.
+ * @internal Do not call from application code; use `db` or `executeQuery` instead.
+ */
+export function getPgClientForTesting(): ReturnType<typeof postgres> {
+  if (process.env.NODE_ENV !== "test") {
+    throw new Error("getPgClientForTesting is only available in test environments");
+  }
+  return getPgClient();
 }
 
 /**
@@ -600,6 +659,7 @@ export async function validateDatabaseConnection(): Promise<{
   config: {
     hasDatabaseUrl: boolean;
     hasDbHost: boolean;
+    hasCloudSqlSocket: boolean;
     maxConnections: string;
     database: string;
   };
@@ -610,18 +670,26 @@ export async function validateDatabaseConnection(): Promise<{
   const config = {
     hasDatabaseUrl: !!process.env.DATABASE_URL,
     hasDbHost: !!process.env.DB_HOST,
+    hasCloudSqlSocket: !!process.env.CLOUD_SQL_SOCKET_PATH,
     maxConnections: process.env.DB_MAX_CONNECTIONS || "20",
-    database: process.env.DB_NAME || process.env.RDS_DATABASE_NAME || "aistudio",
+    database: process.env.DB_NAME || "aistudio",
   };
 
   try {
     log.info("Validating database connection", { database: config.database });
 
-    // Execute simple query to test connectivity
+    // Execute simple query to test connectivity.
+    // maxRetries: 0 — the health endpoint (and instrumentation warmup) need a
+    // fast-fail result, not a retried one.  With the default maxRetries: 3 and
+    // a connect_timeout of 10 s, a DB outage could hold the health probe for up
+    // to 30 s — well beyond Cloud Run's typical liveness probe timeout of 5–15 s.
+    // A single attempt limits the probe latency to ≤ connect_timeout (10 s max),
+    // which still fits comfortably inside a 15 s Cloud Run probe window.
     // postgres.js returns the result array directly (no .rows property)
     const result = await executeQuery(
       (database) => database.execute(sql`SELECT 1 as test`),
-      "validateConnection"
+      "validateConnection",
+      { maxRetries: 0 }
     );
 
     // postgres.js returns result as an array-like object
@@ -655,7 +723,7 @@ export async function validateDatabaseConnection(): Promise<{
 /**
  * Close database connection pool
  *
- * Call this during graceful shutdown (e.g., ECS SIGTERM) to ensure
+ * Call this during graceful shutdown (e.g., Cloud Run SIGTERM) to ensure
  * all connections are properly closed before the process exits.
  *
  * @example

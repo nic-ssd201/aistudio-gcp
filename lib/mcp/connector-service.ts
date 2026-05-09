@@ -15,6 +15,7 @@
 import { createMCPClient } from "@ai-sdk/mcp"
 import { eq, and, or, sql } from "drizzle-orm"
 import { createLogger, generateRequestId, startTimer } from "@/lib/logger"
+import { getRequiredEnv } from "@/lib/env-validation"
 import { executeQuery, executeTransaction } from "@/lib/db/drizzle-client"
 import {
   nexusMcpServers,
@@ -22,10 +23,7 @@ import {
   nexusMcpAuditLogs,
 } from "@/lib/db/schema"
 import { encryptToken, decryptToken } from "@/lib/crypto/token-encryption"
-import {
-  SecretsManagerClient,
-  GetSecretValueCommand,
-} from "@aws-sdk/client-secrets-manager"
+import { SecretManagerServiceClient } from "@google-cloud/secret-manager"
 import type {
   McpConnector,
   McpAuthType,
@@ -232,13 +230,13 @@ export async function getConnectorTools(
         authProvider,
       }
     }
-  } else if (authType === "cognito_passthrough") {
-    // Cognito passthrough: forward session idToken as Bearer header.
+  } else if (authType === "session_passthrough") {
+    // Session passthrough: forward the Google OIDC idToken as a Bearer header.
     // idToken is populated in auth.ts jwt callback (account.id_token → token.idToken)
-    // and surfaced via session callback (session.idToken → CognitoSession.idToken).
+    // and surfaced via session callback (session.idToken → UserSession.idToken).
     if (!options?.idToken) {
       throw new Error(
-        "Cognito passthrough requires an active session with an ID token. " +
+        "Session passthrough requires an active session with an ID token. " +
         "If this persists, reload the page to refresh your session."
       )
     }
@@ -600,7 +598,7 @@ async function loadServerAndToken(
  * Decrypts the stored access token and maps it to the appropriate header.
  */
 async function buildAuthHeaders(
-  authType: Exclude<McpAuthType, "oauth" | "cognito_passthrough">,
+  authType: Exclude<McpAuthType, "oauth" | "session_passthrough">,
   tokenRow: TokenRow
 ): Promise<Record<string, string>> {
   if (authType === "none") {
@@ -650,7 +648,7 @@ async function exchangeRefreshToken(
   server: ServerRow,
   refreshToken: string
 ): Promise<OAuthTokenResponse | TokenRefreshFailure> {
-  // Load client credentials: inline DB credentials > Secrets Manager > none
+  // Load client credentials: inline DB credentials > GCP Secret Manager > none
   const credentials = await getOAuthCredentials(server)
 
   // Resolve token endpoint: credentials secret > fallback to root-relative /oauth/token.
@@ -725,7 +723,7 @@ async function exchangeRefreshToken(
 
 /**
  * Resolves OAuth client credentials for a server.
- * Priority: inline oauthCredentials (DB) > credentialsKey (Secrets Manager)
+ * Priority: inline oauthCredentials (DB) > credentialsKey (GCP Secret Manager)
  * Returns null if no credentials are configured (MCP-native OAuth).
  */
 export async function getOAuthCredentials(
@@ -759,12 +757,19 @@ export interface OAuthClientCredentials {
   scopes?: string
 }
 
-let secretsClient: SecretsManagerClient | null = null
+let secretsClient: SecretManagerServiceClient | null = null
 
-function getSecretsClient(): SecretsManagerClient {
+function getSecretsClient(): SecretManagerServiceClient {
   if (!secretsClient) {
-    secretsClient = new SecretsManagerClient({
-      region: process.env.AWS_REGION ?? process.env.AWS_DEFAULT_REGION ?? "us-west-2",
+    // GCP Secret Manager SDK resolves project + endpoint from Application Default
+    // Credentials (ADC) on Cloud Run automatically. `projectId` can be supplied
+    // explicitly for local dev where ADC may not embed a project.
+    // The previous `region` option was an AWS SDK artefact — GCP does not accept
+    // it and silently ignored it; removed to avoid misleading future readers.
+    secretsClient = new SecretManagerServiceClient({
+      ...(process.env.GCP_PROJECT_ID
+        ? { projectId: process.env.GCP_PROJECT_ID }
+        : {}),
     })
   }
   return secretsClient
@@ -776,7 +781,7 @@ const CREDENTIALS_CACHE_TTL = 5 * 60 * 1000 // 5 minutes
 const CREDENTIALS_CACHE_MAX = 100
 
 /**
- * Fetches OAuth client credentials from AWS Secrets Manager with 5-minute TTL cache.
+ * Fetches OAuth client credentials from Google Cloud Secret Manager with 5-minute TTL cache.
  * The secret is expected to be a JSON string with
  * { clientId, clientSecret, tokenEndpointUrl?, authorizationEndpointUrl?, scopes? }.
  */
@@ -788,13 +793,18 @@ export async function loadOAuthCredentials(
     return cached.value
   }
 
-  const result = await getSecretsClient().send(
-    new GetSecretValueCommand({ SecretId: credentialsKey })
-  )
-  if (!result.SecretString) {
-    throw new Error(`OAuth credentials secret is empty: ${credentialsKey}`)
+  // GCP Secret Manager: convert DB key path to GCP secret name format.
+  // Fail-loud: a missing GCP_PROJECT_ID would silently target 'your-project'
+  // and surface as a confusing "secret not found" error at request time.
+  // Replace ALL slashes in the key (String.replace(string) only replaces the
+  // first occurrence; a key like "oauth/github/client-1" would produce a
+  // malformed secret name with leftover slashes and silently misroute the lookup).
+  const gcpSecretName = `projects/${getRequiredEnv('GCP_PROJECT_ID')}/secrets/${credentialsKey.replace(/\//g, "-")}/versions/latest`
+  const [version] = await getSecretsClient().accessSecretVersion({ name: gcpSecretName })
+  if (!version?.payload?.data) {
+    // version not available; JSON.parse("") will throw below
   }
-  const parsed: unknown = JSON.parse(result.SecretString)
+  const parsed: unknown = JSON.parse((version.payload?.data?.toString() ?? ""))
   if (
     typeof parsed !== "object" ||
     parsed === null ||
@@ -962,7 +972,7 @@ function assertHttpTransport(transport: string): asserts transport is "http" {
 }
 
 const VALID_TRANSPORTS = new Set<McpTransportType>(["stdio", "http", "websocket"])
-const VALID_AUTH_TYPES = new Set<McpAuthType>(["api_key", "oauth", "jwt", "none", "cognito_passthrough"])
+const VALID_AUTH_TYPES = new Set<McpAuthType>(["api_key", "oauth", "jwt", "none", "session_passthrough"])
 
 /** Maps a DB row to the McpConnector type with runtime validation */
 function toMcpConnector(row: typeof nexusMcpServers.$inferSelect): McpConnector {

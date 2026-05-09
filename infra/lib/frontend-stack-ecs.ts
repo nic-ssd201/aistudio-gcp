@@ -30,6 +30,13 @@ export interface FrontendStackEcsProps extends cdk.StackProps {
    * Useful for CI/CD validation where hosted zones don't exist.
    */
   setupDns?: boolean;
+  /**
+   * When true, include AWS/Cognito Fn::ImportValue references (legacy AWS deploy).
+   * When false (default), substitute placeholder strings so cdk synth / cdk deploy
+   * succeed without requiring the AuthStack exports to exist in CloudFormation.
+   * Mirrors the --context legacy=true gate in infra/bin/infra.ts.
+   */
+  isLegacyAwsDeploy?: boolean;
 }
 
 /**
@@ -74,28 +81,45 @@ export class FrontendStackEcs extends cdk.Stack {
       ? `${props.customSubdomain}.${baseDomain}`
       : (environment === 'dev' ? `dev.${baseDomain}` : baseDomain);
 
+    // Syntactically-valid placeholder ARN used wherever a real Secrets Manager
+    // ARN is required by CDK construct validation in non-legacy (GCP) mode.
+    // cdk.Lazy.string() defers value resolution so fromSecretCompleteArn()'s
+    // 6-character-suffix check runs at synthesis rather than construct-creation
+    // time — keeping `cdk synth` clean without needing a real ARN.
+    // All uses of this constant are dead code in the GCP fork; see the DEAD CODE
+    // comment on cognitoClientId below.
+    const PLACEHOLDER_SECRET_ARN = 'arn:aws:secretsmanager:us-east-1:000000000000:secret:unused-gcp-migration-aaaaaa';
+
     // ============================================================================
     // Internal API Secret for Scheduled Execution Authentication
     // ============================================================================
-    // Create secret for Lambda → ECS JWT authentication
-    const internalApiSecret = new secretsmanager.Secret(this, 'InternalApiSecret', {
-      secretName: `aistudio-${environment}-internal-api-secret`,
-      description: 'Internal API authentication secret for scheduled execution',
-      generateSecretString: {
-        secretStringTemplate: JSON.stringify({}),
-        generateStringKey: 'INTERNAL_API_SECRET',
-        excludePunctuation: true,
-        passwordLength: 32,
-      },
-      removalPolicy: environment === 'prod' ? cdk.RemovalPolicy.RETAIN : cdk.RemovalPolicy.DESTROY,
-    });
-
-    // Export secret ARN to SSM for SchedulerStack to read
-    new ssm.StringParameter(this, 'InternalApiSecretArnParam', {
-      parameterName: `/aistudio/${environment}/internal-api-secret-arn`,
-      stringValue: internalApiSecret.secretArn,
-      description: 'Internal API secret ARN for Lambda JWT authentication',
-    });
+    // Gated on isLegacyAwsDeploy: this secret is an AWS artefact consumed by
+    // Lambda → ECS JWT auth in the upstream AWS deployment. The GCP fork uses
+    // Cloud Run and does not deploy this stack, so creating the secret when
+    // !isLegacyAwsDeploy would generate a real (billable) Secrets Manager
+    // resource that serves no purpose.
+    const internalApiSecretArn = props.isLegacyAwsDeploy
+      ? (() => {
+          const secret = new secretsmanager.Secret(this, 'InternalApiSecret', {
+            secretName: `aistudio-${environment}-internal-api-secret`,
+            description: 'Internal API authentication secret for scheduled execution',
+            generateSecretString: {
+              secretStringTemplate: JSON.stringify({}),
+              generateStringKey: 'INTERNAL_API_SECRET',
+              excludePunctuation: true,
+              passwordLength: 32,
+            },
+            removalPolicy: environment === 'prod' ? cdk.RemovalPolicy.RETAIN : cdk.RemovalPolicy.DESTROY,
+          });
+          // Export secret ARN to SSM for SchedulerStack to read
+          new ssm.StringParameter(this, 'InternalApiSecretArnParam', {
+            parameterName: `/aistudio/${environment}/internal-api-secret-arn`,
+            stringValue: secret.secretArn,
+            description: 'Internal API secret ARN for Lambda JWT authentication',
+          });
+          return secret.secretArn;
+        })()
+      : cdk.Lazy.string({ produce: () => PLACEHOLDER_SECRET_ARN });
 
     // ============================================================================
     // MCP Token Encryption Key (AES-256-GCM DEK)
@@ -136,22 +160,78 @@ export class FrontendStackEcs extends cdk.Stack {
       // Docker image configuration
       dockerImageSource: 'fromAsset', // CDK builds and pushes image automatically
       dockerfilePath: '../', // Dockerfile in project root
-      // Auth configuration from Cognito stack outputs
       authUrl: `https://${subdomain}`,
-      cognitoClientId: cdk.Fn.importValue(`${environment}-CognitoUserPoolClientId`),
-      cognitoIssuer: `https://cognito-idp.${this.region}.amazonaws.com/${cdk.Fn.importValue(`${environment}-CognitoUserPoolId`)}`,
-      // Database configuration from SSM parameters
-      rdsResourceArn: ssm.StringParameter.valueForStringParameter(this, `/aistudio/${environment}/db-cluster-arn`),
-      rdsSecretArn: ssm.StringParameter.valueForStringParameter(this, `/aistudio/${environment}/db-secret-arn`),
-      // Auth secret from Secrets Manager
-      authSecretArn: cdk.Fn.importValue(`${environment}-AuthSecretArn`),
-      // Internal API secret (created above)
-      internalApiSecretArn: internalApiSecret.secretArn,
-      // K-12 Content Safety: Guardrails resources from GuardrailsStack
-      // These enable precise IAM scoping and DynamoDB access for PII tokenization
-      guardrailArn: cdk.Fn.importValue(`${environment}-GuardrailArn`),
-      piiTokenTableArn: cdk.Fn.importValue(`${environment}-PIITokenTableArn`),
-      violationTopicArn: cdk.Fn.importValue(`${environment}-ViolationTopicArn`),
+      // DEAD CODE — SSD201 GCP fork: cognitoClientId, cognitoIssuer,
+      // rdsResourceArn, and rdsSecretArn are AWS/Cognito artefacts that have
+      // no effect in the GCP deployment. This AWS CDK stack is not used by the
+      // fork; do not trust it for the active Cloud Run deployment.
+      // See nic-ssd201/aistudio-gcp#8.
+      //
+      // Fn::ImportValue references are gated on isLegacyAwsDeploy so that
+      // `cdk synth` and `cdk deploy` succeed without requiring the AuthStack
+      // exports (CognitoUserPoolClientId, CognitoUserPoolId, AuthSecretArn) to
+      // exist in CloudFormation. Without the gate, deploying without
+      // --context legacy=true would fail at CloudFormation time with
+      // "No export named …".
+      cognitoClientId: props.isLegacyAwsDeploy
+        ? cdk.Fn.importValue(`${environment}-CognitoUserPoolClientId`)
+        : 'unused-gcp-migration',
+      cognitoIssuer: props.isLegacyAwsDeploy
+        ? `https://cognito-idp.${this.region}.amazonaws.com/${cdk.Fn.importValue(`${environment}-CognitoUserPoolId`)}`
+        : 'unused-gcp-migration',
+      // rdsResourceArn and rdsSecretArn are gated on isLegacyAwsDeploy for the
+      // same reason as cognitoClientId/cognitoIssuer above: in a GCP-only account
+      // the SSM parameters /aistudio/{env}/db-cluster-arn and db-secret-arn do
+      // not exist, so an ungated valueForStringParameter would generate a
+      // CloudFormation {{resolve:ssm:…}} token that fails at deploy time.
+      // The placeholder RDS ARN is a syntactically-valid but non-functional
+      // value; EcsServiceConstruct env-vars and IAM policies that reference it
+      // are no-ops in the GCP fork (see DEAD CODE comment above).
+      rdsResourceArn: props.isLegacyAwsDeploy
+        ? ssm.StringParameter.valueForStringParameter(this, `/aistudio/${environment}/db-cluster-arn`)
+        : 'arn:aws:rds:us-east-1:000000000000:cluster:unused-gcp-migration',
+      // rdsSecretArn is passed to fromSecretCompleteArn() which validates the
+      // 6-character suffix at CDK-construct-creation time for plain strings.
+      // Use cdk.Lazy.string() to defer the value (same technique as authSecretArn)
+      // so the suffix validation is also deferred and does not fail at synth time.
+      rdsSecretArn: props.isLegacyAwsDeploy
+        ? ssm.StringParameter.valueForStringParameter(this, `/aistudio/${environment}/db-secret-arn`)
+        // cdk.Lazy.string defers value resolution past fromSecretCompleteArn's
+        // synth-time 6-char-suffix validation.  The produce() callback CANNOT
+        // throw here: CDK resolves lazy values during cdk synth (not only at
+        // deploy time), so a throw would break the synth run.  A syntactically-
+        // valid placeholder ARN is the correct approach — it satisfies the
+        // CDK construct's format check and is a no-op in the GCP deployment
+        // because the entire EcsServiceConstruct is DEAD CODE.
+        : cdk.Lazy.string({ produce: () => 'arn:aws:secretsmanager:us-east-1:000000000000:secret:unused-gcp-rds-aaaaaa' }),
+      // Auth secret from Secrets Manager.
+      // When not in legacy mode the real AuthSecretArn export doesn't exist, so
+      // use cdk.Lazy.string() to produce a syntactically-valid ARN token at
+      // synth time. Secrets Manager's fromSecretCompleteArn() validates the
+      // 6-character suffix at CDK-construct-creation time for plain strings, but
+      // defers validation for CDK lazy/token values — avoiding the "missing
+      // 6-character suffix" synth error that a bare placeholder string causes.
+      // See rdsSecretArn comment above for why the producer returns a string
+      // rather than throwing.
+      authSecretArn: props.isLegacyAwsDeploy
+        ? cdk.Fn.importValue(`${environment}-AuthSecretArn`)
+        : cdk.Lazy.string({ produce: () => PLACEHOLDER_SECRET_ARN }),
+      // Internal API secret (gated above)
+      internalApiSecretArn,
+      // K-12 Content Safety: Guardrails resources from GuardrailsStack.
+      // Gated on isLegacyAwsDeploy: these Fn::ImportValue calls require the
+      // GuardrailsStack exports to exist in CloudFormation.  In the GCP fork
+      // (no GuardrailsStack deployed), ungated importValue calls would fail at
+      // CloudFormation deploy time with "No export named …".
+      guardrailArn: props.isLegacyAwsDeploy
+        ? cdk.Fn.importValue(`${environment}-GuardrailArn`)
+        : 'unused-gcp-migration',
+      piiTokenTableArn: props.isLegacyAwsDeploy
+        ? cdk.Fn.importValue(`${environment}-PIITokenTableArn`)
+        : 'unused-gcp-migration',
+      violationTopicArn: props.isLegacyAwsDeploy
+        ? cdk.Fn.importValue(`${environment}-ViolationTopicArn`)
+        : 'unused-gcp-migration',
     });
 
     // ============================================================================

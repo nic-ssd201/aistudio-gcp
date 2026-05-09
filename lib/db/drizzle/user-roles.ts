@@ -2,7 +2,8 @@
  * Drizzle User Role Operations
  *
  * User role management with transaction support for atomic operations.
- * All functions use executeQuery() wrapper with circuit breaker and retry logic.
+ * Multi-statement operations use executeTransaction() as required by CLAUDE.md —
+ * never db.transaction() nested inside executeQuery().
  *
  * Part of Epic #526 - RDS Data API to Drizzle ORM Migration
  * Issue #531 - Migrate User & Authorization queries to Drizzle ORM
@@ -11,7 +12,7 @@
  */
 
 import { eq, inArray, and, sql } from "drizzle-orm";
-import { executeQuery } from "@/lib/db/drizzle-client";
+import { executeQuery, executeTransaction } from "@/lib/db/drizzle-client";
 import { users, userRoles, roles } from "@/lib/db/schema";
 import { createLogger, generateRequestId, startTimer } from "@/lib/logger";
 import { ErrorFactories } from "@/lib/error-utils";
@@ -68,58 +69,54 @@ export async function updateUserRoles(
   log.info("Updating user roles", { userId, roleNames });
 
   try {
-    await executeQuery(
-      (db) =>
-        db.transaction(async (tx) => {
-          // Get role IDs for the role names (skip if empty array)
-          let rolesData: Array<{ id: number; name: string }> = [];
+    await executeTransaction(async (tx) => {
+      // Get role IDs for the role names (skip if empty array)
+      let rolesData: Array<{ id: number; name: string }> = [];
 
-          if (roleNames.length > 0) {
-            rolesData = await tx
-              .select({ id: roles.id, name: roles.name })
-              .from(roles)
-              .where(inArray(roles.name, roleNames));
+      if (roleNames.length > 0) {
+        rolesData = await tx
+          .select({ id: roles.id, name: roles.name })
+          .from(roles)
+          .where(inArray(roles.name, roleNames));
 
-            if (rolesData.length !== roleNames.length) {
-              const foundNames = rolesData.map((r) => r.name);
-              const missingRoles = roleNames.filter(
-                (name) => !foundNames.includes(name)
-              );
-              log.error("Some roles not found", { missingRoles });
-              throw ErrorFactories.dbRecordNotFound(
-                "roles",
-                missingRoles.join(", "),
-                {
-                  technicalMessage: `Roles not found: ${missingRoles.join(", ")}`,
-                }
-              );
+        if (rolesData.length !== roleNames.length) {
+          const foundNames = rolesData.map((r) => r.name);
+          const missingRoles = roleNames.filter(
+            (name) => !foundNames.includes(name)
+          );
+          log.error("Some roles not found", { missingRoles });
+          throw ErrorFactories.dbRecordNotFound(
+            "roles",
+            missingRoles.join(", "),
+            {
+              technicalMessage: `Roles not found: ${missingRoles.join(", ")}`,
             }
-          }
+          );
+        }
+      }
 
-          // Delete existing roles
-          await tx.delete(userRoles).where(eq(userRoles.userId, userId));
+      // Delete existing roles
+      await tx.delete(userRoles).where(eq(userRoles.userId, userId));
 
-          // Insert new roles (only if we have roles to insert)
-          if (rolesData.length > 0) {
-            await tx.insert(userRoles).values(
-              rolesData.map((r) => ({
-                userId,
-                roleId: r.id,
-              }))
-            );
-          }
+      // Insert new roles (only if we have roles to insert)
+      if (rolesData.length > 0) {
+        await tx.insert(userRoles).values(
+          rolesData.map((r) => ({
+            userId,
+            roleId: r.id,
+          }))
+        );
+      }
 
-          // Increment role_version atomically for session cache invalidation
-          await tx
-            .update(users)
-            .set({
-              roleVersion: sql`COALESCE(${users.roleVersion}, 0) + 1`,
-              updatedAt: new Date(),
-            })
-            .where(eq(users.id, userId));
-        }),
-      "updateUserRoles"
-    );
+      // Increment role_version atomically for session cache invalidation
+      await tx
+        .update(users)
+        .set({
+          roleVersion: sql`COALESCE(${users.roleVersion}, 0) + 1`,
+          updatedAt: new Date(),
+        })
+        .where(eq(users.id, userId));
+    }, "updateUserRoles");
 
     log.info("User roles updated successfully", {
       userId,
@@ -145,6 +142,31 @@ export async function updateUserRoles(
  *
  * @param userId - The user database ID
  * @param roleName - Role name to add
+ *
+ * @remarks
+ * **Cache invalidation contract:** this helper bumps `role_version` atomically
+ * inside its transaction but does **not** call
+ * `pollingSessionCache.invalidateUser(sub)`.  Current callers are JIT
+ * provisioning only (`lib/auth/resolve-user.ts` and
+ * `actions/db/get-current-user-action.ts`), where no polling-cache entry
+ * can pre-exist — so skipping the flush is safe for that path.
+ *
+ * **Why the flush is not embedded here:** `pollingSessionCache.invalidateUser`
+ * takes the user's OAuth `sub` (Google subject ID), but this helper only receives
+ * `userId` (the database PK).  Looking up `sub` from `userId` would add a
+ * round-trip and an import dependency on the cache module.  Since the only
+ * production callers today are JIT-provisioning paths where the user cannot yet
+ * have an active cache entry, the cost is not justified.
+ *
+ * Any future caller that invokes `addUserRole` for a user who **may** have an
+ * active polling-cache entry (e.g. admin UI, role-grant scripts) **must** call
+ * `pollingSessionCache.invalidateUser(sub)` post-commit to flush the in-process
+ * cache on the handling instance.  Without it, that instance continues to serve
+ * stale roles for up to 5 minutes (the cache TTL).
+ *
+ * A unit test in `tests/unit/lib/db/user-roles-callers.test.ts` asserts that
+ * only JIT-provisioning modules import this function — add new callers there
+ * before wiring `addUserRole` to an admin UI or scheduled job.
  */
 export async function addUserRole(
   userId: number,
@@ -153,42 +175,38 @@ export async function addUserRole(
   const log = createLogger({ function: "addUserRole" });
 
   try {
-    await executeQuery(
-      (db) =>
-        db.transaction(async (tx) => {
-          // Get role ID
-          const roleResult = await tx
-            .select({ id: roles.id })
-            .from(roles)
-            .where(eq(roles.name, roleName))
-            .limit(1);
+    await executeTransaction(async (tx) => {
+      // Get role ID
+      const roleResult = await tx
+        .select({ id: roles.id })
+        .from(roles)
+        .where(eq(roles.name, roleName))
+        .limit(1);
 
-          if (roleResult.length === 0) {
-            throw ErrorFactories.dbRecordNotFound("roles", roleName);
-          }
+      if (roleResult.length === 0) {
+        throw ErrorFactories.dbRecordNotFound("roles", roleName);
+      }
 
-          const roleId = roleResult[0].id;
+      const roleId = roleResult[0].id;
 
-          // Insert role with conflict handling
-          await tx
-            .insert(userRoles)
-            .values({
-              userId,
-              roleId,
-            })
-            .onConflictDoNothing();
+      // Insert role with conflict handling
+      await tx
+        .insert(userRoles)
+        .values({
+          userId,
+          roleId,
+        })
+        .onConflictDoNothing();
 
-          // Increment role_version for session cache invalidation
-          await tx
-            .update(users)
-            .set({
-              roleVersion: sql`COALESCE(${users.roleVersion}, 0) + 1`,
-              updatedAt: new Date(),
-            })
-            .where(eq(users.id, userId));
-        }),
-      "addUserRole"
-    );
+      // Increment role_version for session cache invalidation
+      await tx
+        .update(users)
+        .set({
+          roleVersion: sql`COALESCE(${users.roleVersion}, 0) + 1`,
+          updatedAt: new Date(),
+        })
+        .where(eq(users.id, userId));
+    }, "addUserRole");
 
     log.info("Role added to user", { userId, roleName });
     return { success: true };
@@ -208,6 +226,19 @@ export async function addUserRole(
  *
  * @param userId - The user database ID
  * @param roleName - Role name to remove
+ *
+ * @remarks
+ * **Cache invalidation contract:** same as `addUserRole` — `role_version` is
+ * bumped inside the transaction but `pollingSessionCache.invalidateUser(sub)`
+ * is **not** called.  Current callers are JIT provisioning only, where no
+ * cache entry can pre-exist.  The flush is not embedded for the same structural
+ * reason as `addUserRole`: this helper receives only `userId` (DB PK), not the
+ * OAuth `sub` that `invalidateUser` requires.  Any future caller that may
+ * remove a role from a user with an active polling-cache session **must** call
+ * `pollingSessionCache.invalidateUser(sub)` post-commit, or that instance will
+ * continue serving the old role set for up to 5 minutes.
+ *
+ * See the caller-guard test note on `addUserRole` above.
  */
 export async function removeUserRole(
   userId: number,
@@ -216,40 +247,36 @@ export async function removeUserRole(
   const log = createLogger({ function: "removeUserRole" });
 
   try {
-    await executeQuery(
-      (db) =>
-        db.transaction(async (tx) => {
-          // Get role ID
-          const roleResult = await tx
-            .select({ id: roles.id })
-            .from(roles)
-            .where(eq(roles.name, roleName))
-            .limit(1);
+    await executeTransaction(async (tx) => {
+      // Get role ID
+      const roleResult = await tx
+        .select({ id: roles.id })
+        .from(roles)
+        .where(eq(roles.name, roleName))
+        .limit(1);
 
-          if (roleResult.length === 0) {
-            throw ErrorFactories.dbRecordNotFound("roles", roleName);
-          }
+      if (roleResult.length === 0) {
+        throw ErrorFactories.dbRecordNotFound("roles", roleName);
+      }
 
-          const roleId = roleResult[0].id;
+      const roleId = roleResult[0].id;
 
-          // Delete the user-role association
-          await tx
-            .delete(userRoles)
-            .where(
-              and(eq(userRoles.userId, userId), eq(userRoles.roleId, roleId))
-            );
+      // Delete the user-role association
+      await tx
+        .delete(userRoles)
+        .where(
+          and(eq(userRoles.userId, userId), eq(userRoles.roleId, roleId))
+        );
 
-          // Increment role_version for session cache invalidation
-          await tx
-            .update(users)
-            .set({
-              roleVersion: sql`COALESCE(${users.roleVersion}, 0) + 1`,
-              updatedAt: new Date(),
-            })
-            .where(eq(users.id, userId));
-        }),
-      "removeUserRole"
-    );
+      // Increment role_version for session cache invalidation
+      await tx
+        .update(users)
+        .set({
+          roleVersion: sql`COALESCE(${users.roleVersion}, 0) + 1`,
+          updatedAt: new Date(),
+        })
+        .where(eq(users.id, userId));
+    }, "removeUserRole");
 
     log.info("Role removed from user", { userId, roleName });
     return { success: true };

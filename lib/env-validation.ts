@@ -1,6 +1,10 @@
 /**
- * Environment Variable Validation
- * Ensures all required environment variables are set before the application starts
+ * Environment Variable Validation — SSD201 GCP deployment
+ *
+ * Validates all required environment variables before the application starts.
+ * Auth: Google OIDC only (no Cognito / AWS).
+ * Database: one of DATABASE_URL | TCP | Cloud SQL socket.
+ * Storage: GCS.
  */
 
 // Logger is not imported to maintain compatibility with Edge Runtime and client-side code
@@ -9,38 +13,57 @@ interface EnvVar {
   name: string;
   required: boolean;
   description?: string;
+  /** Skip the generic "Optional variable … is not set" warning; used for vars
+   *  validated as a pair/group below so the per-field loop doesn't emit a
+   *  contradictory optional-warning alongside the pair-level required-error. */
+  skipWarning?: boolean;
 }
 
 const ENV_VARS: EnvVar[] = [
-  // Authentication
+  // Authentication — always required
   { name: 'AUTH_URL', required: true, description: 'NextAuth base URL' },
   { name: 'AUTH_SECRET', required: true, description: 'NextAuth secret for JWT signing' },
-  { name: 'AUTH_COGNITO_CLIENT_ID', required: true, description: 'AWS Cognito client ID' },
-  { name: 'AUTH_COGNITO_CLIENT_SECRET', required: false, description: 'AWS Cognito client secret' },
-  { name: 'AUTH_COGNITO_ISSUER', required: true, description: 'AWS Cognito issuer URL' },
-  
-  // Database - postgres.js driver (Issue #603)
-  // Either DATABASE_URL (local dev) OR DB_HOST (AWS ECS) must be configured
-  // Validation is done separately below since only one is needed
+
+  // Google OIDC — both are required, but `required: false` + `skipWarning: true` here:
+  // pair-level validation is handled as a group below (see "Google OIDC" block
+  // in validateEnv) so the per-field loop must not add them individually to either
+  // `missing[]` (would duplicate) or `warnings[]` (would contradict the pair error).
+  { name: 'AUTH_GOOGLE_ID', required: false, skipWarning: true, description: 'Google OAuth client ID' },
+  { name: 'AUTH_GOOGLE_SECRET', required: false, skipWarning: true, description: 'Google OAuth client secret' },
+  // Optional: restrict sign-in to a specific Google Workspace domain at the IdP level.
+  // When set, Google rejects non-domain accounts before the OAuth code exchange.
+  // When unset, any Google account can sign in (access control is enforced by roles).
+  { name: 'AUTH_GOOGLE_HD', required: false, description: 'Google Workspace hosted domain (e.g. psd401.net) — restricts sign-in to that domain' },
+
+  // Database — one of three modes required; validated dynamically below:
+  //   1. DATABASE_URL  (local dev / direct URL)
+  //   2. DB_HOST + DB_USER + DB_PASSWORD  (TCP / Cloud SQL via IP)
+  //   3. CLOUD_SQL_SOCKET_PATH + DB_USER + DB_PASSWORD  (Cloud Run Unix socket)
   { name: 'DATABASE_URL', required: false, description: 'PostgreSQL connection URL (local dev)' },
-  { name: 'DB_HOST', required: false, description: 'Database hostname (AWS ECS)' },
-  { name: 'DB_USER', required: false, description: 'Database username (AWS ECS)' },
-  { name: 'DB_PASSWORD', required: false, description: 'Database password (AWS ECS)' },
+  { name: 'DB_HOST', required: false, description: 'Database hostname (TCP connection)' },
+  { name: 'CLOUD_SQL_SOCKET_PATH', required: false, description: 'Cloud SQL socket dir (Cloud Run)' },
+  { name: 'DB_USER', required: false, description: 'Database username' },
+  { name: 'DB_PASSWORD', required: false, description: 'Database password' },
   { name: 'DB_NAME', required: false, description: 'Database name (defaults to aistudio)' },
-  { name: 'DB_SSL', required: false, description: 'Enable SSL (defaults to true)' },
-  
-  // AWS Configuration
-  { name: 'NEXT_PUBLIC_AWS_REGION', required: true, description: 'AWS region' },
-  { name: 'AWS_REGION', required: false, description: 'AWS region (runtime)' },
-  { name: 'AWS_DEFAULT_REGION', required: false, description: 'AWS default region (runtime)' },
-  
-  // S3 Configuration
-  { name: 'S3_BUCKET_NAME', required: true, description: 'S3 bucket for document storage' },
-  
+  { name: 'DB_SSL', required: false, description: 'Enable SSL for TCP connections (defaults to true)' },
+  { name: 'DB_PREPARE', required: false, description: 'Enable prepared statements (defaults to true; set false for PgBouncer transaction-mode pooling)' },
+
+  // GCP / Storage
+  // required:false — only needed when MCP connectors use Secret Manager;
+  // getRequiredEnv('GCP_PROJECT_ID') in connector-service.ts fails-loud at
+  // request time if MCP is attempted without it.
+  { name: 'GCP_PROJECT_ID', required: false, description: 'GCP project ID (required for MCP connector Secret Manager access)' },
+  { name: 'GCS_BUCKET', required: true, description: 'GCS bucket for document storage' },
+
   // AI Services
   { name: 'ANTHROPIC_API_KEY', required: false, description: 'Anthropic API key for Claude' },
   { name: 'OPENAI_API_KEY', required: false, description: 'OpenAI API key' },
-  
+
+  // Session / Token behaviour (optional overrides)
+  { name: 'SESSION_MAX_AGE', required: false, description: 'Session lifetime in seconds (default: 86400 / 24 h)' },
+  { name: 'TOKEN_REFRESH_THRESHOLD_MS', required: false, description: 'Access-token refresh look-ahead in ms (default: 300 000 / 5 min; floor: 60 000)' },
+  { name: 'AUTH_DEBUG', required: false, description: 'Set to "true" to enable NextAuth verbose debug logging (local dev only; never set in production)' },
+
   // Application
   { name: 'NODE_ENV', required: false, description: 'Node environment (development/production)' },
 ];
@@ -53,68 +76,177 @@ export class EnvironmentValidationError extends Error {
 }
 
 /**
- * Validates that all required environment variables are set
+ * Validates that all required environment variables are set.
  * @throws {EnvironmentValidationError} if required variables are missing
  */
 export function validateEnv(): { isValid: boolean; missing: string[]; warnings: string[] } {
   const missing: string[] = [];
   const warnings: string[] = [];
-  
+
   for (const envVar of ENV_VARS) {
     const value = process.env[envVar.name];
-    
     if (envVar.required && !value) {
       missing.push(envVar.name);
-    } else if (!envVar.required && !value) {
+    } else if (!envVar.required && !value && !envVar.skipWarning) {
       warnings.push(`Optional variable ${envVar.name} is not set${envVar.description ? ` (${envVar.description})` : ''}`);
     }
   }
-  
-  // Additional validation logic
-  if (!process.env.AWS_REGION && !process.env.AWS_DEFAULT_REGION && !process.env.NEXT_PUBLIC_AWS_REGION) {
-    missing.push('AWS_REGION or AWS_DEFAULT_REGION or NEXT_PUBLIC_AWS_REGION');
+
+  // Google OIDC: both ID and secret must be set together.
+  // Trim whitespace before the truthiness check: a value of '  ' (stray spaces)
+  // would pass !!value but fail at runtime with an "invalid_client" error from
+  // Google — making the problem harder to debug than a startup validation failure.
+  const hasGoogleId = !!(process.env.AUTH_GOOGLE_ID?.trim());
+  const hasGoogleSecret = !!(process.env.AUTH_GOOGLE_SECRET?.trim());
+
+  if (hasGoogleId && !hasGoogleSecret) {
+    missing.push('AUTH_GOOGLE_SECRET (required when AUTH_GOOGLE_ID is set)');
+  } else if (!hasGoogleId && hasGoogleSecret) {
+    missing.push('AUTH_GOOGLE_ID (required when AUTH_GOOGLE_SECRET is set)');
+  } else if (!hasGoogleId && !hasGoogleSecret) {
+    missing.push('AUTH_GOOGLE_ID and AUTH_GOOGLE_SECRET are required');
   }
 
-  // Database configuration: Either DATABASE_URL (local) or DB_HOST (AWS) must be set
-  const hasDatabaseUrl = !!process.env.DATABASE_URL;
-  const hasAwsDbConfig = !!process.env.DB_HOST;
-  if (!hasDatabaseUrl && !hasAwsDbConfig) {
-    missing.push('DATABASE_URL or DB_HOST (database configuration required)');
+  // Database: one of three connection modes must be configured.
+  // Trim whitespace for the same reason as the Google credentials above: a
+  // stray-space value passes !!value but would fail at connection time.
+  const hasDatabaseUrl = !!(process.env.DATABASE_URL?.trim());
+  const hasTcpConfig = !!(process.env.DB_HOST?.trim()) && !!(process.env.DB_USER?.trim()) && !!(process.env.DB_PASSWORD?.trim());
+  const hasSocketConfig = !!(process.env.CLOUD_SQL_SOCKET_PATH?.trim()) && !!(process.env.DB_USER?.trim()) && !!(process.env.DB_PASSWORD?.trim());
+
+  if (!hasDatabaseUrl && !hasTcpConfig && !hasSocketConfig) {
+    missing.push('DATABASE_URL, or DB_HOST+DB_USER+DB_PASSWORD, or CLOUD_SQL_SOCKET_PATH+DB_USER+DB_PASSWORD (database configuration required)');
   }
-  
-  // Check for at least one AI API key
+
+  // SESSION_MAX_AGE: warn at startup when the value is set but will be silently
+  // ignored (non-numeric or non-positive) — mirrors the TOKEN_REFRESH_THRESHOLD_MS warning.
+  // Also warn on suspiciously short values (< 600 s / 10 min): a 1-minute session
+  // lifetime is almost certainly a misconfiguration (e.g. seconds confused with
+  // minutes) — flag it so the operator sees the effective value at deploy time.
+  const SESSION_MAX_AGE_SOFT_FLOOR = 600; // 10 minutes
+  const sessionMaxAgeRaw = process.env.SESSION_MAX_AGE;
+  if (sessionMaxAgeRaw !== undefined && sessionMaxAgeRaw !== '') {
+    const sessionMaxAge = Number.parseInt(sessionMaxAgeRaw, 10);
+    if (!Number.isFinite(sessionMaxAge) || sessionMaxAge <= 0) {
+      warnings.push(
+        `SESSION_MAX_AGE="${sessionMaxAgeRaw}" is not a positive integer and will be ignored — effective value is 86400 s (24 h).`
+      );
+    } else if (sessionMaxAge < SESSION_MAX_AGE_SOFT_FLOOR) {
+      warnings.push(
+        `SESSION_MAX_AGE="${sessionMaxAgeRaw}" is unusually short (< ${SESSION_MAX_AGE_SOFT_FLOOR} s / 10 min) — verify this is intentional.`
+      );
+    }
+  }
+
+  // TOKEN_REFRESH_THRESHOLD_MS: warn at startup when the value is set but rejected
+  // by the 60 000 ms floor so operators discover misconfiguration at deploy time.
+  // Parsing rules are centralised in lib/auth/token-refresh-config.ts (getRefreshThresholdMs);
+  // this block only needs to detect the "value was provided but invalid" case for the warning.
+  const thresholdRaw = process.env.TOKEN_REFRESH_THRESHOLD_MS;
+  if (thresholdRaw !== undefined && thresholdRaw !== '') {
+    const thresholdMs = Number.parseInt(thresholdRaw, 10);
+    if (!Number.isFinite(thresholdMs) || thresholdMs < 60_000) {
+      warnings.push(
+        `TOKEN_REFRESH_THRESHOLD_MS="${thresholdRaw}" is below the 60 000 ms floor and will be ignored — effective value is 300 000 ms (5 min).`
+      );
+    } else if (thresholdMs >= 1_800_000) {
+      // An upper-bound warning: with TOKEN_REFRESH_THRESHOLD_MS >= 1 800 000 ms
+      // (30 min), MIN_EXPIRES_IN in refresh-google-token.ts would reach 1800 s
+      // (the runtime ceiling) and every Google token refresh response
+      // (expires_in: 3600) would pass the check — but just barely.  At
+      // >= 3 600 000 ms (1 h) it would fail every response silently.  Warn early
+      // so operators discover the misconfiguration at startup, not at user-logout time.
+      warnings.push(
+        `TOKEN_REFRESH_THRESHOLD_MS="${thresholdRaw}" (${Math.round(thresholdMs / 60_000)} min) is unusually high — refresh-google-token.ts caps MIN_EXPIRES_IN at 1 800 s, so values ≥ 1 800 000 ms here cause every Google token response (expires_in: 3 600) to barely pass. Use ≤ 1 500 000 ms for a healthy margin. Verify this is intentional.`
+      );
+    }
+  }
+
+  // AUTH_GOOGLE_HD: require in production.
+  // Without this, any Google account can sign in and will be auto-provisioned by
+  // resolve-user.ts JIT provisioning — including personal Gmail accounts.  For a
+  // K-12 deployment this is a meaningful security gap (any 2025@gmail.com can
+  // register).  Treat as a hard requirement in production so the operator must
+  // make an explicit decision: set the var to a Workspace domain, or set it to
+  // the sentinel value "OPEN" to acknowledge the open-deployment policy.
+  //
+  // To run a genuinely open deployment (any Google account may sign in), set:
+  //   AUTH_GOOGLE_HD=OPEN
+  // This suppresses the error while making the choice visible in config.
+  if (process.env.NODE_ENV === 'production') {
+    const hd = process.env.AUTH_GOOGLE_HD?.trim();
+    if (!hd) {
+      missing.push(
+        'AUTH_GOOGLE_HD (required in production — set to your Google Workspace domain, ' +
+        'e.g. your-district.k12.example.com, to restrict sign-in at the IdP level; ' +
+        'set to "OPEN" to explicitly allow any Google account)'
+      );
+    } else if (hd.toUpperCase() === 'OPEN') {
+      // Sentinel acknowledged — the operator has explicitly opted into open access.
+      // Warn so the choice is visible in startup logs: an operator checking Cloud
+      // Logging after a suspected breach should immediately see that domain
+      // restriction was intentionally disabled, rather than having to check env vars.
+      warnings.push(
+        'AUTH_GOOGLE_HD=OPEN — open deployment: any Google account can sign in and ' +
+        'will be JIT-provisioned.  Ensure this is intentional for your deployment context.'
+      );
+    }
+  }
+
+  // AUTH_GOOGLE_FORCE_CONSENT: warn when set to an unrecognised value.
+  // Normalise to lowercase so "False" / "FALSE" are accepted alongside "false".
+  const forceConsent = process.env.AUTH_GOOGLE_FORCE_CONSENT;
+  // Trim whitespace before normalising — consistent with auth.ts which also
+  // calls .trim().toLowerCase() on this value so "  false  " is treated the
+  // same by both the startup validator and the runtime parser.
+  const forceConsentNorm = forceConsent?.trim().toLowerCase();
+  if (forceConsentNorm !== undefined && forceConsentNorm !== '' && forceConsentNorm !== 'true' && forceConsentNorm !== 'false') {
+    warnings.push(
+      `AUTH_GOOGLE_FORCE_CONSENT="${forceConsent}" is not recognised — expected "true" or "false". Defaulting to "true" (consent prompt).`
+    );
+  }
+  // Warn in production when consent prompt is disabled — this is the most common
+  // cause of silent session failures (Google skips returning refresh_token on repeat
+  // sign-ins when select_account mode is active and offline_access was previously
+  // granted, silently ending sessions at access-token expiry with no visible error).
+  if (forceConsentNorm === 'false' && process.env.NODE_ENV === 'production') {
+    warnings.push(
+      'AUTH_GOOGLE_FORCE_CONSENT=false in production: Google may not return a refresh_token on ' +
+      'repeat sign-ins, causing sessions to end silently at access-token expiry (~1 hour). ' +
+      'Set AUTH_GOOGLE_FORCE_CONSENT=true (or unset it) unless you have confirmed offline_access ' +
+      'grants are always issued.'
+    );
+  }
+
+  // AI: warn if no keys configured.
   if (!process.env.ANTHROPIC_API_KEY && !process.env.OPENAI_API_KEY) {
     warnings.push('No AI API keys configured. AI features will not work.');
   }
-  
-  return {
-    isValid: missing.length === 0,
-    missing,
-    warnings
-  };
+
+  return { isValid: missing.length === 0, missing, warnings };
 }
 
 /**
- * Validates environment variables and throws if validation fails
- * Use this in API routes and server components
+ * Validates environment variables and throws if validation fails.
+ * Use this in API routes and server components.
  */
 export function requireValidEnv(): void {
   const { isValid, missing, warnings } = validateEnv();
-  
+
   if (!isValid) {
     throw new EnvironmentValidationError(missing, warnings);
   }
-  
-  // Console warnings in development (logger not available in Edge Runtime)
-  if (process.env.NODE_ENV === 'development' && warnings.length > 0) {
-    console.warn('Environment validation warnings:');
-    for (const warning of warnings) console.warn(`  - ${warning}`);
+
+  // Emit warnings in all environments except 'test' so operators see them in
+  // staging and production deployment logs — not just local dev sessions.
+  // 'test' is excluded to keep Jest output clean.
+  if (process.env.NODE_ENV !== 'test' && warnings.length > 0) {
+    console.warn('Environment validation warnings:'); // eslint-disable-line no-console -- Edge-runtime compatible; @/lib/logger unavailable here
+    for (const warning of warnings) console.warn(`  - ${warning}`); // eslint-disable-line no-console -- same reason
   }
 }
 
-/**
- * Get a required environment variable or throw
- */
+/** Get a required environment variable or throw. */
 export function getRequiredEnv(name: string): string {
   const value = process.env[name];
   if (!value) {
@@ -123,9 +255,7 @@ export function getRequiredEnv(name: string): string {
   return value;
 }
 
-/**
- * Get an optional environment variable with a default value
- */
+/** Get an optional environment variable with a default value. */
 export function getOptionalEnv(name: string, defaultValue: string): string {
   return process.env[name] || defaultValue;
 }

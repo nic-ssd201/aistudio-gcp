@@ -116,6 +116,14 @@ export interface EcsServiceConstructProps {
    * If provided, enables precise IAM scoping with tag conditions
    */
   violationTopicArn?: string;
+  /**
+   * When true, resolve Cognito CloudFormation exports via Fn.importValue().
+   * Set this only when deploying the legacy AWS Cognito stack (--context legacy=true).
+   * Without this gate, `cdk deploy` fails with "No export named …-CognitoUserPoolId"
+   * on GCP-only deployments that never create the Cognito stack.
+   * @default false
+   */
+  isLegacyAwsDeploy?: boolean;
 }
 
 /**
@@ -132,6 +140,18 @@ export class EcsServiceConstruct extends Construct {
 
   constructor(scope: Construct, id: string, props: EcsServiceConstructProps) {
     super(scope, id);
+
+    // TODO(nic-ssd201/aistudio-gcp#8): Add a guard here that throws (or calls
+    // cdk.Annotations.of(this).addError()) when !props.isLegacyAwsDeploy.
+    // EcsServiceConstruct has many ungated Fn.importValue() calls for SQS queues,
+    // DynamoDB tables, and Lambdas that only exist in the upstream AWS deployment.
+    // A stray `cdk deploy AIStudio-FrontendStack-ECS-Dev` without
+    // --context legacy=true fails at CloudFormation deploy time with cryptic
+    // "No export named …" errors rather than a clear message at synth time.
+    // The guard should be implemented alongside gating the FrontendStackEcs
+    // instantiation in infra/bin/infra.ts on isLegacyAwsDeploy (currently always
+    // instantiated when baseDomain is set) so that `cdk synth --all` in GCP mode
+    // does not inadvertently include these dead stacks in the CloudFormation output.
 
     const { vpc, environment, documentsBucketName } = props;
 
@@ -486,6 +506,11 @@ export class EcsServiceConstruct extends Construct {
         // Application configuration
         S3_BUCKET_NAME: documentsBucketName,
         DOCUMENTS_BUCKET_NAME: documentsBucketName, // Legacy name for compatibility
+        // DEAD CODE — SSD201 GCP fork: the variables below (RDS_DATABASE_NAME,
+        // AUTH_COGNITO_*, RDS_RESOURCE_ARN, RDS_SECRET_ARN) are AWS/Cognito
+        // artefacts that have no effect in the GCP deployment. This entire AWS
+        // CDK infrastructure layer is unused by the fork; do not trust these
+        // stack files for the active deployment. See nic-ssd201/aistudio-gcp#8.
         RDS_DATABASE_NAME: 'aistudio',
         AUTH_URL: props.authUrl,
         AUTH_COGNITO_CLIENT_ID: props.cognitoClientId,
@@ -517,13 +542,34 @@ export class EcsServiceConstruct extends Construct {
         // Application settings
         MAX_FILE_SIZE_MB: '100',
         SQL_LOGGING: 'false',
-        // Public Cognito configuration for client-side
+        // DEAD CODE — SSD201 GCP fork: NEXT_PUBLIC_COGNITO_* and COGNITO_*
+        // variables below are AWS Cognito artefacts unused in the GCP deployment.
+        // See nic-ssd201/aistudio-gcp#8.
+        //
+        // DEPLOYMENT NOTE: This entire EcsServiceConstruct (and the FrontendStack
+        // that instantiates it) is DEAD CODE in the GCP fork.  Do not attempt to
+        // run `cdk deploy` on the FrontendStack without the full upstream AWS
+        // infrastructure (Cognito, SQS queues, DynamoDB tables, Lambdas, etc.).
+        // The many other Fn.importValue() calls above (queue URLs, table names,
+        // Lambda function names) reference exports from AWS-only stacks that are
+        // absent from the GCP deployment — they would all fail at CloudFormation
+        // deploy time.  See nic-ssd201/aistudio-gcp#8 for the removal roadmap.
+        //
+        // Among the Cognito references specifically, the two Fn.importValue() calls
+        // below are gated on isLegacyAwsDeploy so that a mistaken `cdk synth`
+        // does not embed the import token in the CloudFormation template.  Other
+        // Fn.importValue() calls in this file are not individually gated because
+        // the entire construct is declared dead code — gating every reference
+        // individually would add noise without reducing deployment risk.
         NEXT_PUBLIC_COGNITO_CLIENT_ID: props.cognitoClientId,
-        NEXT_PUBLIC_COGNITO_USER_POOL_ID: cdk.Fn.importValue(`${environment}-CognitoUserPoolId`),
+        NEXT_PUBLIC_COGNITO_USER_POOL_ID: props.isLegacyAwsDeploy
+          ? cdk.Fn.importValue(`${environment}-CognitoUserPoolId`)
+          : 'unused-gcp-deployment',
         NEXT_PUBLIC_COGNITO_DOMAIN: `aistudio-${environment}.auth.${cdk.Stack.of(this).region}.amazoncognito.com`,
-        // Cognito token configuration
         COGNITO_ACCESS_TOKEN_LIFETIME_SECONDS: '43200', // 12 hours
-        COGNITO_JWKS_URL: `https://aistudio-${environment}.auth.${cdk.Stack.of(this).region}.amazoncognito.com/.well-known/jwks.json`,
+        COGNITO_JWKS_URL: props.isLegacyAwsDeploy
+          ? `https://cognito-idp.${cdk.Stack.of(this).region}.amazonaws.com/${cdk.Fn.importValue(`${environment}-CognitoUserPoolId`)}/.well-known/jwks.json`
+          : `unused-gcp-deployment`,
         // K-12 Content Safety - Bedrock Guardrails configuration
         BEDROCK_GUARDRAIL_ID: cdk.Fn.importValue(`${environment}-GuardrailId`),
         BEDROCK_GUARDRAIL_VERSION: 'DRAFT',

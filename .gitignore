@@ -58,4 +58,6 @@ __pycache__/
 
 # Claude agent internal state
 .claude/agent-memory/
+.claude/settings.local.json
+.claude/settings.*.local.json
 docs/learnings/.evolve-state.json

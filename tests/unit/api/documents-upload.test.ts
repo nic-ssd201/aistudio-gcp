@@ -29,7 +29,7 @@ jest.mock('next/server', () => ({
 }));
 
 import { POST } from '@/app/api/documents/upload/route';
-import { uploadDocument } from '@/lib/aws/s3-client';
+import { uploadDocument } from '@/lib/services/document-storage-service';
 import { saveDocument, saveDocumentChunk, batchInsertDocumentChunks } from '@/lib/db/queries/documents';
 import { getCurrentUserAction } from '@/actions/db/get-current-user-action';
 import { getServerSession } from '@/lib/auth/server-session';
@@ -41,7 +41,7 @@ jest.mock('@/lib/auth/server-session', () => ({
   getServerSession: jest.fn()
 }));
 jest.mock('@/actions/db/get-current-user-action');
-jest.mock('@/lib/aws/s3-client');
+jest.mock('@/lib/services/document-storage-service');
 jest.mock('@/lib/db/queries/documents');
 jest.mock('@/lib/file-validation', () => {
   const originalModule = jest.requireActual('@/lib/file-validation');
@@ -64,6 +64,7 @@ jest.mock('@/lib/logger', () => ({
     warn: jest.fn(),
   })),
   generateRequestId: jest.fn(() => 'test-request-id'),
+  getLogContext: jest.fn(() => ({ requestId: 'test-request-id', userId: 'test-user' })),
   startTimer: jest.fn(() => jest.fn()),
   sanitizeForLogging: jest.fn((data) => data),
 }));

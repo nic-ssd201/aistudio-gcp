@@ -5,6 +5,7 @@
  */
 
 import { BedrockGuardrailsService } from '../bedrock-guardrails-service';
+import { setBedrockMockResponse, clearBedrockMockResponse } from '../bedrock-guardrails-service';
 import { BedrockRuntimeClient } from '@aws-sdk/client-bedrock-runtime';
 
 // Mock AWS SDK clients
@@ -516,10 +517,19 @@ describe('BedrockGuardrailsService', () => {
           },
         ],
       });
-
-      (BedrockRuntimeClient as jest.Mock).mockImplementation(() => ({
-        send: mockSend,
-      }));
+      setBedrockMockResponse({
+        action: 'GUARDRAIL_INTERVENED',
+        outputs: [{ text: 'Your request was blocked.' }],
+        assessments: [
+          {
+            wordPolicy: {
+              managedWordLists: [
+                { match: 'redacted', type: 'PROFANITY', action: 'BLOCKED' },
+              ],
+            },
+          },
+        ],
+      });
 
       const blockedService = new BedrockGuardrailsService({
         region: TEST_REGION,

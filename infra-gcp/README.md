@@ -91,7 +91,7 @@ terraform apply  # Requires manual approval for prod
 | `vpc-sc` | access_policy_name, perimeter_name, project_numbers | perimeter_name, violation_count | Service perimeter (FERPA boundary) |
 | `iam` | project_id, environment, service_accounts, role_bindings | service_account_emails, custom_roles | Tag-conditioned IAM |
 | `kms` | project_id, environment, keyring_name, keys | keyring_id, key_names | CMEK for all services |
-| `alloydb` | project_id, vpc_self_link, psa_range, kms_key, cpu_count | cluster_uri, primary_instance_uri, connection_string | Postgres + pgvector |
+| `alloydb` | project_id, vpc_self_link, psa_range, kms_key, cpu_count | cluster_uri, primary_instance_uri, primary_private_ip | Postgres + pgvector |
 | `storage` | project_id, kms_key, buckets | bucket_names, bucket_urls | GCS buckets (attachments, repository, audit) |
 | `secrets` | project_id, kms_key, secrets | secret_names, secret_version_refs | Secret Manager (values via CLI) |
 | `cloud-run-web` | project_id, service_account_email, image, vpc_connector | service_url, latest_revision_name | Next.js app on Cloud Run |

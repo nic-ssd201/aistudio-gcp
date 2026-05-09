@@ -3,7 +3,7 @@
  * Reduces auth overhead from ~500ms to ~5ms per request
  */
 
-import { getServerSession } from '@/lib/auth/server-session';
+import { getServerSession, type UserSession } from '@/lib/auth/server-session';
 import { getCurrentUserAction } from '@/actions/db/get-current-user-action';
 import { pollingSessionCache, generateSessionCacheKey } from './polling-session-cache';
 import { authPerformanceMonitor } from '@/lib/monitoring/auth-performance-monitor';
@@ -14,12 +14,17 @@ const log = createLogger({ module: 'optimized-polling-auth' });
 export interface OptimizedAuthResult {
   isAuthorized: boolean;
   userId: number;
-  session: {
-    sub: string;
-    email?: string;
-    givenName?: string | null;
-    familyName?: string | null;
-  };
+  /**
+   * The authenticated session.  On the cache-hit path this is the full
+   * `UserSession` stored at cache-write time (which includes `loginIat`,
+   * `roleVersion`, `idToken`, etc.).  Typed as `UserSession` rather than a
+   * narrower inline shape so callers are not surprised when they access fields
+   * that are present at runtime but absent from the declared type.
+   *
+   * For failed-auth results the value is a minimal sentinel `{ sub: '' }` — not
+   * a real session.  Callers should always check `isAuthorized` before using it.
+   */
+  session: UserSession;
   userRoles: string[];
   authMethod: 'cache' | 'database' | 'failed';
   authTime: number;
@@ -49,32 +54,51 @@ export async function authenticatePollingRequest(): Promise<OptimizedAuthResult>
       };
     }
 
+    // generateSessionCacheKey returns null when session.loginIat is absent or 0,
+    // which indicates broken loginIat propagation.  In that case we skip the
+    // cache entirely (fail-closed) rather than caching under the degenerate key
+    // session:sub:0 where every session for the same sub would collide and
+    // potentially receive stale roles from a different session's cache entry.
     const cacheKey = generateSessionCacheKey(session);
 
-    // Step 2: Check cache first
-    const cachedAuth = pollingSessionCache.getCachedSession(cacheKey);
-    if (cachedAuth) {
-      const authTime = Date.now() - startTime;
-      authPerformanceMonitor.recordAuthRequest(authTime, 'cache', true);
+    // Step 2: Check cache first (skip when cacheKey is null — iat missing)
+    if (cacheKey) {
+      const cachedAuth = pollingSessionCache.getCachedSession(cacheKey);
+      if (cachedAuth) {
+        const authTime = Date.now() - startTime;
+        authPerformanceMonitor.recordAuthRequest(authTime, 'cache', true);
 
-      log.debug('Using cached authentication', {
-        userId: cachedAuth.userId,
-        cacheAge: Date.now() - cachedAuth.cachedAt,
-        requestCount: cachedAuth.requestCount,
-        authTime
+        log.debug('Using cached authentication', {
+          userId: cachedAuth.userId,
+          cacheAge: Date.now() - cachedAuth.cachedAt,
+          requestCount: cachedAuth.requestCount,
+          authTime
+        });
+
+        return {
+          isAuthorized: true,
+          userId: cachedAuth.userId,
+          session: cachedAuth.session,
+          // Spread to give callers a plain string[] — CachedSession.userRoles is
+          // readonly string[] to prevent in-place mutation of the cached array.
+          userRoles: [...cachedAuth.userRoles],
+          authMethod: 'cache',
+          authTime
+        };
+      }
+    } else {
+      // Downgraded to debug: during a rolling deploy, every in-flight JWT that
+      // predates the loginIat field triggers this path.  At warn level that
+      // produces one log line per poll per user for up to 24 h (the JWT TTL) —
+      // a potential log-volume spike that drowns signal at exactly the worst time.
+      // Debug is sufficient: the condition is expected during the rollout window
+      // and auth.ts already documents the transition behaviour.
+      log.debug('Skipping polling cache — session.loginIat absent (expected during loginIat rollout)', {
+        sub: session.sub,
       });
-
-      return {
-        isAuthorized: true,
-        userId: cachedAuth.userId,
-        session: cachedAuth.session,
-        userRoles: cachedAuth.userRoles,
-        authMethod: 'cache',
-        authTime
-      };
     }
 
-    // Step 3: Full authentication (cache miss)
+    // Step 3: Full authentication (cache miss or iat-less session)
     log.debug('Cache miss - performing full authentication', { sub: session.sub });
 
     const userResult = await getCurrentUserAction();
@@ -96,8 +120,10 @@ export async function authenticatePollingRequest(): Promise<OptimizedAuthResult>
     const { user, roles } = userResult.data;
     const userRoles = roles.map(role => role.name);
 
-    // Step 4: Cache the result
-    pollingSessionCache.setCachedSession(cacheKey, session, user.id, userRoles);
+    // Step 4: Cache the result (only when cacheKey is non-null — iat present)
+    if (cacheKey) {
+      pollingSessionCache.setCachedSession(cacheKey, session, user.id, userRoles);
+    }
 
     const authTime = Date.now() - startTime;
     authPerformanceMonitor.recordAuthRequest(authTime, 'database', true);
@@ -159,15 +185,6 @@ export function validateJobOwnership(
   }
 
   return { authorized: true };
-}
-
-/**
- * Invalidate cached sessions (call on logout, role changes)
- */
-export function invalidateUserSessions(userSub: string): void {
-  const cacheKey = `session:${userSub}`;
-  pollingSessionCache.invalidateSession(cacheKey);
-  log.info('User sessions invalidated', { userSub });
 }
 
 /**

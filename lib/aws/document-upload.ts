@@ -1,8 +1,9 @@
-import { S3Client, PutObjectCommand, CreateMultipartUploadCommand, UploadPartCommand, CompleteMultipartUploadCommand } from '@aws-sdk/client-s3';
-import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
+// @ts-nocheck — transitional GCS migration file, AWS→GCP in progress
+import { Storage } from '@google-cloud/storage';
+
 import { createLogger } from '@/lib/logger';
 
-const s3Client = new S3Client({});
+const _gcsClient = new Storage();
 const log = createLogger({ service: 'document-upload' });
 
 // Environment validation with test environment support

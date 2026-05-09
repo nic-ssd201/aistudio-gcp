@@ -198,7 +198,7 @@ export function ConnectorFormSheet({ server, onSuccess }: Props) {
           value={authType}
           onValueChange={(v) => {
             setAuthType(v as McpAuthType)
-            if (v === "none" || v === "cognito_passthrough") setError(null)
+            if (v === "none" || v === "session_passthrough") setError(null)
           }}
         >
           <SelectTrigger>
@@ -209,7 +209,7 @@ export function ConnectorFormSheet({ server, onSuccess }: Props) {
             <SelectItem value="oauth">OAuth</SelectItem>
             <SelectItem value="api_key">API Key</SelectItem>
             <SelectItem value="jwt">JWT</SelectItem>
-            <SelectItem value="cognito_passthrough">Cognito Passthrough</SelectItem>
+            <SelectItem value="session_passthrough">Session Passthrough</SelectItem>
           </SelectContent>
         </Select>
       </div>
@@ -325,12 +325,12 @@ export function ConnectorFormSheet({ server, onSuccess }: Props) {
         </>
       )}
 
-      {authType === "cognito_passthrough" && (
+      {authType === "session_passthrough" && (
         <div className="rounded-md border border-border bg-muted/50 p-3">
           <p className="text-xs text-muted-foreground">
-            The user&apos;s Cognito ID token is forwarded as a Bearer token.
+            The user&apos;s Google ID token is forwarded as a Bearer token.
             No per-user token storage needed — the token comes from the active session.
-            The MCP server must trust this Cognito pool&apos;s JWKS for JWT validation.
+            The MCP server must trust the Google OIDC provider&apos;s JWKS for JWT validation.
           </p>
         </div>
       )}

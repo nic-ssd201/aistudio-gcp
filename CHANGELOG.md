@@ -208,7 +208,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Infrastructure validation via CDK Nag
 
 ### Migration Notes
-This is the first public release. Previously, AI Studio was internal-only to Peninsula School District (PSD401).
+This is the first public release. Previously, AI Studio was internal-only to Sunnyside School District (SSD201).
 
 **Breaking Changes from pre-1.0**:
 - Migrated from AWS Amplify to ECS Fargate (different deployment process)

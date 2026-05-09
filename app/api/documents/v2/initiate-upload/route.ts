@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getServerSession } from '@/lib/auth/server-session';
-import { generatePresignedUrl, generateMultipartUrls } from '@/lib/aws/document-upload';
+import { createDocumentUploadConfig } from '@/lib/services/document-upload-service';
 import { createDocumentJob } from '@/lib/services/document-job-service';
 import { createLogger, generateRequestId, startTimer } from '@/lib/logger';
 import { z } from 'zod';
@@ -91,7 +91,7 @@ export async function POST(req: NextRequest) {
       fileSize,
       fileType,
       purpose,
-      userId: session.userId
+      userId: session.sub
     });
     
     // Validate file size limits based on purpose
@@ -159,22 +159,18 @@ export async function POST(req: NextRequest) {
     
     log.info('Job created', { jobId: job.id });
     
-    // Generate presigned URL(s) based on file size
-    let uploadConfig;
-    if (fileSize < 10 * 1024 * 1024) {
-      // Single presigned URL for files under 10MB
-      uploadConfig = await generatePresignedUrl(job.id, fileName);
-      log.info('Generated single presigned URL', { jobId: job.id });
-    } else {
-      // Multipart upload for large files
-      const partSize = 5 * 1024 * 1024; // 5MB chunks
-      const partCount = Math.ceil(fileSize / partSize);
-      uploadConfig = await generateMultipartUrls(job.id, fileName, partCount);
-      log.info('Generated multipart upload URLs', {
-        jobId: job.id,
-        partCount
-      });
-    }
+    const uploadConfig = await createDocumentUploadConfig({
+      jobId: job.id,
+      fileName,
+      fileSize,
+      fileType,
+    });
+
+    log.info('Generated upload configuration', {
+      jobId: job.id,
+      method: uploadConfig.method,
+      partCount: uploadConfig.partUrls?.length,
+    });
     
     timer({ status: 'success' });
     
