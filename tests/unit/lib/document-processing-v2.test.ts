@@ -131,7 +131,7 @@ describe.skip('Document Job Service', () => {
         Items: [mockJobData],
       });
 
-      const job = await getJobStatus('job-123', 'user-123');
+      const job = await getJobStatus('job-123');
 
       expect(job).toBeTruthy();
       expect(job?.id).toBe('job-123');
@@ -142,7 +142,7 @@ describe.skip('Document Job Service', () => {
     it('should return null for non-existent job', async () => {
       mockDynamoDBClient.send.mockResolvedValue({ Items: [] });
 
-      const job = await getJobStatus('non-existent-job', 'user-123');
+      const job = await getJobStatus('non-existent-job');
 
       expect(job).toBeNull();
     });

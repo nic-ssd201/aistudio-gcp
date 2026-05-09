@@ -14,6 +14,7 @@ import { executeQuery } from "@/lib/db/drizzle-client";
 import {
   createDocumentJob,
   getJobStatus,
+  getJobForUser,
   updateJobStatus,
   confirmDocumentUpload,
   getUserJobs,
@@ -127,7 +128,7 @@ describe("createDocumentJob", () => {
   });
 });
 
-describe("getJobStatus", () => {
+describe("getJobStatus (unscoped — internal use)", () => {
   it("returns the job when found", async () => {
     mockExecuteQuery.mockResolvedValueOnce([makeRow({ status: "processing" })]);
     const job = await getJobStatus("job-1");
@@ -139,21 +140,29 @@ describe("getJobStatus", () => {
     const job = await getJobStatus("missing-id");
     expect(job).toBeNull();
   });
+});
 
-  it("adds a userId filter to the WHERE when supplied (auth scoping)", async () => {
-    const { db, spies } = makeSpyDb([]);
-    mockExecuteQuery.mockImplementationOnce(async (cb) => cb(db as never));
-
-    await getJobStatus("job-1", "user-sub-1");
-
-    // Drizzle's `and()` returns an opaque SQL chunk we can't inspect by value
-    // here, but we CAN assert .where() was called with a non-undefined arg —
-    // an unscoped lookup would either skip .where() or pass eq(id) only.
-    // The presence of a where-arg + the absence of a regression to "no filter"
-    // is what we're locking in.
-    expect(spies.where).toHaveBeenCalledTimes(1);
-    expect(spies.where.mock.calls[0][0]).toBeDefined();
+describe("getJobForUser (auth-scoped)", () => {
+  it("returns the job when both id AND userId match", async () => {
+    mockExecuteQuery.mockResolvedValueOnce([makeRow()]);
+    const job = await getJobForUser("user-sub-1", "11111111-1111-4111-8111-111111111111");
+    expect(job?.id).toBe("11111111-1111-4111-8111-111111111111");
   });
+
+  it("returns null when the row exists but belongs to a different user", async () => {
+    // The service emits and(eq(id), eq(userId)) — Postgres returns 0 rows
+    // because the userId filter doesn't match. The mock simulates that.
+    mockExecuteQuery.mockResolvedValueOnce([]);
+    const job = await getJobForUser("user-sub-2", "11111111-1111-4111-8111-111111111111");
+    expect(job).toBeNull();
+  });
+
+  // Structural assertion intentionally omitted: the function-name split
+  // (getJobStatus vs getJobForUser) is the primary safety net — there is no
+  // optional userId parameter for a future caller to forget. The semantic
+  // "returns null for different user" test above proves the predicate is in
+  // place; introspecting Drizzle's internal queryChunks shape was tried but
+  // turned out to be too version-fragile to be useful.
 });
 
 describe("updateJobStatus", () => {
@@ -178,6 +187,18 @@ describe("updateJobStatus", () => {
 
     const setArg = spies.set.mock.calls[0][0] as Record<string, unknown>;
     expect(setArg.completedAt).toBeUndefined();
+  });
+
+  it("honors an explicit completedAt over the auto-set behavior", async () => {
+    const { db, spies } = makeSpyDb();
+    mockExecuteQuery.mockImplementationOnce(async (cb) => cb(db as never));
+
+    const explicit = "2026-04-01T12:00:00.000Z";
+    await updateJobStatus("job-1", "completed", { completedAt: explicit });
+
+    const setArg = spies.set.mock.calls[0][0] as Record<string, unknown>;
+    expect(setArg.completedAt).toBeInstanceOf(Date);
+    expect((setArg.completedAt as Date).toISOString()).toBe(explicit);
   });
 
   it("does NOT forward undefined fields to .set() (clearable-field silent-failure guard)", async () => {

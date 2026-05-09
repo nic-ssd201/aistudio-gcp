@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getServerSession } from '@/lib/auth/server-session';
 import { completeMultipartUpload } from '@/lib/aws/document-upload';
-import { confirmDocumentUpload, getJobStatus } from '@/lib/services/document-job-service';
+import { confirmDocumentUpload, getJobForUser } from '@/lib/services/document-job-service';
 import { sendToProcessingQueue } from '@/lib/gcp/processing-queue';
 import { createLogger, generateRequestId, startTimer } from '@/lib/logger';
 import { z } from 'zod';
@@ -39,7 +39,7 @@ export async function POST(req: NextRequest) {
     });
     
     // Get job details to verify ownership
-    const job = await getJobStatus(jobId, session.sub);
+    const job = await getJobForUser(session.sub, jobId);
     if (!job) {
       log.warn('Job not found for multipart completion', { jobId, userId: session.sub });
       return NextResponse.json({ error: 'Job not found' }, { status: 404 });

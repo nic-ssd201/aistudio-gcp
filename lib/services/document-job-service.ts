@@ -17,7 +17,7 @@ Public API kept stable for callers in app/api/documents/v2/* with three rename-s
  * The route caller is updated in this same PR; no deprecation alias is kept.
  */
 
-import { eq, and, desc, lt, sql } from "drizzle-orm"
+import { eq, and, desc, lt, inArray, sql } from "drizzle-orm"
 import { executeQuery } from "@/lib/db/drizzle-client"
 import {
   documentJobs,
@@ -140,22 +140,44 @@ export async function createDocumentJob(params: CreateJobParams): Promise<Docume
 }
 
 /**
- * Fetch a single job. When `userId` is supplied, an ownership filter is added
- * so a stolen jobId can't be used to read another user's row.
+ * Fetch a single job WITH ownership scoping. Use this from any request-scoped
+ * code path — it's the auth-safe default. Returns null if the job either
+ * doesn't exist or belongs to another user (the caller can't distinguish,
+ * which is by design — don't leak existence of jobs across users).
  */
-export async function getJobStatus(
+export async function getJobForUser(
+  userId: string,
   jobId: string,
-  userId?: string,
 ): Promise<DocumentJob | null> {
-  const where = userId
-    ? and(eq(documentJobs.id, jobId), eq(documentJobs.userId, userId))
-    : eq(documentJobs.id, jobId)
-
   const rows = await executeQuery(
-    (db) => db.select().from(documentJobs).where(where).limit(1),
+    (db) =>
+      db
+        .select()
+        .from(documentJobs)
+        .where(and(eq(documentJobs.id, jobId), eq(documentJobs.userId, userId)))
+        .limit(1),
+    "getJobForUser",
+  )
+  return rows[0] ? toDocumentJob(rows[0]) : null
+}
+
+/**
+ * Fetch a single job WITHOUT ownership scoping. Internal/trusted callers only
+ * (file-processor reading the row it's about to update, scheduled cleanup
+ * sweeps, admin tooling). NEVER call this from a request-scoped path —
+ * a stolen jobId would let any authenticated user read the row. Use
+ * `getJobForUser(userId, jobId)` from any user-facing route.
+ */
+export async function getJobStatus(jobId: string): Promise<DocumentJob | null> {
+  const rows = await executeQuery(
+    (db) =>
+      db
+        .select()
+        .from(documentJobs)
+        .where(eq(documentJobs.id, jobId))
+        .limit(1),
     "getJobStatus",
   )
-
   return rows[0] ? toDocumentJob(rows[0]) : null
 }
 
@@ -167,7 +189,7 @@ export async function getJobStatus(
  *
  * **Authorization:** this function does NOT check ownership — the WHERE matches
  * solely on jobId. Callers MUST verify `job.userId === session.sub` first
- * (typically via `getJobStatus(jobId, session.sub)`) before invoking this from
+ * (typically via `getJobForUser(session.sub, jobId)`) before invoking this from
  * a request-scoped path. Trusted internal callers (file-processor, scheduled
  * cleanup) are exempt.
  */
@@ -301,8 +323,13 @@ export async function getJobsByStatus(
 }
 
 /**
- * Delete jobs older than `olderThanDays`. Used by the cleanup job that replaces
- * the prior DynamoDB TTL behavior. Returns the number of rows deleted.
+ * Delete TERMINAL jobs older than `olderThanDays`. Replaces the prior
+ * DynamoDB TTL behavior. Returns the number of rows deleted.
+ *
+ * Status filter is intentional: a `pending` or `processing` row created >7 days
+ * ago is most likely stuck (consumer outage, paused queue) and silently
+ * deleting it would compound the failure. Operators should investigate
+ * stuck rows directly via getJobsByStatus rather than relying on TTL.
  */
 export async function deleteOldJobs(olderThanDays = 7): Promise<number> {
   const cutoff = new Date(Date.now() - olderThanDays * 24 * 60 * 60 * 1000)
@@ -310,7 +337,12 @@ export async function deleteOldJobs(olderThanDays = 7): Promise<number> {
     (db) =>
       db
         .delete(documentJobs)
-        .where(lt(documentJobs.createdAt, cutoff))
+        .where(
+          and(
+            lt(documentJobs.createdAt, cutoff),
+            inArray(documentJobs.status, ["completed", "failed"]),
+          ),
+        )
         .returning({ id: documentJobs.id }),
     "deleteOldJobs",
   )

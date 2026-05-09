@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getServerSession } from '@/lib/auth/server-session';
-import { getJobStatus, fetchResultFromGcs } from '@/lib/services/document-job-service';
+import { getJobForUser, fetchResultFromGcs } from '@/lib/services/document-job-service';
 import { createLogger, generateRequestId, startTimer } from '@/lib/logger';
 
 export async function GET(
@@ -24,7 +24,7 @@ export async function GET(
     const jobId = resolvedParams.jobId;
     
     // Get job with user ID for security
-    const job = await getJobStatus(jobId, session.sub);
+    const job = await getJobForUser(session.sub, jobId);
     
     if (!job) {
       log.warn('Job not found', { jobId, userId: session.sub });

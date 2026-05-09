@@ -49,7 +49,11 @@ CREATE TABLE IF NOT EXISTS document_jobs (
   result              JSONB,
   result_location     VARCHAR(50)
     CHECK (result_location IS NULL OR result_location IN ('inline', 'gcs')),
-  result_gcs_key      VARCHAR(500),
+  -- 1024 matches the GCS object-name length limit (per
+  -- https://cloud.google.com/storage/docs/objects#naming) — picks the
+  -- ceiling rather than something tighter, since PR B's file-processor
+  -- may compose paths from job IDs + user-controlled fragments.
+  result_gcs_key      VARCHAR(1024),
 
   error_message       TEXT,
 
