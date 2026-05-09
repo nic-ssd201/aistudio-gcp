@@ -1,16 +1,34 @@
 /**
- * JWT Signing Service
- * Signs JWTs using RS256 for production use.
- * Part of Issue #686 - MCP Server + OAuth2/OIDC Provider (Phase 3)
+ * KMS-backed JWT signing service.
  *
- * Security:
- * - Private key loaded from GOOGLE_KMS_KEY_PATH env var (GCP KMS integration TODO)
- * - Falls back to local RSA key pair for dev/staging
- * - Public keys cached with 5-min TTL for JWKS endpoint
- * - Cloud Audit Logs on all signing operations (when GCP KMS is configured)
+ * Signs JWTs by delegating the RSA-SHA256 signature operation to Google Cloud KMS,
+ * so the private key never leaves KMS and every Cloud Run instance signs against the
+ * same key (the previous in-process keypair generation produced a different keypair
+ * per instance — tokens signed by instance A failed verification at instance B).
+ *
+ * Key resource paths look like:
+ *   projects/<P>/locations/<L>/keyRings/<R>/cryptoKeys/<K>/cryptoKeyVersions/<V>
+ *
+ * The constructor expects a fully-qualified key version path. The trailing
+ * "<key-name>-v<version>" pair is used as the JWK `kid` so verifiers see a stable,
+ * version-aware identifier across the fleet.
+ *
+ * Required IAM on the key:
+ *   roles/cloudkms.signer         — for asymmetricSign
+ *   roles/cloudkms.viewer         — for getPublicKey
+ * (Or roles/cloudkms.signerVerifier which covers both.)
+ *
+ * Required key configuration:
+ *   purpose                = ASYMMETRIC_SIGN
+ *   version_template.algorithm
+ *     = RSA_SIGN_PKCS1_2048_SHA256  (RS256 — what this service produces)
+ *
+ * Part of Issue #686 — MCP Server + OAuth2/OIDC Provider (Phase 3).
+ * Replaces the deploy-blocker keypair-per-instance behavior flagged on PR #8.
  */
 
-import { createSign, createPublicKey, generateKeyPairSync } from "node:crypto"
+import { createHash, createPublicKey } from "node:crypto"
+import { KeyManagementServiceClient } from "@google-cloud/kms"
 import { createLogger } from "@/lib/logger"
 
 // ============================================
@@ -27,7 +45,6 @@ export interface JwksKey {
 }
 
 interface CachedPublicKey {
-  pem: string
   jwk: JwksKey
   fetchedAt: number
 }
@@ -37,36 +54,57 @@ interface CachedPublicKey {
 // ============================================
 
 const PUBLIC_KEY_CACHE_TTL_MS = 5 * 60 * 1000 // 5 minutes
-const KID = "aistudio-jwt-v1"
+
+// Match a fully-qualified KMS key version path (the only form we accept).
+// projects/<P>/locations/<L>/keyRings/<R>/cryptoKeys/<K>/cryptoKeyVersions/<V>
+const KEY_VERSION_PATH_RE =
+  /^projects\/[^/]+\/locations\/[^/]+\/keyRings\/[^/]+\/cryptoKeys\/([^/]+)\/cryptoKeyVersions\/([^/]+)$/
 
 // ============================================
 // JWT Signer
 // ============================================
 
 export class KmsJwtService {
-  private kid: string
-  private privateKey: Buffer
+  private readonly keyName: string
+  private readonly kid: string
+  private readonly client: KeyManagementServiceClient
   private publicKeyCache: CachedPublicKey | null = null
 
-  constructor(keyArn?: string, kid?: string) {
-    // GCP KMS integration TODO: Load key from GOOGLE_KMS_KEY_PATH env var
-    // For now, use local RSA key pair for dev/staging
-    this.kid = kid || KID
-    
-    const { privateKey } = generateKeyPairSync("rsa", {
-      modulusLength: 2048,
-      privateKeyEncoding: { type: "pkcs8", format: "pem" },
-      publicKeyEncoding: { type: "spki", format: "pem" },
-    })
-    this.privateKey = privateKey as unknown as Buffer
+  /**
+   * @param keyName    Fully-qualified KMS cryptoKeyVersion resource name.
+   * @param kid        Optional override for the JWK `kid`. Defaults to
+   *                   "<crypto-key-name>-v<version>" parsed from `keyName`.
+   * @param client     Optional injected client (for tests). A real
+   *                   KeyManagementServiceClient is constructed otherwise.
+   */
+  constructor(
+    keyName: string,
+    kid?: string,
+    client?: KeyManagementServiceClient,
+  ) {
+    const match = KEY_VERSION_PATH_RE.exec(keyName)
+    if (!match) {
+      throw new Error(
+        `KmsJwtService: keyName must be a KMS cryptoKeyVersion resource path ` +
+          `(projects/.../keyRings/.../cryptoKeys/.../cryptoKeyVersions/N). ` +
+          `Got: "${keyName}"`,
+      )
+    }
+
+    this.keyName = keyName
+    this.kid = kid ?? `${match[1]}-v${match[2]}`
+    this.client = client ?? new KeyManagementServiceClient()
   }
 
   /**
-   * Sign a JWT with RSA-SHA256.
-   * Constructs header.payload, signs locally (or via KMS when configured), returns complete JWT string.
+   * Sign a JWT with RS256 using the configured KMS key.
+   *
+   * KMS's asymmetricSign expects a pre-computed digest of the signing input
+   * (header.payload), not the raw bytes — the digest is hashed locally and the
+   * resulting bytes are sent to KMS along with the algorithm hint.
    */
   async signJwt(payload: Record<string, unknown>): Promise<string> {
-    const jwtLog = createLogger({ action: "jwtService.signJwt" })
+    const log = createLogger({ action: "KmsJwtService.signJwt" })
 
     const header = {
       alg: "RS256",
@@ -78,16 +116,26 @@ export class KmsJwtService {
     const payloadB64 = base64UrlEncode(JSON.stringify(payload))
     const signingInput = `${headerB64}.${payloadB64}`
 
-    try {
-      const signer = createSign("SHA256withRSA")
-      signer.update(signingInput)
-      signer.end()
+    const digest = createHash("sha256").update(signingInput).digest()
 
-      const signature = signer.sign(this.privateKey)
-      const signatureB64 = bufferToBase64Url(signature)
-      return `${signingInput}.${signatureB64}`
+    try {
+      const [response] = await this.client.asymmetricSign({
+        name: this.keyName,
+        digest: { sha256: digest },
+      })
+
+      if (!response.signature) {
+        throw new Error("KMS asymmetricSign returned no signature")
+      }
+
+      const signatureBytes =
+        typeof response.signature === "string"
+          ? Buffer.from(response.signature, "base64")
+          : Buffer.from(response.signature)
+
+      return `${signingInput}.${bufferToBase64Url(signatureBytes)}`
     } catch (error) {
-      jwtLog.error("JWT signing failed", {
+      log.error("JWT signing failed", {
         kid: this.kid,
         error: error instanceof Error ? error.message : String(error),
       })
@@ -96,8 +144,9 @@ export class KmsJwtService {
   }
 
   /**
-   * Get the public key in JWK format for JWKS endpoint.
-   * Cached with 5-min TTL.
+   * Get the public key in JWK format for the JWKS endpoint.
+   * KMS returns a PEM-encoded public key; we parse it locally and re-export as a JWK.
+   * Cached with `PUBLIC_KEY_CACHE_TTL_MS` TTL (KMS getPublicKey is cheap but rate-limited).
    */
   async getPublicKeyJwk(): Promise<JwksKey> {
     const now = Date.now()
@@ -106,17 +155,20 @@ export class KmsJwtService {
       return this.publicKeyCache.jwk
     }
 
-    const jwtLog = createLogger({ action: "jwtService.getPublicKeyJwk" })
+    const log = createLogger({ action: "KmsJwtService.getPublicKeyJwk" })
 
-    // Derive public key from private key
-    const publicKey = createPublicKey(this.privateKey)
-    const exported = publicKey.export({ format: "jwk" }) as {
+    const [response] = await this.client.getPublicKey({ name: this.keyName })
+    if (!response.pem) {
+      throw new Error("KMS getPublicKey returned no PEM")
+    }
+
+    const exported = createPublicKey(response.pem).export({ format: "jwk" }) as {
       kty: string
       n: string
       e: string
     }
 
-    const jwk = {
+    const jwk: JwksKey = {
       kty: exported.kty,
       use: "sig",
       kid: this.kid,
@@ -125,13 +177,8 @@ export class KmsJwtService {
       e: exported.e,
     }
 
-    this.publicKeyCache = {
-      pem: "", // Not needed for JWKS
-      jwk,
-      fetchedAt: now,
-    }
-
-    jwtLog.info("Refreshed JWT public key", { kid: this.kid })
+    this.publicKeyCache = { jwk, fetchedAt: now }
+    log.info("Refreshed JWT public key from KMS", { kid: this.kid })
     return jwk
   }
 

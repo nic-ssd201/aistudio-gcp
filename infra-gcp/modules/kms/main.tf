@@ -100,6 +100,39 @@ resource "google_kms_crypto_key_iam_member" "alloydb" {
 }
 
 # ---------------------------------------------------------------------------
+# ASYMMETRIC_SIGN keys (separate resource — different purpose + algorithm).
+#
+# Used for application-level signing operations (e.g. JWT signing for the
+# OAuth2/OIDC provider). The private key never leaves KMS; sign operations
+# go via cloudkms.signer, public-key fetch goes via cloudkms.viewer (both
+# bundled in roles/cloudkms.signerVerifier).
+# ---------------------------------------------------------------------------
+
+resource "google_kms_crypto_key" "signing_keys" {
+  for_each = var.signing_keys
+
+  name     = each.key
+  key_ring = google_kms_key_ring.main.id
+
+  purpose         = "ASYMMETRIC_SIGN"
+  rotation_period = each.value.rotation_period
+
+  version_template {
+    algorithm        = each.value.algorithm
+    protection_level = "SOFTWARE"
+  }
+
+  labels = merge(local.labels, {
+    key-purpose = replace(each.value.purpose, " ", "-")
+    key-type    = "asymmetric-sign"
+  })
+
+  lifecycle {
+    prevent_destroy = true
+  }
+}
+
+# ---------------------------------------------------------------------------
 # Project data source (internal — the spec allows data sources scoped to the
 # current environment, which this is: it only reads the project we're operating in).
 # ---------------------------------------------------------------------------
