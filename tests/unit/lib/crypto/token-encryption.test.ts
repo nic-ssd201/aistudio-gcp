@@ -332,4 +332,28 @@ describe("Token Encryption (AES-256-GCM)", () => {
        }
      })
    })
-})
+
+  describe("Secret Manager request shape", () => {
+    it("requests the flat aistudio-mcp-token-encryption-key secret in the configured project", async () => {
+      await encryptToken("any-token");
+
+      expect(mockAccessSecretVersion).toHaveBeenCalledTimes(1);
+      expect(mockAccessSecretVersion).toHaveBeenCalledWith({
+        name: "projects/test-project/secrets/aistudio-mcp-token-encryption-key/versions/latest",
+      });
+    });
+
+    it("fails loud (not silently to a wrong project) when GCP_PROJECT_ID is unset", async () => {
+      const original = process.env.GCP_PROJECT_ID;
+      delete process.env.GCP_PROJECT_ID;
+      try {
+        await expect(encryptToken("any-token")).rejects.toThrow(
+          /GCP_PROJECT_ID is not set/
+        );
+        expect(mockAccessSecretVersion).not.toHaveBeenCalled();
+      } finally {
+        process.env.GCP_PROJECT_ID = original;
+      }
+    });
+  });
+});

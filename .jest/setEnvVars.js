@@ -8,3 +8,7 @@ process.env.NEXT_PUBLIC_APP_URL = 'http://localhost:3000';
 process.env.AUTH_URL = 'http://localhost:3000';
 process.env.AUTH_SECRET = 'test-auth-secret-for-jest-do-not-use-in-production';
 process.env.GCS_BUCKET = 'test-gcs-bucket';
+// Required by code that talks to Google Cloud Secret Manager (token-encryption,
+// connector-service). The mocked SDK doesn't actually use this, but
+// `getRequiredEnv('GCP_PROJECT_ID')` runs before the SDK call.
+process.env.GCP_PROJECT_ID = 'test-project';

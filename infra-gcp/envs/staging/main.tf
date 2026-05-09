@@ -160,6 +160,10 @@ module "secrets" {
       description        = "AlloyDB postgres initial user password (set via gcloud secrets versions add)"
       accessor_sa_emails = []
     }
+    "aistudio-mcp-token-encryption-key" = {
+      description        = "DEK seed for MCP per-user OAuth token field-level encryption (consumed by lib/crypto/token-encryption.ts)"
+      accessor_sa_emails = [module.sa_web.email]
+    }
   }
 
   labels = { environment = var.environment, managed_by = "terraform" }
@@ -281,9 +285,11 @@ module "cloud_run_web" {
     VERTEX_AI_ENABLED           = "true"
     STORAGE_PROVIDER            = "gcs"
     GOOGLE_CLOUD_PROJECT        = var.env_project_id
+    GCP_PROJECT_ID              = var.env_project_id
     GCS_BUCKET                  = module.storage.buckets["attachments"].name
     VERTEX_MODEL_ARMOR_TEMPLATE = module.vertex.model_armor_template_names["aistudio-default"]
     NODE_ENV                    = "production"
+    ENVIRONMENT                 = var.environment
   }
 
   labels = { environment = var.environment, managed_by = "terraform" }
