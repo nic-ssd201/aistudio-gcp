@@ -234,7 +234,7 @@ async function uploadHandler(req: NextRequest) {
     // but in this server-side upload pattern, they are the same identifier.
     await confirmDocumentUpload(session.sub, job.id, job.id);
 
-    // Step 4: Send to processing queue (matching confirm-upload flow)
+    // Step 4: Send to processing queue.
     const bucketName = getActiveStorageBucketName();
 
     if (process.env.NODE_ENV !== 'test' && !bucketName) {
