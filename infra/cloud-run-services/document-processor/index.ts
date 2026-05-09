@@ -29,6 +29,7 @@ import {
   type DocumentJob,
 } from "@/lib/services/document-job-service"
 import { getObjectStream } from "@/lib/services/document-storage-service"
+import { getUploadGcsKey } from "@/lib/gcp/gcs-client"
 import {
   extractTextFromDocument,
   chunkText,
@@ -82,10 +83,21 @@ function expectedAudienceFor(req: IncomingMessage): string {
 // HTTP plumbing
 // ============================================================================
 
+// Cloud Tasks payloads are platform-capped at 100 KiB; 1 MiB here gives
+// generous headroom for future multi-jobId batches without letting a
+// misbehaving caller stream unbounded data into the worker's memory.
+const MAX_BODY_BYTES = 1024 * 1024
+
 async function readJsonBody<T = unknown>(req: IncomingMessage): Promise<T> {
   const chunks: Buffer[] = []
+  let total = 0
   for await (const c of req) {
-    chunks.push(Buffer.isBuffer(c) ? c : Buffer.from(c))
+    const buf = Buffer.isBuffer(c) ? c : Buffer.from(c)
+    total += buf.length
+    if (total > MAX_BODY_BYTES) {
+      throw new Error(`Request body exceeds ${MAX_BODY_BYTES} bytes`)
+    }
+    chunks.push(buf)
   }
   if (chunks.length === 0) return {} as T
   return JSON.parse(Buffer.concat(chunks).toString("utf8")) as T
@@ -284,17 +296,13 @@ async function processJob(
   // For very large files this is the biggest memory pressure point — but
   // upload size caps in the route handlers bound this. If we ever raise
   // those caps, we'd want a streaming extractor.
-  const gcsKey = (job.result as { _uploadKey?: string } | undefined)?._uploadKey
-    ?? `${job.userId}/${job.id}/${job.fileName}` // placeholder shape; corrected below
-
-  // The actual upload key shape depends on which route created it. The
-  // upload routes write to v2/uploads/<jobId>/<sanitized-filename> via
-  // uploadServerProxyDocument. We reconstruct here rather than carrying
-  // the key on the job row to keep the producer-side surface small.
-  const sanitizedFileName = job.fileName.replace(/[^a-zA-Z0-9._-]/g, "_")
-  const realKey = `v2/uploads/${job.id}/${sanitizedFileName}`
-  void gcsKey // referenced for future change-point grep
-
+  //
+  // Key shape comes from the shared getUploadGcsKey helper in gcs-client,
+  // which is also what uploadServerProxyDocument uses on the producer side.
+  // PR C will replace the v2 upload routes with resumable upload and
+  // persist the resulting key on the document_jobs row, removing the
+  // need to reconstruct here at all.
+  const realKey = getUploadGcsKey(job.id, job.fileName)
   const { stream } = await getObjectStream(realKey)
   const chunks: Buffer[] = []
   for await (const c of stream) {

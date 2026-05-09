@@ -8,8 +8,6 @@
 
 import {
   sendToProcessingQueue,
-  triggerLambdaProcessing,
-  retryFailedJob,
   _resetForTesting,
   type ProcessingJobMessage,
 } from "../processing-queue";
@@ -116,30 +114,9 @@ describe("sendToProcessingQueue", () => {
   });
 });
 
-describe("retryFailedJob", () => {
-  it("computes exponential backoff capped at 5 minutes and tags the task name with the attempt", async () => {
-    await retryFailedJob("job-1", 3);
-    const arg = createTaskMock.mock.calls[0][0];
-    expect(arg.task.name).toMatch(/job-1-retry-3$/);
-    // 2^3 = 8 seconds — well under the 300s cap.
-    const nowSec = Math.floor(Date.now() / 1000);
-    expect(arg.task.scheduleTime.seconds).toBeGreaterThanOrEqual(nowSec + 7);
-    expect(arg.task.scheduleTime.seconds).toBeLessThanOrEqual(nowSec + 10);
-  });
-
-  it("caps backoff at 5 minutes for high attempt numbers", async () => {
-    await retryFailedJob("job-1", 20);
-    const arg = createTaskMock.mock.calls[0][0];
-    const nowSec = Math.floor(Date.now() / 1000);
-    expect(arg.task.scheduleTime.seconds).toBeGreaterThanOrEqual(nowSec + 295);
-    expect(arg.task.scheduleTime.seconds).toBeLessThanOrEqual(nowSec + 305);
-  });
-});
-
-describe("triggerLambdaProcessing", () => {
-  it("dispatches without delay when priority=true", async () => {
-    await triggerLambdaProcessing("job-1", { priority: true });
-    const arg = createTaskMock.mock.calls[0][0];
-    expect(arg.task.scheduleTime).toBeUndefined();
-  });
-});
+// triggerLambdaProcessing + retryFailedJob were dropped — neither had any
+// production callers and both synthesized empty ProcessingJobMessage shapes
+// that masked bugs if anyone ever started reading message.fileSize from a
+// retry path. Cloud Tasks' built-in retry config (cloud-tasks-queue module's
+// retry_config) handles the retry case for transport-level failures; PR C
+// will introduce explicit application-level retry if/when needed.

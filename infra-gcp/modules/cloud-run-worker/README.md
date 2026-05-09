@@ -34,3 +34,19 @@ work rather than user-facing request handling.
 |------|-------------|
 | `service_name` | Cloud Run service name |
 | `service_url` | HTTPS endpoint Cloud Tasks / Scheduler dispatch to |
+
+## Image lifecycle
+
+The module sets `lifecycle.ignore_changes = [image]` on the Cloud Run
+service. Container image updates land via the CI pipeline's
+`gcloud run deploy --image=…` (or equivalent), and Terraform deliberately
+does NOT plan a change when the live image differs from
+`var.image`. Two consequences:
+
+1. **First apply** uses `var.image` (typically a `cloudrun/hello`
+   placeholder so the service exists before the real image is built).
+   CI then deploys the real image; Terraform doesn't fight it.
+2. **Rolling back** to a known-good revision via `terraform apply` does
+   NOT work — Terraform won't plan the image change. Either redeploy
+   the prior tag via CI / `gcloud`, or split this into a Terraform-
+   managed `image` bump if you want the rollback path through `tf apply`.

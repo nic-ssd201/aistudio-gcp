@@ -29,3 +29,25 @@ worker.
   this queue.
 - The **invoker SA** (configured per-task via `oidcToken`) needs
   `roles/run.invoker` on the target Cloud Run worker.
+
+## Tuning the queue against the worker
+
+`max_concurrent_dispatches` is the queue-level cap on simultaneously in-flight
+HTTP dispatches. The worker-level cap is `cloud-run-worker.max_instances ×
+cloud-run-worker.concurrency` — for the document-processor that's `max_instances
+× 1` (workers default `concurrency = 1` because each request is long-running
+and CPU-bound).
+
+When tuning, keep:
+
+```
+queue.max_concurrent_dispatches  ≤  worker.max_instances × worker.concurrency
+```
+
+Otherwise the queue dispatches faster than the worker can scale, Cloud Tasks
+sees the rejected requests as failures, and retries pile up — death spiral.
+
+For long tasks (the document-processor runs 30s–1800s per task), with the
+default `max_concurrent_dispatches = 5` and worker `max_instances = 10`, you
+have room for 2× burst before the queue starts back-pressuring. If you bump
+the queue cap, bump the worker cap too.

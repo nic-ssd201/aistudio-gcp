@@ -28,6 +28,7 @@
   "exclude": [
     "node_modules",
     "cdk.out",
-    "lambdas/**/*"
+    "lambdas/**/*",
+    "cloud-run-services/**/*"
   ]
 }

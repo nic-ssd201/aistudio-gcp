@@ -160,9 +160,13 @@ async function enqueueTask(
         },
       },
     })
+    // Filename intentionally omitted from this log line — in SSD201 (school
+    // district) the original filename can carry student PII (e.g.
+    // "JaneDoe-IEP.pdf"). The jobId is sufficient to correlate with the
+    // document_jobs row, where filename is stored once with column-level
+    // access control rather than spread across log indices.
     log.info("Enqueued processing task", {
       jobId: message.jobId,
-      fileName: message.fileName,
       delaySeconds: opts.delaySeconds ?? 0,
     })
   } catch (error) {
@@ -198,36 +202,6 @@ export async function sendToProcessingQueue(
   await enqueueTask(message)
 }
 
-/** Send a priority message (immediate dispatch). */
-export async function triggerLambdaProcessing(
-  jobId: string,
-  options?: { priority?: boolean },
-): Promise<void> {
-  // Reduced-shape variant retained for back-compat with the legacy SQS API.
-  // Callers that only have a jobId can use this; we synthesize a minimal
-  // ProcessingJobMessage. For the full happy-path the upload routes call
-  // sendToProcessingQueue with a complete payload — preferred.
-  await enqueueTask(
-    {
-      jobId,
-      bucket: "",
-      key: "",
-      fileName: "",
-      fileSize: 0,
-      fileType: "",
-      userId: "",
-      processingOptions: {
-        extractText: true,
-        convertToMarkdown: false,
-        extractImages: false,
-        generateEmbeddings: false,
-        ocrEnabled: false,
-      },
-    },
-    { priority: options?.priority },
-  )
-}
-
 /** Enqueue a batch of messages. Concurrency is bounded by the Tasks SDK. */
 export async function sendBatchToProcessingQueue(
   messages: ProcessingJobMessage[],
@@ -235,36 +209,4 @@ export async function sendBatchToProcessingQueue(
   if (messages.length === 0) return
   await Promise.all(messages.map((m) => enqueueTask(m)))
   log.info("Sent batch processing tasks", { totalMessages: messages.length })
-}
-
-/**
- * Re-enqueue a failed job with exponential backoff. Cloud Tasks handles
- * retries on its own when the receiver returns 5xx, so this is reserved for
- * application-level retry decisions (e.g. the processor returned 200 but
- * left the job in 'failed' status because the model timed out).
- */
-export async function retryFailedJob(
-  jobId: string,
-  attempt: number = 1,
-): Promise<void> {
-  const delaySeconds = Math.min(2 ** attempt, 300) // cap at 5 minutes
-  await enqueueTask(
-    {
-      jobId,
-      bucket: "",
-      key: "",
-      fileName: "",
-      fileSize: 0,
-      fileType: "",
-      userId: "",
-      processingOptions: {
-        extractText: true,
-        convertToMarkdown: false,
-        extractImages: false,
-        generateEmbeddings: false,
-        ocrEnabled: false,
-      },
-    },
-    { delaySeconds, taskNameSuffix: `retry-${attempt}` },
-  )
 }
