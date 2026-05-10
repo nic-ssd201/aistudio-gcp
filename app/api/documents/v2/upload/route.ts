@@ -69,7 +69,14 @@ function parseProcessingOptions(processingOptionsRaw: string | null, log: Return
   }
 }
 
-/** Error classification patterns with user-friendly messages (fallback for untyped errors) */
+/**
+ * Error classification patterns with user-friendly messages (fallback for untyped errors).
+ *
+ * Prefer throwing UploadClassifiedError from call sites — these patterns are a
+ * defense-in-depth for SDK errors that escape typed wrapping. After the GCP migration
+ * (PRs #19, #20, #22) the matched substrings are GCP/Postgres/Cloud Tasks shaped; previous
+ * S3/DynamoDB/SQS strings were removed since they can never fire post-migration.
+ */
 const ERROR_PATTERNS: Array<{ patterns: string[]; code: UploadErrorCode; message: string; status: number }> = [
   {
     patterns: ['file size', 'exceeds'],
@@ -90,30 +97,47 @@ const ERROR_PATTERNS: Array<{ patterns: string[]; code: UploadErrorCode; message
     status: 408
   },
   {
-    patterns: ['upload to s3', 'storage service', 'bucket', 'nosuchbucket', 'accessdenied', 'slowdown', 's3 service'],
+    // GCS-shaped TRANSIENT storage errors only. Tokens match real `lib/gcp/gcs-client.ts` throws
+    // for outage-shape failures:
+    // - 'failed to upload document to gcs' — exact match to gcs-client.ts:168 createError() message
+    // - 'storage.googleapis.com' / 'gcs permission denied' — GCS SDK / HTTP-translated errors
+    // Rejected: bare 'gcs' / 'permission denied' / 'accessdenied' / 'bucket' / 'upload to gcs'
+    // (too wide — match Postgres errors, file paths, stack traces); 'storage service' (vestigial
+    // catchall with no real producer in the codebase); 'failed to upload' (too generic — could match
+    // any future SDK/wrapper).
+    // Bucket-missing errors are CONFIG_ERROR below, not here — they're permanent misconfig.
+    patterns: ['failed to upload document to gcs', 'storage.googleapis.com', 'gcs permission denied'],
     code: 'STORAGE_UNAVAILABLE',
     message: 'Storage service temporarily unavailable - please try again',
     status: 503
   },
   {
-    // Fallback pattern matching for DynamoDB errors not thrown as UploadClassifiedError
-    patterns: ['dynamodb', 'resourcenotfoundexception'],
-    code: 'JOB_SERVICE_UNAVAILABLE',
-    message: 'Document processing service temporarily unavailable - please try again',
-    status: 503
-  },
-  {
-    patterns: ['processing_queue_url', 'sqs'],
+    // Cloud Tasks transient dispatcher failures (5xx from googleapis.com, network errors etc.).
+    // Replaces SQS patterns; jobs themselves live in Postgres so DynamoDB-shape patterns were
+    // removed — Postgres errors fall through to UPLOAD_FAILED rather than masquerading as queue failures.
+    patterns: ['cloud tasks', 'cloudtasks.googleapis.com'],
     code: 'QUEUE_UNAVAILABLE',
     message: 'Document processing queue temporarily unavailable - please try again',
     status: 503
+  },
+  {
+    // Deployment misconfig (missing bucket, missing env vars) — explicitly NOT a transient outage.
+    // Reporting these as 503 would encourage clients to retry against a permanently-broken deploy.
+    // - 'gcs documents bucket' matches gcs-client.ts:106 ("GCS documents bucket does not exist")
+    // - 'environment variable is required' matches processing-queue.ts and any other env-var validator
+    // - 'processing_queue_name' is a belt-and-suspenders specific match
+    patterns: ['gcs documents bucket', 'processing_queue_name', 'environment variable is required'],
+    code: 'CONFIG_ERROR',
+    message: 'Service configuration error',
+    status: 500
   }
 ];
 
 /**
  * Classify error and return user-friendly message with status code.
  * Prefers typed UploadClassifiedError for explicit classification,
- * falls back to string pattern matching for untyped AWS SDK errors.
+ * falls back to ERROR_PATTERNS for un-typed errors thrown by the GCS / Cloud Tasks
+ * SDKs or surfaced via raw HTTP error messages.
  */
 function classifyUploadError(error: unknown): { code: UploadErrorCode; message: string; status: number } {
   // Prefer typed errors — no string coupling needed
