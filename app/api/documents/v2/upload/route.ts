@@ -97,14 +97,16 @@ const ERROR_PATTERNS: Array<{ patterns: string[]; code: UploadErrorCode; message
     status: 408
   },
   {
-    // GCS-shaped storage errors. Tokens chosen to match real `lib/gcp/gcs-client.ts` throws:
-    // - 'failed to upload' / 'gcs documents bucket' — match createError() messages from the GCS client
-    // - 'storage.googleapis.com' / 'gcs permission denied' — match GCS SDK / HTTP-translated errors
-    // - 'storage service' — generic catchall for proxy/SDK error wrappers
-    // Bare 'gcs' / 'permission denied' / 'accessdenied' / 'bucket' / 'upload to gcs' were rejected:
-    // either too wide (match Postgres errors, file paths, stack traces) or too narrow (don't actually
-    // appear in any real error string the codebase produces).
-    patterns: ['failed to upload', 'gcs documents bucket', 'storage.googleapis.com', 'gcs permission denied', 'storage service'],
+    // GCS-shaped TRANSIENT storage errors only. Tokens match real `lib/gcp/gcs-client.ts` throws
+    // for outage-shape failures:
+    // - 'failed to upload document to gcs' — exact match to gcs-client.ts:168 createError() message
+    // - 'storage.googleapis.com' / 'gcs permission denied' — GCS SDK / HTTP-translated errors
+    // Rejected: bare 'gcs' / 'permission denied' / 'accessdenied' / 'bucket' / 'upload to gcs'
+    // (too wide — match Postgres errors, file paths, stack traces); 'storage service' (vestigial
+    // catchall with no real producer in the codebase); 'failed to upload' (too generic — could match
+    // any future SDK/wrapper).
+    // Bucket-missing errors are CONFIG_ERROR below, not here — they're permanent misconfig.
+    patterns: ['failed to upload document to gcs', 'storage.googleapis.com', 'gcs permission denied'],
     code: 'STORAGE_UNAVAILABLE',
     message: 'Storage service temporarily unavailable - please try again',
     status: 503
@@ -119,9 +121,12 @@ const ERROR_PATTERNS: Array<{ patterns: string[]; code: UploadErrorCode; message
     status: 503
   },
   {
-    // Deployment misconfig (missing env vars, etc.) — explicitly NOT a transient outage. Reporting
-    // these as 503 would encourage clients to retry against a permanently-broken deploy.
-    patterns: ['processing_queue_name', 'environment variable is required'],
+    // Deployment misconfig (missing bucket, missing env vars) — explicitly NOT a transient outage.
+    // Reporting these as 503 would encourage clients to retry against a permanently-broken deploy.
+    // - 'gcs documents bucket' matches gcs-client.ts:106 ("GCS documents bucket does not exist")
+    // - 'environment variable is required' matches processing-queue.ts and any other env-var validator
+    // - 'processing_queue_name' is a belt-and-suspenders specific match
+    patterns: ['gcs documents bucket', 'processing_queue_name', 'environment variable is required'],
     code: 'CONFIG_ERROR',
     message: 'Service configuration error',
     status: 500
