@@ -69,7 +69,14 @@ function parseProcessingOptions(processingOptionsRaw: string | null, log: Return
   }
 }
 
-/** Error classification patterns with user-friendly messages (fallback for untyped errors) */
+/**
+ * Error classification patterns with user-friendly messages (fallback for untyped errors).
+ *
+ * Prefer throwing UploadClassifiedError from call sites — these patterns are a
+ * defense-in-depth for SDK errors that escape typed wrapping. After the GCP migration
+ * (PRs A/B/C) the matched substrings are GCP/Postgres/Cloud Tasks shaped; previous
+ * S3/DynamoDB/SQS strings were removed since they can never fire post-migration.
+ */
 const ERROR_PATTERNS: Array<{ patterns: string[]; code: UploadErrorCode; message: string; status: number }> = [
   {
     patterns: ['file size', 'exceeds'],
@@ -90,20 +97,18 @@ const ERROR_PATTERNS: Array<{ patterns: string[]; code: UploadErrorCode; message
     status: 408
   },
   {
-    patterns: ['upload to s3', 'storage service', 'bucket', 'nosuchbucket', 'accessdenied', 'slowdown', 's3 service'],
+    // GCS-shaped storage errors. Generic tokens (storage service, bucket, accessdenied,
+    // permission denied) cover both SDK-thrown and HTTP-error-translated cases.
+    patterns: ['upload to gcs', 'storage service', 'bucket', 'storage.googleapis.com', 'accessdenied', 'permission denied', 'gcs'],
     code: 'STORAGE_UNAVAILABLE',
     message: 'Storage service temporarily unavailable - please try again',
     status: 503
   },
   {
-    // Fallback pattern matching for DynamoDB errors not thrown as UploadClassifiedError
-    patterns: ['dynamodb', 'resourcenotfoundexception'],
-    code: 'JOB_SERVICE_UNAVAILABLE',
-    message: 'Document processing service temporarily unavailable - please try again',
-    status: 503
-  },
-  {
-    patterns: ['processing_queue_url', 'sqs'],
+    // Cloud Tasks dispatcher failures (replaces SQS patterns; jobs themselves now live in
+    // Postgres so DynamoDB-shape patterns were removed — Postgres errors fall through to
+    // UPLOAD_FAILED rather than masquerading as queue failures).
+    patterns: ['cloud tasks', 'cloudtasks.googleapis.com', 'processing_queue_name'],
     code: 'QUEUE_UNAVAILABLE',
     message: 'Document processing queue temporarily unavailable - please try again',
     status: 503

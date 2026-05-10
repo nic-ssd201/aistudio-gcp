@@ -1,5 +1,20 @@
 # Document Processing Pipeline
 
+> **⚠️ SUPERSEDED — pre-GCP-migration architecture.**
+>
+> This diagram documents the original AWS pipeline (S3 → Lambda → Textract → SQS → Aurora).
+> The current SSD201/GCP pipeline is structurally different:
+>
+> - **Upload:** server-proxied `POST /api/documents/v2/upload` → GCS (no direct browser-to-storage upload; school firewalls block presigned PUTs).
+> - **Job tracking:** Postgres `document_jobs` table (PR #19) — not DynamoDB.
+> - **Processor invocation:** Cloud Tasks → Cloud Run Service `aistudio-doc-processor` (PR #20) — not S3 event → Lambda.
+> - **Text extraction:** in-process inside the Cloud Run worker — no Textract dependency.
+> - **Embeddings:** Vertex AI — not Bedrock.
+>
+> See [`docs/plans/2026-04-21-gcs-object-storage-slice.md`](../plans/2026-04-21-gcs-object-storage-slice.md)
+> and PRs #19, #20, #22 for the current state. This diagram is retained for historical
+> context only and should be rewritten in a future doc-refresh PR.
+
 Complete asynchronous document processing flow from upload → S3 → Lambda → Textract → Embedding → PostgreSQL with pgvector.
 
 ## Overview

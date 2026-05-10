@@ -201,7 +201,7 @@ data: {"type":"execution_complete","results":[...]}
 ### Documents & Knowledge
 
 #### POST /api/documents/presigned-url
-**Get presigned S3 URL for document upload**
+**Get presigned GCS URL for document upload**
 
 **Request:**
 ```typescript
@@ -222,26 +222,12 @@ data: {"type":"execution_complete","results":[...]}
 }
 ```
 
-#### POST /api/documents/confirm-upload
-**Confirm document upload and trigger processing**
-
-**Request:**
-```typescript
-{
-  fileKey: string,
-  fileName: string,
-  fileType: string,
-  repositoryId: number
-}
-```
-
-**Response:**
-```typescript
-{
-  itemId: number,
-  status: 'pending'
-}
-```
+> Note: There is no separate `confirm-upload` endpoint. The Nexus / chat-attachment
+> upload flow is the server-proxied `POST /api/documents/v2/upload` (see
+> `app/api/documents/v2/upload/route.ts`); job state is tracked via
+> `GET /api/documents/v2/jobs/[jobId]`. The `/api/documents/confirm-upload`
+> path documented here previously was retired in PR #22 along with the v2
+> multipart upload trio.
 
 ### Admin Endpoints
 
