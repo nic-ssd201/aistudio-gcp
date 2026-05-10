@@ -23,7 +23,7 @@ These are decisions or actions that Terraform cannot make for you because they i
 | Dev project ID | `aistudio-dev` | Holds dev's AlloyDB, Cloud Run, secrets, etc. |
 | Domain (dev) | `dev-aistudio.sunnysideschools.org` | You need DNS write access. Cloud LB managed cert needs the A-record set before SSL provisioning starts. |
 | Breakglass email | A monitored shared inbox (`it-breakglass@sunnysideschools.org`) | Receives budget alerts on day 1. Not a personal address. |
-| GitHub WIF claim | `nic-ssd201/aistudio-gcp` | Tells WIF which repo can assume the Terraform-runner SA. Update if you fork or rename. |
+| GitHub WIF claim | `nic-ssd201/aistudio-gcp` | Tells WIF which repo can assume the Terraform-runner SA. **The default in `dev.tfvars.example` is `psd401/aistudio` (upstream) — change it in 1.1.** |
 
 ### 0.2 — Look up org_id and billing_account
 
@@ -87,11 +87,20 @@ done
 ### 1.1 — Set up `dev.tfvars`
 
 ```bash
-cd /Users/nic/aistudio-gcp/infra-gcp/envs/bootstrap
+# Anchor the repo root once so the rest of the runbook is portable
+export REPO_ROOT="$(git rev-parse --show-toplevel)"   # or hardcode if not in the repo
+
+cd "$REPO_ROOT/infra-gcp/envs/bootstrap"
 cp dev.tfvars.example dev.tfvars
 ```
 
-Edit `dev.tfvars` and fill in: `org_id`, `billing_account`, `breakglass_email`. The other defaults are fine.
+Edit `dev.tfvars` and fill in:
+- `org_id` (from 0.2)
+- `billing_account` (from 0.2)
+- `breakglass_email` (from 0.1)
+- **`github_repo`** — change from the upstream default `psd401/aistudio` to your fork's slug (`nic-ssd201/aistudio-gcp`). The WIF principalSet binding hardcodes this; getting it wrong means CI can't deploy until you re-apply bootstrap with the right value.
+
+Other defaults (`env`, `host_project_id`, `env_project_id`, `budget_amount_usd`) are sensible — only change if you've deviated from the suggested project IDs in 0.1.
 
 ### 1.2 — First apply (LOCAL backend, then migrate to GCS)
 
@@ -131,8 +140,11 @@ terraform init \
 # Sanity-check: should report "No changes."
 terraform plan -var-file=dev.tfvars
 
-# Local state file is now stale — delete it so nobody's tempted to re-use
-rm -f terraform.tfstate terraform.tfstate.backup
+# CRITICAL CLEANUP — both files must go before the next apply, or a future
+# `terraform init` (without -reconfigure) will pick them up and get confused
+# about which backend is authoritative:
+rm -f terraform.tfstate terraform.tfstate.backup   # local state copies are now stale
+# (backend_override.tf was already removed at the top of this step)
 ```
 
 ### 1.4 — Capture bootstrap outputs
@@ -149,12 +161,14 @@ terraform output
 
 ## Phase 2 — Dev env apply
 
-**Output:** VPC, AlloyDB cluster, KMS keys, Cloud Run web (placeholder image), Cloud Run doc-processor (placeholder image), GCS buckets, Secret Manager secrets (empty), Identity Platform tenant, LB (no SSL cert yet), scheduler jobs, observability dashboards, VPC-SC perimeter (dry-run).
+**Output:** VPC, AlloyDB cluster, KMS keys, Cloud Run web (placeholder image), Cloud Run doc-processor (placeholder image), GCS buckets, Secret Manager secrets (empty + AlloyDB password seeded), Identity Platform tenant, LB (no SSL cert yet), scheduler jobs, observability dashboards, VPC-SC perimeter (dry-run).
+
+> **⚠️ Why this phase splits in two (2.2a → 2.2b → 2.2c):** the AlloyDB module (`infra-gcp/modules/alloydb/main.tf:30-34`) reads `alloydb-initial-password` via `data "google_secret_manager_secret_version" "initial_password"` with `version = "latest"`. If no version exists when the cluster is planned, the apply **fails outright** before any cluster is created. So the order has to be: create the secret resource → seed its value → then create AlloyDB. Don't try to populate the password in Phase 5 — by then the apply has already failed.
 
 ### 2.1 — Set up `terraform.tfvars`
 
 ```bash
-cd ../dev
+cd "$REPO_ROOT/infra-gcp/envs/dev"
 cp terraform.tfvars.example terraform.tfvars
 ```
 
@@ -170,15 +184,37 @@ For `workspace_oidc_client_id` / `_secret`:
 - GCP Console → APIs & Services → Credentials → OAuth 2.0 Client IDs
 - Create one if it doesn't exist; type "Web application," authorized redirect URI = `https://<domain_name>/api/auth/callback/google`
 
-### 2.2 — Apply
+### 2.2a — Init + targeted apply for the secrets module ONLY
 
 ```bash
 terraform init \
   -backend-config="bucket=aistudio-tfstate-shared" \
   -backend-config="prefix=envs/dev"
 
+# Targeted apply — creates only the Secret Manager secret resources (4 of them)
+# so we can seed alloydb-initial-password before AlloyDB tries to read it.
+terraform apply -var-file=terraform.tfvars -target=module.secrets
+# ~30 seconds. Approve when plan shows just secret-related resources.
+```
+
+### 2.2b — Seed the AlloyDB initial password (mandatory before full apply)
+
+```bash
+openssl rand -base64 32 | tr -d '\n' | gcloud secrets versions add \
+  alloydb-initial-password --data-file=- --project aistudio-dev
+
+# Verify
+gcloud secrets versions list alloydb-initial-password --project aistudio-dev
+# Should show one ENABLED version.
+```
+
+The other three secrets (`aistudio-mcp-token-encryption-key`, `aistudio-nextauth-secret`, `aistudio-mcp-token`) can be populated in Phase 5 — only AlloyDB has a Terraform-time data-source dependency.
+
+### 2.2c — Full apply
+
+```bash
 terraform plan -var-file=terraform.tfvars
-# Expect ~80–120 resources to be created. Skim for surprises.
+# Expect ~80–120 additional resources to be created. Skim for surprises.
 
 terraform apply -var-file=terraform.tfvars
 # 15–25 minutes. AlloyDB cluster creation is the slow path (~10 min).
@@ -189,10 +225,14 @@ terraform apply -var-file=terraform.tfvars
 ```bash
 terraform output
 # Note especially:
-#   - load_balancer_ip       → for Phase 6 DNS
-#   - cloud_run_web_url      → temp Cloud Run URL (you can curl /api/health here pre-DNS)
-#   - alloydb_primary_ip     → sanity-check the worker can reach it
+#   - load_balancer_ip      → for Phase 6 DNS A record
+#   - web_service_url       → direct Cloud Run URL (curl /api/health here pre-DNS)
+#   - alloydb_cluster_name  → for monitoring filters / connection troubleshooting
+#   - artifact_registry_repo → for Phase 3/4 image push (cross-check matches us-west1)
 ```
+
+(Note: there's no AlloyDB IP output today. If you need it, query directly:
+`gcloud alloydb instances describe primary --cluster=aistudio-dev --region=us-west1 --project=aistudio-dev --format='value(ipAddress)'`)
 
 ---
 
@@ -201,7 +241,7 @@ terraform output
 The Cloud Run web service is currently pointed at a placeholder. Build the real Next.js image and deploy it.
 
 ```bash
-cd /Users/nic/aistudio-gcp
+cd "$REPO_ROOT"
 
 # Submit Cloud Build (uploads context, builds in GCP, pushes to Artifact Registry)
 gcloud builds submit \
@@ -232,7 +272,7 @@ curl -sS "$WEB_URL/api/health"
 Same pattern as Phase 3 but for the worker, and using a service-specific Dockerfile.
 
 ```bash
-cd /Users/nic/aistudio-gcp
+cd "$REPO_ROOT"
 
 gcloud builds submit \
   --tag us-west1-docker.pkg.dev/aistudio-shared/aistudio/aistudio-doc-processor:dev-latest \
@@ -289,17 +329,18 @@ echo -n "<MCP_BEARER_TOKEN>" | gcloud secrets versions add \
   aistudio-mcp-token --data-file=- --project aistudio-dev
 ```
 
-### 5.4 — `alloydb-initial-password`
+### 5.4 — `alloydb-initial-password` (already seeded in Phase 2.2b)
 
-⚠️ **This one is special — AlloyDB is created with a postgres password from this secret on first apply.** If you didn't seed it BEFORE Phase 2 ran, AlloyDB created itself with a random password and you need to reset it via `gcloud alloydb users update postgres ...`. Otherwise:
+This secret was set in Phase 2.2b — nothing to do here on first deploy. **If you skipped 2.2b and the Phase 2.2c apply failed at AlloyDB creation, go back and seed 2.2b before re-running apply.**
+
+**Rotation (post-creation):** if you later need to rotate the postgres password (e.g. credential exposure), the workflow is:
 
 ```bash
+# 1. Add a new secret version
 openssl rand -base64 32 | tr -d '\n' | gcloud secrets versions add \
   alloydb-initial-password --data-file=- --project aistudio-dev
-```
 
-If Phase 2 already ran and AlloyDB is using a different password, fix it:
-```bash
+# 2. Apply the new password to the AlloyDB cluster
 NEW_PASSWORD=$(gcloud secrets versions access latest \
   --secret alloydb-initial-password --project aistudio-dev)
 
@@ -308,7 +349,11 @@ gcloud alloydb users update postgres \
   --region us-west1 \
   --project aistudio-dev \
   --password="$NEW_PASSWORD"
+
+# 3. Bounce Cloud Run so the new connection string takes effect (see 5.6)
 ```
+
+Note: the data source in `modules/alloydb/main.tf` only reads the secret at plan time, so changing the secret value after creation does NOT trigger a Terraform diff. The `gcloud alloydb users update` step in 2 above is what actually rotates the cluster's password.
 
 ### 5.5 — Verify all four
 
@@ -341,17 +386,20 @@ gcloud run services update aistudio-doc-processor \
 
 ```bash
 # Get the LB IP from Phase 2 outputs
-cd /Users/nic/aistudio-gcp/infra-gcp/envs/dev
+cd "$REPO_ROOT/infra-gcp/envs/dev"
 LB_IP=$(terraform output -raw load_balancer_ip)
 echo "Point dev-aistudio.sunnysideschools.org A → $LB_IP"
 ```
 
-Create an A record at your DNS provider for `dev-aistudio.sunnysideschools.org` → `<LB_IP>`. Wait for propagation (`dig dev-aistudio.sunnysideschools.org` returns the LB IP).
+Create an A record at your DNS provider for `dev-aistudio.sunnysideschools.org` → `<LB_IP>`. Wait for propagation (`dig +short dev-aistudio.sunnysideschools.org` returns the LB IP).
 
-Cloud LB's managed cert provisioning starts automatically once the A record resolves. Status check:
+Cloud LB's managed cert provisioning starts automatically once the A record resolves. The LB module uses the **Certificate Manager API** (not legacy compute SSL certs), so:
+
 ```bash
-gcloud compute ssl-certificates describe aistudio-dev-cert --global --project aistudio-dev
-# Look for status: ACTIVE — can take 15-60 minutes
+gcloud certificate-manager certificates describe aistudio-dev-cert \
+  --location=global \
+  --project=aistudio-dev
+# Look for state: ACTIVE — can take 15-60 minutes after DNS propagates
 ```
 
 ---
@@ -390,8 +438,15 @@ Expected sequence:
 
 If the UI hangs at "Processing...":
 ```bash
-# Check job state directly
-gcloud sql connect ...   # or use psql with the AlloyDB connection
+# Connect to AlloyDB via the gcloud client (uses an auth proxy under the hood)
+gcloud alloydb instances connect primary \
+  --cluster=aistudio-dev \
+  --region=us-west1 \
+  --project=aistudio-dev \
+  --user=postgres
+# (Authenticates via your gcloud session; you'll be dropped into psql against the aistudio db.)
+
+# Then in psql:
 SELECT id, status, error_message, created_at FROM document_jobs ORDER BY created_at DESC LIMIT 5;
 ```
 
@@ -417,7 +472,7 @@ SELECT id, status, error_message, created_at FROM document_jobs ORDER BY created
 If a `terraform apply` lands you somewhere broken and you want to start over:
 
 ```bash
-cd /Users/nic/aistudio-gcp/infra-gcp/envs/dev
+cd "$REPO_ROOT/infra-gcp/envs/dev"
 terraform destroy -var-file=terraform.tfvars
 # Approve. Takes ~10 min.
 
