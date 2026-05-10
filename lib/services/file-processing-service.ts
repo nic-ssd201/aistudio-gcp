@@ -84,13 +84,3 @@ export async function processUrl(
 
   return jobId;
 }
-
-// Note: getMaxFileSize has been moved to @/lib/file-validation for centralization
-// Import from there if needed: import { getMaxFileSize } from '@/lib/file-validation'
-//
-// Removed in PR D (post-PR-#22 sweep):
-//   - generateUploadUrl, generateMultipartUploadUrls, completeMultipartUpload
-//     (orphaned by /api/documents/v2/initiate-upload + /complete-multipart deletion;
-//      see PR #22 for context)
-//   - getSupportedFileTypes, isFileTypeSupported
-//     (zero callers; superseded by ALLOWED_MIME_TYPES in @/lib/file-validation)

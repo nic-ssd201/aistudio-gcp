@@ -97,9 +97,12 @@ const ERROR_PATTERNS: Array<{ patterns: string[]; code: UploadErrorCode; message
     status: 408
   },
   {
-    // GCS-shaped storage errors. Generic tokens (storage service, bucket, accessdenied,
-    // permission denied) cover both SDK-thrown and HTTP-error-translated cases.
-    patterns: ['upload to gcs', 'storage service', 'bucket', 'storage.googleapis.com', 'accessdenied', 'permission denied', 'gcs'],
+    // GCS-shaped storage errors. Tokens deliberately narrow:
+    // - 'storage.googleapis.com' / 'upload to gcs' / 'gcs permission denied' — specific to GCS errors
+    // - 'storage service' / 'bucket' / 'accessdenied' — generic but only a small set of GCS-shape contexts use them
+    // Bare 'gcs' and bare 'permission denied' were rejected — both match too widely
+    // (file paths/stack traces; Postgres `permission denied for table X` would hijack this branch).
+    patterns: ['upload to gcs', 'storage service', 'bucket', 'storage.googleapis.com', 'accessdenied', 'gcs permission denied'],
     code: 'STORAGE_UNAVAILABLE',
     message: 'Storage service temporarily unavailable - please try again',
     status: 503
@@ -118,7 +121,8 @@ const ERROR_PATTERNS: Array<{ patterns: string[]; code: UploadErrorCode; message
 /**
  * Classify error and return user-friendly message with status code.
  * Prefers typed UploadClassifiedError for explicit classification,
- * falls back to string pattern matching for untyped AWS SDK errors.
+ * falls back to ERROR_PATTERNS for un-typed errors thrown by the GCS / Cloud Tasks
+ * SDKs or surfaced via raw HTTP error messages.
  */
 function classifyUploadError(error: unknown): { code: UploadErrorCode; message: string; status: number } {
   // Prefer typed errors — no string coupling needed
