@@ -74,7 +74,7 @@ function parseProcessingOptions(processingOptionsRaw: string | null, log: Return
  *
  * Prefer throwing UploadClassifiedError from call sites — these patterns are a
  * defense-in-depth for SDK errors that escape typed wrapping. After the GCP migration
- * (PRs A/B/C) the matched substrings are GCP/Postgres/Cloud Tasks shaped; previous
+ * (PRs #19, #20, #22) the matched substrings are GCP/Postgres/Cloud Tasks shaped; previous
  * S3/DynamoDB/SQS strings were removed since they can never fire post-migration.
  */
 const ERROR_PATTERNS: Array<{ patterns: string[]; code: UploadErrorCode; message: string; status: number }> = [
@@ -99,10 +99,11 @@ const ERROR_PATTERNS: Array<{ patterns: string[]; code: UploadErrorCode; message
   {
     // GCS-shaped storage errors. Tokens deliberately narrow:
     // - 'storage.googleapis.com' / 'upload to gcs' / 'gcs permission denied' — specific to GCS errors
-    // - 'storage service' / 'bucket' / 'accessdenied' — generic but only a small set of GCS-shape contexts use them
-    // Bare 'gcs' and bare 'permission denied' were rejected — both match too widely
-    // (file paths/stack traces; Postgres `permission denied for table X` would hijack this branch).
-    patterns: ['upload to gcs', 'storage service', 'bucket', 'storage.googleapis.com', 'accessdenied', 'gcs permission denied'],
+    // - 'storage service' / 'bucket' — generic but only a small set of GCS-shape contexts use them
+    // Bare 'gcs', bare 'permission denied', and 'accessdenied' (S3-shape, GCS uses
+    // "Permission denied" / "does not have ... access") were rejected — they either match too widely
+    // (file paths, Postgres errors) or never fire under GCS at all.
+    patterns: ['upload to gcs', 'storage service', 'bucket', 'storage.googleapis.com', 'gcs permission denied'],
     code: 'STORAGE_UNAVAILABLE',
     message: 'Storage service temporarily unavailable - please try again',
     status: 503
