@@ -1,0 +1,461 @@
+# SSD201 GCP Bring-Up Runbook
+
+**Audience:** Nic (or whoever runs the first `terraform apply` against fresh GCP projects).
+**Goal:** Take the SSD201 fork from "code merged, no infra" to "live dev environment serving traffic at `dev-aistudio.sunnysideschools.org`."
+**Time:** ~2–3 hours of active work, plus 30–60 min of `terraform apply` wait time.
+
+This is a runbook, not a tutorial. It assumes you've read `infra-gcp/README.md` and `infra-gcp/envs/bootstrap/README.md` once. Every command is copy-paste-runnable. Where a command requires you to fill in a value, the value is in `<ANGLE_BRACKETS>`.
+
+---
+
+## Phase 0 — Decide + provision prereqs (your hands; not Terraform)
+
+These are decisions or actions that Terraform cannot make for you because they involve billing, org-level IAM, or domain ownership.
+
+### 0.1 — Decisions to lock before starting
+
+| Decision | Default / suggestion | Notes |
+|---|---|---|
+| GCP organization | The SSD201 / sunnysideschools.org org | Needed for `org_id`. If "no org," skip the org-level audit log sink. |
+| Billing account | Existing Sunnyside billing account | Needs Billing Admin to attach. ~$50–$200/mo for dev at idle. |
+| Region | `us-west1` | Matches existing Terraform examples. Don't change without auditing every module. |
+| Shared project ID | `aistudio-shared` | Holds Artifact Registry + state bucket + WIF. Used by all envs. |
+| Dev project ID | `aistudio-dev` | Holds dev's AlloyDB, Cloud Run, secrets, etc. |
+| Domain (dev) | `dev-aistudio.sunnysideschools.org` | You need DNS write access. Cloud LB managed cert needs the A-record set before SSL provisioning starts. |
+| Breakglass email | A monitored shared inbox (`it-breakglass@sunnysideschools.org`) | Receives budget alerts on day 1. Not a personal address. |
+| GitHub WIF claim | `nic-ssd201/aistudio-gcp` | Tells WIF which repo can assume the Terraform-runner SA. Update if you fork or rename. |
+
+### 0.2 — Look up org_id and billing_account
+
+```bash
+gcloud auth login                       # interactive browser, account with org admin
+gcloud auth application-default login   # for Terraform/SDK use
+
+# Find org ID (numeric, looks like 123456789012)
+gcloud organizations list
+
+# Find billing account ID (format XXXXXX-XXXXXX-XXXXXX)
+gcloud billing accounts list
+```
+
+Write these down. They go into `dev.tfvars`.
+
+### 0.3 — Create the two GCP projects
+
+Terraform **adopts** these projects via data source — it does NOT create them. They must exist before `terraform apply`.
+
+```bash
+# Replace <ORG_ID> and <BILLING_ACCOUNT> with the values from 0.2
+gcloud projects create aistudio-shared --organization=<ORG_ID>
+gcloud projects create aistudio-dev    --organization=<ORG_ID>
+
+# Link billing — required before creating any billable resource
+gcloud beta billing projects link aistudio-shared --billing-account=<BILLING_ACCOUNT>
+gcloud beta billing projects link aistudio-dev    --billing-account=<BILLING_ACCOUNT>
+
+# Verify
+gcloud projects list --filter='project_id:aistudio-*'
+gcloud beta billing projects describe aistudio-shared
+gcloud beta billing projects describe aistudio-dev
+```
+
+If `projects create` fails with `Permission 'resourcemanager.projects.create' denied`, you need `roles/resourcemanager.projectCreator` at the org level. Have an org admin grant it or run the command for you.
+
+### 0.4 — Enable required APIs in both projects
+
+The bootstrap module enables most APIs, but it needs a few enabled BEFORE its first apply (otherwise the state bucket creation fails). Belt-and-suspenders: enable the foundational APIs in both projects up front:
+
+```bash
+for project in aistudio-shared aistudio-dev; do
+  gcloud services enable \
+    cloudresourcemanager.googleapis.com \
+    cloudbilling.googleapis.com \
+    iam.googleapis.com \
+    serviceusage.googleapis.com \
+    storage.googleapis.com \
+    cloudkms.googleapis.com \
+    --project=$project
+done
+```
+
+---
+
+## Phase 1 — Bootstrap apply (chicken-and-egg state bucket)
+
+**Output of this phase:** state bucket exists, Artifact Registry exists, WIF pool exists, dev billing budget exists, breakglass email channel exists.
+
+### 1.1 — Set up `dev.tfvars`
+
+```bash
+cd /Users/nic/aistudio-gcp/infra-gcp/envs/bootstrap
+cp dev.tfvars.example dev.tfvars
+```
+
+Edit `dev.tfvars` and fill in: `org_id`, `billing_account`, `breakglass_email`. The other defaults are fine.
+
+### 1.2 — First apply (LOCAL backend, then migrate to GCS)
+
+The bootstrap module **creates** the state bucket. `backend.tf` declares the backend as `"gcs"` but with no config — at first init we'll override to a local backend, apply, then re-init to migrate state to the freshly-created bucket.
+
+```bash
+# Step 1: temp local backend
+cat > backend_override.tf <<'EOF'
+terraform {
+  backend "local" {}
+}
+EOF
+
+terraform init -reconfigure
+terraform apply -var-file=dev.tfvars
+# Approve when plan looks right. Takes ~3-5 min.
+```
+
+Verify the state bucket exists:
+```bash
+gcloud storage buckets describe gs://aistudio-tfstate-shared --project=aistudio-shared
+```
+
+### 1.3 — Migrate state to GCS
+
+```bash
+# Remove the local backend override
+rm backend_override.tf
+
+# Re-init with the GCS backend; Terraform will offer to copy local state up
+terraform init \
+  -backend-config="bucket=aistudio-tfstate-shared" \
+  -backend-config="prefix=bootstrap/dev" \
+  -migrate-state
+# Type 'yes' when it asks if you want to copy existing state.
+
+# Sanity-check: should report "No changes."
+terraform plan -var-file=dev.tfvars
+
+# Local state file is now stale — delete it so nobody's tempted to re-use
+rm -f terraform.tfstate terraform.tfstate.backup
+```
+
+### 1.4 — Capture bootstrap outputs
+
+```bash
+terraform output
+# Note these values for Phase 2 / 4:
+#   - artifact_registry_repository → for Phase 4 image push
+#   - shared_project_id            → confirms aistudio-shared
+#   - terraform_runner_sa_email    → for CI/WIF wiring later
+```
+
+---
+
+## Phase 2 — Dev env apply
+
+**Output:** VPC, AlloyDB cluster, KMS keys, Cloud Run web (placeholder image), Cloud Run doc-processor (placeholder image), GCS buckets, Secret Manager secrets (empty), Identity Platform tenant, LB (no SSL cert yet), scheduler jobs, observability dashboards, VPC-SC perimeter (dry-run).
+
+### 2.1 — Set up `terraform.tfvars`
+
+```bash
+cd ../dev
+cp terraform.tfvars.example terraform.tfvars
+```
+
+Edit — fill in: `domain_name`, `vpc_sc_access_policy_name`, `workspace_oidc_client_id`, `workspace_oidc_client_secret`. (See `infra-gcp/envs/dev/terraform.tfvars.example` for guidance on each.)
+
+For `vpc_sc_access_policy_name`:
+```bash
+gcloud access-context-manager policies list --organization=<ORG_ID>
+# Returns the numeric policy ID
+```
+
+For `workspace_oidc_client_id` / `_secret`:
+- GCP Console → APIs & Services → Credentials → OAuth 2.0 Client IDs
+- Create one if it doesn't exist; type "Web application," authorized redirect URI = `https://<domain_name>/api/auth/callback/google`
+
+### 2.2 — Apply
+
+```bash
+terraform init \
+  -backend-config="bucket=aistudio-tfstate-shared" \
+  -backend-config="prefix=envs/dev"
+
+terraform plan -var-file=terraform.tfvars
+# Expect ~80–120 resources to be created. Skim for surprises.
+
+terraform apply -var-file=terraform.tfvars
+# 15–25 minutes. AlloyDB cluster creation is the slow path (~10 min).
+```
+
+### 2.3 — Capture dev outputs
+
+```bash
+terraform output
+# Note especially:
+#   - load_balancer_ip       → for Phase 6 DNS
+#   - cloud_run_web_url      → temp Cloud Run URL (you can curl /api/health here pre-DNS)
+#   - alloydb_primary_ip     → sanity-check the worker can reach it
+```
+
+---
+
+## Phase 3 — Build + push web image
+
+The Cloud Run web service is currently pointed at a placeholder. Build the real Next.js image and deploy it.
+
+```bash
+cd /Users/nic/aistudio-gcp
+
+# Submit Cloud Build (uploads context, builds in GCP, pushes to Artifact Registry)
+gcloud builds submit \
+  --tag us-west1-docker.pkg.dev/aistudio-shared/aistudio/aistudio-web:dev-latest \
+  --file Dockerfile \
+  --project aistudio-shared \
+  .
+
+# Deploy the new image to the dev web service
+gcloud run deploy aistudio-web \
+  --image us-west1-docker.pkg.dev/aistudio-shared/aistudio/aistudio-web:dev-latest \
+  --region us-west1 \
+  --project aistudio-dev
+```
+
+Verify:
+```bash
+WEB_URL=$(gcloud run services describe aistudio-web \
+  --region us-west1 --project aistudio-dev --format='value(status.url)')
+curl -sS "$WEB_URL/api/health"
+# → some 200 response
+```
+
+---
+
+## Phase 4 — Build + push document-processor image
+
+Same pattern as Phase 3 but for the worker, and using a service-specific Dockerfile.
+
+```bash
+cd /Users/nic/aistudio-gcp
+
+gcloud builds submit \
+  --tag us-west1-docker.pkg.dev/aistudio-shared/aistudio/aistudio-doc-processor:dev-latest \
+  --file infra/cloud-run-services/document-processor/Dockerfile \
+  --project aistudio-shared \
+  .
+
+gcloud run deploy aistudio-doc-processor \
+  --image us-west1-docker.pkg.dev/aistudio-shared/aistudio/aistudio-doc-processor:dev-latest \
+  --region us-west1 \
+  --project aistudio-dev
+```
+
+Verify (the only unauth'd route):
+```bash
+PROC_URL=$(gcloud run services describe aistudio-doc-processor \
+  --region us-west1 --project aistudio-dev --format='value(status.url)')
+curl -sS "$PROC_URL/healthz"
+# → 200
+```
+
+`/process-job` and `/admin/cleanup-jobs` require OIDC tokens from the Cloud Tasks / Scheduler invoker SAs — don't try them by hand.
+
+---
+
+## Phase 5 — Populate secret values (4 secrets)
+
+Terraform creates the secret resources but not their values (so values aren't in tfstate). Set them out-of-band with `gcloud secrets versions add`.
+
+### 5.1 — `aistudio-mcp-token-encryption-key`
+
+DEK seed for MCP per-user OAuth field-level encryption. HKDF-SHA-256 derives the actual 32-byte key, so the input just needs to be high-entropy random.
+
+```bash
+openssl rand -base64 48 | gcloud secrets versions add \
+  aistudio-mcp-token-encryption-key --data-file=- --project aistudio-dev
+```
+
+### 5.2 — `aistudio-nextauth-secret`
+
+NextAuth session signing secret. 32+ random bytes.
+
+```bash
+openssl rand -base64 48 | gcloud secrets versions add \
+  aistudio-nextauth-secret --data-file=- --project aistudio-dev
+```
+
+### 5.3 — `aistudio-mcp-token`
+
+MCP API bearer token. Whatever value you've issued for MCP server auth.
+
+```bash
+echo -n "<MCP_BEARER_TOKEN>" | gcloud secrets versions add \
+  aistudio-mcp-token --data-file=- --project aistudio-dev
+```
+
+### 5.4 — `alloydb-initial-password`
+
+⚠️ **This one is special — AlloyDB is created with a postgres password from this secret on first apply.** If you didn't seed it BEFORE Phase 2 ran, AlloyDB created itself with a random password and you need to reset it via `gcloud alloydb users update postgres ...`. Otherwise:
+
+```bash
+openssl rand -base64 32 | tr -d '\n' | gcloud secrets versions add \
+  alloydb-initial-password --data-file=- --project aistudio-dev
+```
+
+If Phase 2 already ran and AlloyDB is using a different password, fix it:
+```bash
+NEW_PASSWORD=$(gcloud secrets versions access latest \
+  --secret alloydb-initial-password --project aistudio-dev)
+
+gcloud alloydb users update postgres \
+  --cluster aistudio-dev \
+  --region us-west1 \
+  --project aistudio-dev \
+  --password="$NEW_PASSWORD"
+```
+
+### 5.5 — Verify all four
+
+```bash
+for s in aistudio-mcp-token-encryption-key aistudio-nextauth-secret aistudio-mcp-token alloydb-initial-password; do
+  echo "$s:"
+  gcloud secrets versions list "$s" --project aistudio-dev --limit=1
+done
+```
+
+Each should show one ENABLED version.
+
+### 5.6 — Bounce Cloud Run to pick up new secret values
+
+Secrets resolve at instance start, not per-request. Force a new revision:
+
+```bash
+gcloud run services update aistudio-web \
+  --region us-west1 --project aistudio-dev \
+  --update-env-vars FORCE_REVISION=$(date +%s)
+
+gcloud run services update aistudio-doc-processor \
+  --region us-west1 --project aistudio-dev \
+  --update-env-vars FORCE_REVISION=$(date +%s)
+```
+
+---
+
+## Phase 6 — DNS + SSL
+
+```bash
+# Get the LB IP from Phase 2 outputs
+cd /Users/nic/aistudio-gcp/infra-gcp/envs/dev
+LB_IP=$(terraform output -raw load_balancer_ip)
+echo "Point dev-aistudio.sunnysideschools.org A → $LB_IP"
+```
+
+Create an A record at your DNS provider for `dev-aistudio.sunnysideschools.org` → `<LB_IP>`. Wait for propagation (`dig dev-aistudio.sunnysideschools.org` returns the LB IP).
+
+Cloud LB's managed cert provisioning starts automatically once the A record resolves. Status check:
+```bash
+gcloud compute ssl-certificates describe aistudio-dev-cert --global --project aistudio-dev
+# Look for status: ACTIVE — can take 15-60 minutes
+```
+
+---
+
+## Phase 7 — Smoke tests
+
+### 7.1 — App reachable
+
+```bash
+curl -sS https://dev-aistudio.sunnysideschools.org/api/health
+# → 200
+```
+
+### 7.2 — OIDC login works
+
+In a browser: visit `https://dev-aistudio.sunnysideschools.org`, click sign in with Google, complete the flow. Should land on the home page authed.
+
+### 7.3 — Doc upload + process end-to-end
+
+In the dev app: upload a small PDF (5-10 pages). Watch logs in two terminals:
+
+```bash
+# Terminal 1: web app upload handler
+gcloud run services logs tail aistudio-web \
+  --region us-west1 --project aistudio-dev
+
+# Terminal 2: document processor
+gcloud run services logs tail aistudio-doc-processor \
+  --region us-west1 --project aistudio-dev
+```
+
+Expected sequence:
+1. Web logs `Server-side upload request` → `Job created` → `File uploaded to storage` → `Processing queued`
+2. Within ~5–60 seconds, processor logs `Processing job <jobId>` → `Job completed`
+3. UI shows extracted text
+
+If the UI hangs at "Processing...":
+```bash
+# Check job state directly
+gcloud sql connect ...   # or use psql with the AlloyDB connection
+SELECT id, status, error_message, created_at FROM document_jobs ORDER BY created_at DESC LIMIT 5;
+```
+
+---
+
+## Common gotchas
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| `terraform init` fails: `Permission denied on bucket aistudio-tfstate-shared` | Phase 1 wasn't completed (state bucket doesn't exist) | Run Phase 1 first. |
+| `terraform apply` fails: `Permission 'resourcemanager.projects.get' denied` | Active gcloud account lacks IAM on the project | `gcloud auth login` with an account that has owner/editor on the project. |
+| `gcloud builds submit` fails: `Cloud Build API has not been used` | Cloud Build API not enabled in `aistudio-shared` | `gcloud services enable cloudbuild.googleapis.com --project=aistudio-shared` |
+| `gcloud run deploy` reports success but `/process-job` 404s | Service is still on cloudrun-hello placeholder | Re-run Phase 4 — `--image` flag must point at the real image. |
+| Doc upload hangs at "Processing...", processor logs are silent | Cloud Tasks queue not granted invoker on the worker, OR worker SA can't reach AlloyDB | Check `gcloud iam policies analyze ...` and `gcloud run services logs tail` for OIDC verification errors. |
+| App shows "Token encryption DEK is unavailable" | Phase 5.1 was skipped | Set the secret value, bounce web revision (Phase 5.6). |
+| LB cert stuck in `PROVISIONING` after >1 hour | DNS A record not resolving to the LB IP yet | `dig +short <domain>` should match LB IP. Check propagation. |
+| AlloyDB connection refused | Postgres password mismatch between secret + cluster | Phase 5.4 fix path (gcloud alloydb users update). |
+
+---
+
+## Rollback / teardown
+
+If a `terraform apply` lands you somewhere broken and you want to start over:
+
+```bash
+cd /Users/nic/aistudio-gcp/infra-gcp/envs/dev
+terraform destroy -var-file=terraform.tfvars
+# Approve. Takes ~10 min.
+
+cd ../bootstrap
+terraform destroy -var-file=dev.tfvars
+# Approve. Note: KMS keys are not actually deleted (Google holds them in scheduled deletion for 30 days);
+# the next apply will need to import them or wait out the soft-delete window.
+```
+
+Then delete the projects (frees the project IDs after 30 days):
+```bash
+gcloud projects delete aistudio-dev
+gcloud projects delete aistudio-shared
+```
+
+---
+
+## What this runbook does NOT cover
+
+- Staging or prod bring-up (`envs/staging`, `envs/prod`) — same shape but separate billing budgets, separate VPC-SC perimeter, manual `terraform apply` approval gates. Do dev first, capture lessons, then staging, then prod.
+- WIF wiring for GitHub Actions — Phase 1 creates the WIF pool, but the GitHub Actions workflow needs a separate PR to use it. Lower priority; manual deploys via `gcloud run deploy` are fine for dev iteration.
+- Lambda retirement (`infra/lambdas/{file-processor,document-processor-v2,url-processor,agent-router}/`) — these still exist in the AWS-targeted CDK stack. Deletion is gated on the Cloud Run document-processor (Phase 4 + 7) being verified end-to-end. Do that, then delete the Lambda directories in a follow-up PR.
+- Image generation pipeline — separate slice (Vertex Imagen vs. Bedrock; not yet ported).
+- Safety layer (Model Armor / DLP wiring) — separate slice.
+
+---
+
+## Sequence summary (TL;DR)
+
+```
+Phase 0:   gcloud login + create projects + link billing      ~30 min
+Phase 1:   bootstrap apply (local→GCS state migration)        ~10 min
+Phase 2:   dev env apply                                      ~25 min  (AlloyDB is slow)
+Phase 3:   web image build + deploy                           ~10 min
+Phase 4:   doc-processor image build + deploy                 ~5 min
+Phase 5:   set 4 secret values + bounce revisions             ~5 min
+Phase 6:   DNS A record + wait for SSL cert                   ~30-60 min wait
+Phase 7:   smoke tests (login, upload, process)               ~10 min
+```
+
+If you hit any step where the runbook is wrong, fix it in this file as part of the same PR — future-you will thank present-you.
