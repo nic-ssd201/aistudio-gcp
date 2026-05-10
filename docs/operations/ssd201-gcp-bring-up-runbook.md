@@ -150,7 +150,9 @@ terraform plan -var-file=dev.tfvars
 # `terraform init` (without -reconfigure) will pick them up and get confused
 # about which backend is authoritative:
 rm -f terraform.tfstate terraform.tfstate.backup    # local state copies are now stale
-rm -f .terraform.tfstate.lock.info                  # stale lock if a prior local apply was interrupted
+# Only if a prior local apply was interrupted/killed (a lock file in the tree
+# usually signals a half-finished operation, not stale residue):
+rm -f .terraform.tfstate.lock.info
 # (backend_override.tf was already removed at the top of this step)
 ```
 
@@ -201,10 +203,13 @@ terraform init \
   -backend-config="bucket=aistudio-tfstate-shared" \
   -backend-config="prefix=envs/dev"
 
-# Targeted apply — creates only the Secret Manager secret resources (4 of them)
-# so we can seed alloydb-initial-password before AlloyDB tries to read it.
+# Targeted apply — creates the Secret Manager secrets (4 of them) plus their
+# upstream dependencies (KMS keyring + secret-encryption key, web/doc-processor
+# service accounts, project-services API enablement, IAM accessor bindings).
+# Expect ~25-40 resources and ~3-5 minutes, NOT just the secrets themselves.
+# Goal of this targeted step: get the alloydb-initial-password resource created
+# so we can seed it in 2.2b before AlloyDB tries to read it in 2.2c.
 terraform apply -var-file=terraform.tfvars -target=module.secrets
-# ~30 seconds. Approve when plan shows just secret-related resources.
 ```
 
 ### 2.2b — Seed the AlloyDB initial password (mandatory before full apply)
@@ -260,8 +265,13 @@ gcloud builds submit \
   --project aistudio-shared \
   .
 
-# Deploy the new image to the dev web service
-gcloud run deploy aistudio-web \
+# Deploy the new image to the dev web service.
+# IMPORTANT — service naming asymmetry:
+#   - cloud-run-web sets service_name = "aistudio-${var.environment}-web", so the
+#     dev web service is `aistudio-dev-web` (and `aistudio-staging-web`, `aistudio-prod-web`)
+#   - cloud-run-worker / envs/dev/main.tf hardcode the doc-processor as `aistudio-doc-processor`
+#     (no env prefix). Don't pattern-match the wrong way between these two.
+gcloud run deploy aistudio-dev-web \
   --image us-west1-docker.pkg.dev/aistudio-shared/aistudio/aistudio-web:dev-latest \
   --region us-west1 \
   --project aistudio-dev
@@ -269,7 +279,7 @@ gcloud run deploy aistudio-web \
 
 Verify:
 ```bash
-WEB_URL=$(gcloud run services describe aistudio-web \
+WEB_URL=$(gcloud run services describe aistudio-dev-web \
   --region us-west1 --project aistudio-dev --format='value(status.url)')
 curl -sS "$WEB_URL/api/health"
 # → some 200 response
@@ -317,7 +327,7 @@ Terraform creates the secret resources but not their values (so values aren't in
 DEK seed for MCP per-user OAuth field-level encryption. HKDF-SHA-256 derives the actual 32-byte key, so the input just needs to be high-entropy random.
 
 ```bash
-openssl rand -base64 48 | gcloud secrets versions add \
+openssl rand -base64 48 | tr -d '\n' | gcloud secrets versions add \
   aistudio-mcp-token-encryption-key --data-file=- --project aistudio-dev
 ```
 
@@ -326,9 +336,11 @@ openssl rand -base64 48 | gcloud secrets versions add \
 NextAuth session signing secret. 32+ random bytes.
 
 ```bash
-openssl rand -base64 48 | gcloud secrets versions add \
+openssl rand -base64 48 | tr -d '\n' | gcloud secrets versions add \
   aistudio-nextauth-secret --data-file=- --project aistudio-dev
 ```
+
+(All `openssl rand -base64` outputs include a trailing newline by default; piping through `tr -d '\n'` keeps the secret value clean across all four secrets in this section. NextAuth + HKDF tolerate the newline, but consistency avoids a future copy-paste footgun.)
 
 ### 5.3 — `aistudio-mcp-token`
 
@@ -382,19 +394,23 @@ Each should show one ENABLED version.
 
 ### 5.6 — Bounce Cloud Run to pick up new secret values
 
-Secrets resolve at instance start, not per-request. Force a new revision:
+Secrets resolve at instance start, not per-request. Force a new revision by **redeploying the same image** — gcloud auto-suffixes a new revision name on every deploy, and image is in Terraform's `lifecycle.ignore_changes` so this doesn't drift:
 
 ```bash
-gcloud run services update aistudio-web \
-  --region us-west1 --project aistudio-dev \
-  --update-env-vars FORCE_REVISION=$(date +%s)
+# Look up the image each service is currently running
+WEB_IMAGE=$(gcloud run services describe aistudio-dev-web \
+  --region us-west1 --project aistudio-dev --format='value(spec.template.spec.containers[0].image)')
+PROC_IMAGE=$(gcloud run services describe aistudio-doc-processor \
+  --region us-west1 --project aistudio-dev --format='value(spec.template.spec.containers[0].image)')
 
-gcloud run services update aistudio-doc-processor \
-  --region us-west1 --project aistudio-dev \
-  --update-env-vars FORCE_REVISION=$(date +%s)
+# Re-deploy each at its current image — forces a new revision, no spec changes
+gcloud run deploy aistudio-dev-web \
+  --image "$WEB_IMAGE" --region us-west1 --project aistudio-dev
+gcloud run deploy aistudio-doc-processor \
+  --image "$PROC_IMAGE" --region us-west1 --project aistudio-dev
 ```
 
-> **Note**: re-running these commands later overwrites the same `FORCE_REVISION` env var (because `--update-env-vars` upserts by key) — it doesn't accumulate. The env var stays on the service permanently, which is harmless but visible in `gcloud run services describe`. If you want a cleaner mechanism on subsequent rotations, an alternative is `gcloud run services update --update-secrets ...` re-pointing at the same secret (semantic no-op but forces a new revision without leaving an env-var artefact).
+> **Why not `--update-env-vars FORCE_REVISION=...`:** that approach works but causes Terraform drift — `cloud-run-web/main.tf` only has `image` in `ignore_changes`, not `env`, so the next `terraform plan` will want to remove the FORCE_REVISION var (and any future apply will roll yet another revision dropping it). Re-deploying at the same image is drift-free.
 
 ---
 
@@ -439,7 +455,7 @@ In the dev app: upload a small PDF (5-10 pages). Watch logs in two terminals:
 
 ```bash
 # Terminal 1: web app upload handler
-gcloud run services logs tail aistudio-web \
+gcloud run services logs tail aistudio-dev-web \
   --region us-west1 --project aistudio-dev
 
 # Terminal 2: document processor
