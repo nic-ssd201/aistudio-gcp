@@ -17,6 +17,12 @@ variable "kms_key" {
   description = "KMS key resource name for CMEK"
 }
 
+variable "name_prefix" {
+  type        = string
+  description = "Bucket name prefix (default 'aistudio'). GCS bucket names are GLOBALLY unique across all of GCS, so callers MUST override this with an org-namespaced prefix (e.g. 'ssd201-aistudio') to avoid collisions with other deployments. The default exists only for upstream / test fixtures."
+  default     = "aistudio"
+}
+
 variable "buckets" {
   type = map(object({
     name_suffix = string

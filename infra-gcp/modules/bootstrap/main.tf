@@ -7,20 +7,24 @@
 #
 # PRE-CREATION REQUIREMENT
 # ------------------------
-# The aistudio-shared project MUST be created manually before the first `terraform apply`.
+# The shared project MUST be created manually before the first `terraform apply`.
 # Bootstrap does NOT create or destroy the project — it only adopts it via a data source.
 # This keeps `terraform destroy` from ever deleting the shared project or orphaning state.
 #
+# Project IDs are GLOBALLY unique across all of GCP — bare `aistudio-shared` is taken,
+# so SSD201 deployments use `ssd201-aistudio-shared`. Substitute your own org-namespaced
+# ID in the commands below.
+#
 # One-time setup (run once by an org admin):
 #
-#   gcloud projects create aistudio-shared \
+#   gcloud projects create ssd201-aistudio-shared \
 #     --organization=<ORG_ID> \
 #     --name="AI Studio Shared"
 #
-#   gcloud billing projects link aistudio-shared \
+#   gcloud billing projects link ssd201-aistudio-shared \
 #     --billing-account=<BILLING_ACCOUNT_ID>
 #
-# After that, set host_project_id = "aistudio-shared" in the env root and apply.
+# After that, set host_project_id = "ssd201-aistudio-shared" in the env root and apply.
 
 locals {
   labels = merge(

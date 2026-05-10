@@ -5,7 +5,7 @@
 # §6.6: billing_account, org_id, host_project_id → moved to envs/bootstrap/prod.tfvars
 #        Apply envs/bootstrap first, then this root.
 
-env_project_id = "aistudio-prod"
+env_project_id = "ssd201-aistudio-prod"
 region         = "us-west1"
 environment    = "prod"
 
@@ -13,7 +13,7 @@ environment    = "prod"
 domain_name = "aistudio.sunnysideschools.org"
 
 # Container image — pin to a release tag; never use :latest in prod
-container_image = "us-west1-docker.pkg.dev/aistudio-shared/aistudio/aistudio-web:v1.0.0"
+container_image = "us-west1-docker.pkg.dev/ssd201-aistudio-shared/aistudio/aistudio-web:v1.0.0"
 
 # VPC-SC access policy
 vpc_sc_access_policy_name = "1234567890"

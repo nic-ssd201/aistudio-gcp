@@ -16,12 +16,12 @@ variable "env" {
 
 variable "host_project_id" {
   type        = string
-  description = "Pre-created aistudio-shared GCP project ID. Terraform adopts this project via a data source — never creates or destroys it."
+  description = "Pre-created shared (host) GCP project ID — e.g. ssd201-aistudio-shared. Terraform adopts this project via a data source — never creates or destroys it."
 }
 
 variable "env_project_id" {
   type        = string
-  description = "Pre-created env GCP project ID (e.g. aistudio-dev). Scopes the billing budget to this project."
+  description = "Pre-created env GCP project ID — e.g. ssd201-aistudio-dev. Scopes the billing budget to this project."
 }
 
 variable "org_id" {
@@ -54,8 +54,8 @@ variable "openclaw_local_issuer" {
 
 variable "state_bucket_name" {
   type        = string
-  description = "GCS bucket name for Terraform state (globally unique)"
-  default     = "aistudio-tfstate-shared"
+  description = "GCS bucket name for Terraform state (globally unique). SSD201-namespaced because GCS bucket names are global; bare 'aistudio-tfstate-shared' would collide with other deployments."
+  default     = "ssd201-aistudio-tfstate-shared"
 }
 
 variable "breakglass_email" {

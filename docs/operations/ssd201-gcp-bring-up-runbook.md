@@ -19,11 +19,11 @@ These are decisions or actions that Terraform cannot make for you because they i
 | GCP organization | The SSD201 / sunnysideschools.org org | Needed for `org_id`. If "no org," skip the org-level audit log sink. |
 | Billing account | Existing Sunnyside billing account | Needs Billing Admin to attach. ~$50–$200/mo for dev at idle. |
 | Region | `us-west1` | Matches existing Terraform examples. Don't change without auditing every module. |
-| Shared project ID | `aistudio-shared` | Holds Artifact Registry + state bucket + WIF. Used by all envs. |
-| Dev project ID | `aistudio-dev` | Holds dev's AlloyDB, Cloud Run, secrets, etc. |
+| Shared project ID | `ssd201-aistudio-shared` | Holds Artifact Registry + state bucket + WIF. Used by all envs. **`ssd201-` prefix is mandatory** — bare `aistudio-shared` is globally taken by another GCP user. |
+| Dev project ID | `ssd201-aistudio-dev` | Holds dev's AlloyDB, Cloud Run, secrets, etc. **`ssd201-` prefix is mandatory** — bare `aistudio-dev` is globally taken. Same global-namespace constraint applies to all GCS bucket names this stack creates (storage module passes `name_prefix = "ssd201-aistudio"` for the same reason). |
 | Domain (dev) | `dev-aistudio.sunnysideschools.org` | You need DNS write access. Cloud LB managed cert needs the A-record set before SSL provisioning starts. |
 | Breakglass email | A monitored shared inbox (`it-breakglass@sunnysideschools.org`) | Receives budget alerts on day 1. Not a personal address. |
-| GitHub WIF claim | `nic-ssd201/aistudio-gcp` | Tells WIF which repo can assume the Terraform-runner SA. **The default in `dev.tfvars.example` is `psd401/aistudio` (upstream) — change it in 1.1.** |
+| GitHub WIF claim | `nic-ssd201/aistudio-gcp` | Tells WIF which repo can assume the Terraform-runner SA. The `dev.tfvars.example` default has been updated to match this fork; verify in 1.1 if you've forked further. |
 
 ### 0.2 — Look up org_id and billing_account
 
@@ -46,17 +46,17 @@ Terraform **adopts** these projects via data source — it does NOT create them.
 
 ```bash
 # Replace <ORG_ID> and <BILLING_ACCOUNT> with the values from 0.2
-gcloud projects create aistudio-shared --organization=<ORG_ID>
-gcloud projects create aistudio-dev    --organization=<ORG_ID>
+gcloud projects create ssd201-aistudio-shared --organization=<ORG_ID>
+gcloud projects create ssd201-aistudio-dev    --organization=<ORG_ID>
 
 # Link billing — required before creating any billable resource
-gcloud beta billing projects link aistudio-shared --billing-account=<BILLING_ACCOUNT>
-gcloud beta billing projects link aistudio-dev    --billing-account=<BILLING_ACCOUNT>
+gcloud beta billing projects link ssd201-aistudio-shared --billing-account=<BILLING_ACCOUNT>
+gcloud beta billing projects link ssd201-aistudio-dev    --billing-account=<BILLING_ACCOUNT>
 
 # Verify
 gcloud projects list --filter='project_id:aistudio-*'
-gcloud beta billing projects describe aistudio-shared
-gcloud beta billing projects describe aistudio-dev
+gcloud beta billing projects describe ssd201-aistudio-shared
+gcloud beta billing projects describe ssd201-aistudio-dev
 ```
 
 If `projects create` fails with `Permission 'resourcemanager.projects.create' denied`, you need `roles/resourcemanager.projectCreator` at the org level. Have an org admin grant it or run the command for you.
@@ -66,7 +66,7 @@ If `projects create` fails with `Permission 'resourcemanager.projects.create' de
 The bootstrap module enables most APIs, but it needs a few enabled BEFORE its first apply (otherwise the state bucket creation fails). Belt-and-suspenders: enable the foundational APIs in both projects up front:
 
 ```bash
-for project in aistudio-shared aistudio-dev; do
+for project in ssd201-aistudio-shared ssd201-aistudio-dev; do
   gcloud services enable \
     cloudresourcemanager.googleapis.com \
     cloudbilling.googleapis.com \
@@ -104,7 +104,7 @@ Edit `dev.tfvars` and fill in:
 - `org_id` (from 0.2)
 - `billing_account` (from 0.2)
 - `breakglass_email` (from 0.1)
-- **`github_repo`** — change from the upstream default `psd401/aistudio` to your fork's slug (`nic-ssd201/aistudio-gcp`). The WIF principalSet binding hardcodes this; getting it wrong means CI can't deploy until you re-apply bootstrap with the right value.
+- **`github_repo`** — `dev.tfvars.example` now defaults to `nic-ssd201/aistudio-gcp`. Verify it matches the repo you'll deploy from (the WIF principalSet binding hardcodes this; getting it wrong means CI can't deploy until you re-apply bootstrap with the right value).
 
 Other defaults (`env`, `host_project_id`, `env_project_id`, `budget_amount_usd`) are sensible — only change if you've deviated from the suggested project IDs in 0.1.
 
@@ -127,7 +127,7 @@ terraform apply -var-file=dev.tfvars
 
 Verify the state bucket exists:
 ```bash
-gcloud storage buckets describe gs://aistudio-tfstate-shared --project=aistudio-shared
+gcloud storage buckets describe gs://ssd201-aistudio-tfstate-shared --project=ssd201-aistudio-shared
 ```
 
 ### 1.3 — Migrate state to GCS
@@ -138,7 +138,7 @@ rm backend_override.tf
 
 # Re-init with the GCS backend; Terraform will offer to copy local state up
 terraform init \
-  -backend-config="bucket=aistudio-tfstate-shared" \
+  -backend-config="bucket=ssd201-aistudio-tfstate-shared" \
   -backend-config="prefix=bootstrap/dev" \
   -migrate-state
 # Type 'yes' when it asks if you want to copy existing state.
@@ -162,7 +162,7 @@ rm -f .terraform.tfstate.lock.info
 terraform output
 # Note these values for Phase 2 / 4:
 #   - artifact_registry_repository → for Phase 4 image push
-#   - shared_project_id            → confirms aistudio-shared
+#   - shared_project_id            → confirms ssd201-aistudio-shared
 #   - terraform_runner_sa_email    → for CI/WIF wiring later
 ```
 
@@ -195,12 +195,12 @@ For `workspace_oidc_client_id` / `_secret`:
 
 ### 2.2a — Init + targeted apply for the secrets module ONLY
 
-> **⚠️ Backend override:** `infra-gcp/envs/dev/backend.tf` still hardcodes `bucket = "aistudio-tfstate-dev"` (a bucket the bootstrap module never creates — bootstrap only creates `aistudio-tfstate-shared`). The `-backend-config` flags below override the hardcoded values. `-reconfigure` is mandatory because of the override; without it, Terraform reuses the cached (wrong) backend config from `.terraform/`. **Follow-up cleanup**: remove the hardcoded `bucket`/`prefix` from `envs/{dev,staging,prod}/backend.tf` to match the `envs/bootstrap/backend.tf` pattern (no hardcoded values). Tracked separately, not blocking this runbook.
+> **Backend pattern:** `infra-gcp/envs/dev/backend.tf` no longer hardcodes a bucket name (matches the `envs/bootstrap/backend.tf` pattern as of this PR). The `-backend-config` flags below supply the bucket + prefix at init time. If you ran `terraform init` against an older revision and have a `.terraform/` cached backend config, add `-reconfigure` to the init below.
 
 ```bash
 terraform init \
   -reconfigure \
-  -backend-config="bucket=aistudio-tfstate-shared" \
+  -backend-config="bucket=ssd201-aistudio-tfstate-shared" \
   -backend-config="prefix=envs/dev"
 
 # Targeted apply — creates the Secret Manager secrets (4 of them) plus their
@@ -216,10 +216,10 @@ terraform apply -var-file=terraform.tfvars -target=module.secrets
 
 ```bash
 openssl rand -base64 32 | tr -d '\n' | gcloud secrets versions add \
-  alloydb-initial-password --data-file=- --project aistudio-dev
+  alloydb-initial-password --data-file=- --project ssd201-aistudio-dev
 
 # Verify
-gcloud secrets versions list alloydb-initial-password --project aistudio-dev
+gcloud secrets versions list alloydb-initial-password --project ssd201-aistudio-dev
 # Should show one ENABLED version.
 ```
 
@@ -247,7 +247,7 @@ terraform output
 ```
 
 (Note: there's no AlloyDB IP output today. If you need it, query directly:
-`gcloud alloydb instances describe primary --cluster=aistudio-dev --region=us-west1 --project=aistudio-dev --format='value(ipAddress)'`)
+`gcloud alloydb instances describe primary --cluster=ssd201-aistudio-dev --region=us-west1 --project=ssd201-aistudio-dev --format='value(ipAddress)'`)
 
 ---
 
@@ -260,9 +260,9 @@ cd "$REPO_ROOT"
 
 # Submit Cloud Build (uploads context, builds in GCP, pushes to Artifact Registry)
 gcloud builds submit \
-  --tag us-west1-docker.pkg.dev/aistudio-shared/aistudio/aistudio-web:dev-latest \
+  --tag us-west1-docker.pkg.dev/ssd201-aistudio-shared/aistudio/aistudio-web:dev-latest \
   --file Dockerfile \
-  --project aistudio-shared \
+  --project ssd201-aistudio-shared \
   .
 
 # Deploy the new image to the dev web service.
@@ -272,15 +272,15 @@ gcloud builds submit \
 #   - cloud-run-worker / envs/dev/main.tf hardcode the doc-processor as `aistudio-doc-processor`
 #     (no env prefix). Don't pattern-match the wrong way between these two.
 gcloud run deploy aistudio-dev-web \
-  --image us-west1-docker.pkg.dev/aistudio-shared/aistudio/aistudio-web:dev-latest \
+  --image us-west1-docker.pkg.dev/ssd201-aistudio-shared/aistudio/aistudio-web:dev-latest \
   --region us-west1 \
-  --project aistudio-dev
+  --project ssd201-aistudio-dev
 ```
 
 Verify:
 ```bash
 WEB_URL=$(gcloud run services describe aistudio-dev-web \
-  --region us-west1 --project aistudio-dev --format='value(status.url)')
+  --region us-west1 --project ssd201-aistudio-dev --format='value(status.url)')
 curl -sS "$WEB_URL/api/health"
 # → some 200 response
 ```
@@ -295,21 +295,21 @@ Same pattern as Phase 3 but for the worker, and using a service-specific Dockerf
 cd "$REPO_ROOT"
 
 gcloud builds submit \
-  --tag us-west1-docker.pkg.dev/aistudio-shared/aistudio/aistudio-doc-processor:dev-latest \
+  --tag us-west1-docker.pkg.dev/ssd201-aistudio-shared/aistudio/aistudio-doc-processor:dev-latest \
   --file infra/cloud-run-services/document-processor/Dockerfile \
-  --project aistudio-shared \
+  --project ssd201-aistudio-shared \
   .
 
 gcloud run deploy aistudio-doc-processor \
-  --image us-west1-docker.pkg.dev/aistudio-shared/aistudio/aistudio-doc-processor:dev-latest \
+  --image us-west1-docker.pkg.dev/ssd201-aistudio-shared/aistudio/aistudio-doc-processor:dev-latest \
   --region us-west1 \
-  --project aistudio-dev
+  --project ssd201-aistudio-dev
 ```
 
 Verify (the only unauth'd route):
 ```bash
 PROC_URL=$(gcloud run services describe aistudio-doc-processor \
-  --region us-west1 --project aistudio-dev --format='value(status.url)')
+  --region us-west1 --project ssd201-aistudio-dev --format='value(status.url)')
 curl -sS "$PROC_URL/healthz"
 # → 200
 ```
@@ -328,7 +328,7 @@ DEK seed for MCP per-user OAuth field-level encryption. HKDF-SHA-256 derives the
 
 ```bash
 openssl rand -base64 48 | tr -d '\n' | gcloud secrets versions add \
-  aistudio-mcp-token-encryption-key --data-file=- --project aistudio-dev
+  aistudio-mcp-token-encryption-key --data-file=- --project ssd201-aistudio-dev
 ```
 
 ### 5.2 — `aistudio-nextauth-secret`
@@ -337,7 +337,7 @@ NextAuth session signing secret. 32+ random bytes.
 
 ```bash
 openssl rand -base64 48 | tr -d '\n' | gcloud secrets versions add \
-  aistudio-nextauth-secret --data-file=- --project aistudio-dev
+  aistudio-nextauth-secret --data-file=- --project ssd201-aistudio-dev
 ```
 
 (All `openssl rand -base64` outputs include a trailing newline by default; piping through `tr -d '\n'` keeps the secret value clean across all four secrets in this section. NextAuth + HKDF tolerate the newline, but consistency avoids a future copy-paste footgun.)
@@ -351,7 +351,7 @@ MCP API bearer token. Whatever value you've issued for MCP server auth.
 read -rs MCP_BEARER_TOKEN
 echo  # newline after the silent input
 printf %s "$MCP_BEARER_TOKEN" | gcloud secrets versions add \
-  aistudio-mcp-token --data-file=- --project aistudio-dev
+  aistudio-mcp-token --data-file=- --project ssd201-aistudio-dev
 unset MCP_BEARER_TOKEN
 ```
 
@@ -364,16 +364,16 @@ This secret was set in Phase 2.2b — nothing to do here on first deploy. **If y
 ```bash
 # 1. Add a new secret version
 openssl rand -base64 32 | tr -d '\n' | gcloud secrets versions add \
-  alloydb-initial-password --data-file=- --project aistudio-dev
+  alloydb-initial-password --data-file=- --project ssd201-aistudio-dev
 
 # 2. Apply the new password to the AlloyDB cluster
 NEW_PASSWORD=$(gcloud secrets versions access latest \
-  --secret alloydb-initial-password --project aistudio-dev)
+  --secret alloydb-initial-password --project ssd201-aistudio-dev)
 
 gcloud alloydb users update postgres \
-  --cluster aistudio-dev \
+  --cluster ssd201-aistudio-dev \
   --region us-west1 \
-  --project aistudio-dev \
+  --project ssd201-aistudio-dev \
   --password="$NEW_PASSWORD"
 
 # 3. Bounce Cloud Run so the new connection string takes effect (see 5.6)
@@ -386,7 +386,7 @@ Note: the data source in `modules/alloydb/main.tf` only reads the secret at plan
 ```bash
 for s in aistudio-mcp-token-encryption-key aistudio-nextauth-secret aistudio-mcp-token alloydb-initial-password; do
   echo "$s:"
-  gcloud secrets versions list "$s" --project aistudio-dev --limit=1
+  gcloud secrets versions list "$s" --project ssd201-aistudio-dev --limit=1
 done
 ```
 
@@ -399,15 +399,15 @@ Secrets resolve at instance start, not per-request. Force a new revision by **re
 ```bash
 # Look up the image each service is currently running
 WEB_IMAGE=$(gcloud run services describe aistudio-dev-web \
-  --region us-west1 --project aistudio-dev --format='value(spec.template.spec.containers[0].image)')
+  --region us-west1 --project ssd201-aistudio-dev --format='value(spec.template.spec.containers[0].image)')
 PROC_IMAGE=$(gcloud run services describe aistudio-doc-processor \
-  --region us-west1 --project aistudio-dev --format='value(spec.template.spec.containers[0].image)')
+  --region us-west1 --project ssd201-aistudio-dev --format='value(spec.template.spec.containers[0].image)')
 
 # Re-deploy each at its current image — forces a new revision, no spec changes
 gcloud run deploy aistudio-dev-web \
-  --image "$WEB_IMAGE" --region us-west1 --project aistudio-dev
+  --image "$WEB_IMAGE" --region us-west1 --project ssd201-aistudio-dev
 gcloud run deploy aistudio-doc-processor \
-  --image "$PROC_IMAGE" --region us-west1 --project aistudio-dev
+  --image "$PROC_IMAGE" --region us-west1 --project ssd201-aistudio-dev
 ```
 
 > **Why not `--update-env-vars FORCE_REVISION=...`:** that approach works but causes Terraform drift — `cloud-run-web/main.tf` only has `image` in `ignore_changes`, not `env`, so the next `terraform plan` will want to remove the FORCE_REVISION var (and any future apply will roll yet another revision dropping it). Re-deploying at the same image is drift-free.
@@ -428,9 +428,9 @@ Create an A record at your DNS provider for `dev-aistudio.sunnysideschools.org` 
 Cloud LB's managed cert provisioning starts automatically once the A record resolves. The LB module uses the **Certificate Manager API** (not legacy compute SSL certs), so:
 
 ```bash
-gcloud certificate-manager certificates describe aistudio-dev-cert \
+gcloud certificate-manager certificates describe ssd201-aistudio-dev-cert \
   --location=global \
-  --project=aistudio-dev
+  --project=ssd201-aistudio-dev
 # Look for state: ACTIVE — can take 15-60 minutes after DNS propagates
 ```
 
@@ -456,11 +456,11 @@ In the dev app: upload a small PDF (5-10 pages). Watch logs in two terminals:
 ```bash
 # Terminal 1: web app upload handler
 gcloud run services logs tail aistudio-dev-web \
-  --region us-west1 --project aistudio-dev
+  --region us-west1 --project ssd201-aistudio-dev
 
 # Terminal 2: document processor
 gcloud run services logs tail aistudio-doc-processor \
-  --region us-west1 --project aistudio-dev
+  --region us-west1 --project ssd201-aistudio-dev
 ```
 
 Expected sequence:
@@ -472,9 +472,9 @@ If the UI hangs at "Processing...":
 ```bash
 # Connect to AlloyDB via the gcloud client (uses an auth proxy under the hood)
 gcloud alloydb instances connect primary \
-  --cluster=aistudio-dev \
+  --cluster=ssd201-aistudio-dev \
   --region=us-west1 \
-  --project=aistudio-dev \
+  --project=ssd201-aistudio-dev \
   --user=postgres
 # (Authenticates via your gcloud session; you'll be dropped into psql against the aistudio db.)
 
@@ -488,9 +488,9 @@ SELECT id, status, error_message, created_at FROM document_jobs ORDER BY created
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| `terraform init` fails: `Permission denied on bucket aistudio-tfstate-shared` | Phase 1 wasn't completed (state bucket doesn't exist) | Run Phase 1 first. |
+| `terraform init` fails: `Permission denied on bucket ssd201-aistudio-tfstate-shared` | Phase 1 wasn't completed (state bucket doesn't exist) | Run Phase 1 first. |
 | `terraform apply` fails: `Permission 'resourcemanager.projects.get' denied` | Active gcloud account lacks IAM on the project | `gcloud auth login` with an account that has owner/editor on the project. |
-| `gcloud builds submit` fails: `Cloud Build API has not been used` | Cloud Build API not enabled in `aistudio-shared` | `gcloud services enable cloudbuild.googleapis.com --project=aistudio-shared` |
+| `gcloud builds submit` fails: `Cloud Build API has not been used` | Cloud Build API not enabled in `ssd201-aistudio-shared` | `gcloud services enable cloudbuild.googleapis.com --project=ssd201-aistudio-shared` |
 | `gcloud run deploy` reports success but `/process-job` 404s | Service is still on cloudrun-hello placeholder | Re-run Phase 4 — `--image` flag must point at the real image. |
 | Doc upload hangs at "Processing...", processor logs are silent | Cloud Tasks queue not granted invoker on the worker, OR worker SA can't reach AlloyDB | Check `gcloud iam policies analyze ...` and `gcloud run services logs tail` for OIDC verification errors. |
 | App shows "Token encryption DEK is unavailable" | Phase 5.1 was skipped | Set the secret value, bounce web revision (Phase 5.6). |
@@ -516,8 +516,8 @@ terraform destroy -var-file=dev.tfvars
 
 Then delete the projects (frees the project IDs after 30 days):
 ```bash
-gcloud projects delete aistudio-dev
-gcloud projects delete aistudio-shared
+gcloud projects delete ssd201-aistudio-dev
+gcloud projects delete ssd201-aistudio-shared
 ```
 
 ---

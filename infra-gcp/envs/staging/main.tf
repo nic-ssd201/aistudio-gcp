@@ -11,7 +11,7 @@
 data "terraform_remote_state" "bootstrap" {
   backend = "gcs"
   config = {
-    bucket = "aistudio-tfstate-shared"
+    bucket = "ssd201-aistudio-tfstate-shared"
     prefix = "bootstrap/staging"
   }
 }
@@ -182,6 +182,7 @@ module "storage" {
   project_id  = var.env_project_id
   environment = var.environment
   kms_key     = module.kms.key_ids["storage"]
+  name_prefix = "ssd201-aistudio" # GCS bucket names are global; org-namespace required
 
   labels = { environment = var.environment, managed_by = "terraform" }
 }

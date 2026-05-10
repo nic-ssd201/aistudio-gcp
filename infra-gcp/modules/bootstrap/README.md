@@ -25,6 +25,6 @@
 | `terraform_runner_sa_email` | Service account for CI/CD |
 | `openclaw_runtime_sa_email` | Service account for OpenClaw runtime |
 | `artifact_registry_repository` | Docker registry URI |
-| `shared_project_id` | aistudio-shared project ID |
+| `shared_project_id` | Shared (host) project ID (e.g. `ssd201-aistudio-shared`) |
 
 See spec §3.1.

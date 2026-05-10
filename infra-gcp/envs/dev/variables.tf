@@ -5,7 +5,7 @@
 
 variable "env_project_id" {
   type        = string
-  description = "aistudio-dev GCP project ID (pre-created manually)"
+  description = "Env GCP project ID — e.g. ssd201-aistudio-dev (pre-created manually)"
 }
 
 variable "region" {
@@ -31,7 +31,7 @@ variable "domain_name" {
 
 variable "container_image" {
   type        = string
-  description = "Artifact Registry image URI for the web service (e.g. us-west1-docker.pkg.dev/aistudio-shared/aistudio/aistudio-web:dev-latest)"
+  description = "Artifact Registry image URI for the web service (e.g. us-west1-docker.pkg.dev/ssd201-aistudio-shared/aistudio/aistudio-web:dev-latest)"
 }
 
 variable "doc_processor_image" {

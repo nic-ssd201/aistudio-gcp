@@ -4,13 +4,13 @@
 #
 # Apply with:
 #   terraform init \
-#     -backend-config="bucket=aistudio-tfstate-shared" \
+#     -backend-config="bucket=ssd201-aistudio-tfstate-shared" \
 #     -backend-config="prefix=bootstrap/prod"
 #   terraform apply -var-file=prod.tfvars
 
 env             = "prod"
-host_project_id = "aistudio-shared"
-env_project_id  = "aistudio-prod"
+host_project_id = "ssd201-aistudio-shared"
+env_project_id  = "ssd201-aistudio-prod"
 
 # GCP org / billing
 org_id          = "123456789012"
@@ -18,7 +18,7 @@ billing_account = "XXXXXX-XXXXXX-XXXXXX"
 
 region = "us-west1"
 
-github_repo = "psd401/aistudio"
+github_repo = "nic-ssd201/aistudio-gcp"
 
 # Breakglass email — use a monitored shared mailbox; prod budget alerts must page someone.
 breakglass_email = "it-breakglass@sunnysideschools.org"

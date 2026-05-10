@@ -58,13 +58,15 @@ terraform -chdir=modules/bootstrap init
 terraform -chdir=modules/bootstrap apply \
   -var="org_id=YOUR_ORG_ID" \
   -var="billing_account=YOUR_BILLING_ID" \
-  -var="state_bucket_name=aistudio-tfstate-shared" \
-  -var="github_repo=psd401/aistudio" \
+  -var="state_bucket_name=ssd201-aistudio-tfstate-shared" \
+  -var="github_repo=nic-ssd201/aistudio-gcp" \
   -var="openclaw_local_issuer=http://localhost:18789"
 ```
 
+(Project IDs and GCS bucket names are GLOBALLY unique — bare `aistudio-shared` / `aistudio-tfstate-shared` are taken. SSD201 deployments use the `ssd201-` prefix; substitute your own org-namespaced ID for other deployments.)
+
 This creates:
-- `aistudio-shared` project
+- The shared (host) project (e.g. `ssd201-aistudio-shared`)
 - GCS bucket for Terraform state
 - Workload Identity Federation pool and providers
 - Artifact Registry for Docker images

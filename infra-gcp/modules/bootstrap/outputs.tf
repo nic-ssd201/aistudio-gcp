@@ -34,12 +34,12 @@ output "artifact_registry_repository" {
 }
 
 output "shared_project_id" {
-  description = "aistudio-shared project ID"
+  description = "Shared (host) project ID — e.g. ssd201-aistudio-shared"
   value       = data.google_project.shared.project_id
 }
 
 output "shared_project_number" {
-  description = "aistudio-shared project number (needed for WIF principalSet URNs)"
+  description = "Shared project number (needed for WIF principalSet URNs)"
   value       = data.google_project.shared.number
 }
 
