@@ -74,9 +74,15 @@ for project in aistudio-shared aistudio-dev; do
     serviceusage.googleapis.com \
     storage.googleapis.com \
     cloudkms.googleapis.com \
+    cloudbuild.googleapis.com \
+    run.googleapis.com \
+    artifactregistry.googleapis.com \
+    secretmanager.googleapis.com \
     --project=$project
 done
 ```
+
+(The Terraform modules will enable additional APIs as needed — alloydb, vpcaccess, certificatemanager, identitytoolkit, etc. — but the four added here are pre-reqs for Phase 3 / 4 commands and for Phase 5 secret writes that happen outside Terraform.)
 
 ---
 
@@ -140,10 +146,11 @@ terraform init \
 # Sanity-check: should report "No changes."
 terraform plan -var-file=dev.tfvars
 
-# CRITICAL CLEANUP — both files must go before the next apply, or a future
+# CRITICAL CLEANUP — these files must go before the next apply, or a future
 # `terraform init` (without -reconfigure) will pick them up and get confused
 # about which backend is authoritative:
-rm -f terraform.tfstate terraform.tfstate.backup   # local state copies are now stale
+rm -f terraform.tfstate terraform.tfstate.backup    # local state copies are now stale
+rm -f .terraform.tfstate.lock.info                  # stale lock if a prior local apply was interrupted
 # (backend_override.tf was already removed at the top of this step)
 ```
 
@@ -186,8 +193,11 @@ For `workspace_oidc_client_id` / `_secret`:
 
 ### 2.2a — Init + targeted apply for the secrets module ONLY
 
+> **⚠️ Backend override:** `infra-gcp/envs/dev/backend.tf` still hardcodes `bucket = "aistudio-tfstate-dev"` (a bucket the bootstrap module never creates — bootstrap only creates `aistudio-tfstate-shared`). The `-backend-config` flags below override the hardcoded values. `-reconfigure` is mandatory because of the override; without it, Terraform reuses the cached (wrong) backend config from `.terraform/`. **Follow-up cleanup**: remove the hardcoded `bucket`/`prefix` from `envs/{dev,staging,prod}/backend.tf` to match the `envs/bootstrap/backend.tf` pattern (no hardcoded values). Tracked separately, not blocking this runbook.
+
 ```bash
 terraform init \
+  -reconfigure \
   -backend-config="bucket=aistudio-tfstate-shared" \
   -backend-config="prefix=envs/dev"
 
@@ -325,8 +335,12 @@ openssl rand -base64 48 | gcloud secrets versions add \
 MCP API bearer token. Whatever value you've issued for MCP server auth.
 
 ```bash
-echo -n "<MCP_BEARER_TOKEN>" | gcloud secrets versions add \
+# Silent prompt — keeps the token out of ~/.bash_history and process listings
+read -rs MCP_BEARER_TOKEN
+echo  # newline after the silent input
+printf %s "$MCP_BEARER_TOKEN" | gcloud secrets versions add \
   aistudio-mcp-token --data-file=- --project aistudio-dev
+unset MCP_BEARER_TOKEN
 ```
 
 ### 5.4 — `alloydb-initial-password` (already seeded in Phase 2.2b)
@@ -379,6 +393,8 @@ gcloud run services update aistudio-doc-processor \
   --region us-west1 --project aistudio-dev \
   --update-env-vars FORCE_REVISION=$(date +%s)
 ```
+
+> **Note**: re-running these commands later overwrites the same `FORCE_REVISION` env var (because `--update-env-vars` upserts by key) — it doesn't accumulate. The env var stays on the service permanently, which is harmless but visible in `gcloud run services describe`. If you want a cleaner mechanism on subsequent rotations, an alternative is `gcloud run services update --update-secrets ...` re-pointing at the same secret (semantic no-op but forces a new revision without leaving an env-var artefact).
 
 ---
 
