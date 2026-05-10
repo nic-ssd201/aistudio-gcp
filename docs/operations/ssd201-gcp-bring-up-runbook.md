@@ -247,7 +247,8 @@ terraform output
 ```
 
 (Note: there's no AlloyDB IP output today. If you need it, query directly:
-`gcloud alloydb instances describe primary --cluster=ssd201-aistudio-dev --region=us-west1 --project=ssd201-aistudio-dev --format='value(ipAddress)'`)
+`gcloud alloydb instances describe primary --cluster=aistudio-dev --region=us-west1 --project=ssd201-aistudio-dev --format='value(ipAddress)'`)
+(Cluster name is `aistudio-dev`, not `ssd201-aistudio-dev` — AlloyDB cluster IDs are project-scoped, not global, so they keep the bare module-default name.)
 
 ---
 
@@ -371,7 +372,7 @@ NEW_PASSWORD=$(gcloud secrets versions access latest \
   --secret alloydb-initial-password --project ssd201-aistudio-dev)
 
 gcloud alloydb users update postgres \
-  --cluster ssd201-aistudio-dev \
+  --cluster aistudio-dev \
   --region us-west1 \
   --project ssd201-aistudio-dev \
   --password="$NEW_PASSWORD"
@@ -428,10 +429,13 @@ Create an A record at your DNS provider for `dev-aistudio.sunnysideschools.org` 
 Cloud LB's managed cert provisioning starts automatically once the A record resolves. The LB module uses the **Certificate Manager API** (not legacy compute SSL certs), so:
 
 ```bash
-gcloud certificate-manager certificates describe ssd201-aistudio-dev-cert \
+gcloud certificate-manager certificates describe aistudio-dev-cert \
   --location=global \
   --project=ssd201-aistudio-dev
 # Look for state: ACTIVE — can take 15-60 minutes after DNS propagates
+# (Cert name is `aistudio-dev-cert` because the lb module hardcodes
+#  `aistudio-${var.environment}-cert` — Certificate Manager certs are
+#  project-scoped, not global, so the bare module-default name stays.)
 ```
 
 ---
@@ -472,7 +476,7 @@ If the UI hangs at "Processing...":
 ```bash
 # Connect to AlloyDB via the gcloud client (uses an auth proxy under the hood)
 gcloud alloydb instances connect primary \
-  --cluster=ssd201-aistudio-dev \
+  --cluster=aistudio-dev \
   --region=us-west1 \
   --project=ssd201-aistudio-dev \
   --user=postgres

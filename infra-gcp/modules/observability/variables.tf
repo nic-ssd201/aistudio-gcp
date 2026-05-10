@@ -80,7 +80,7 @@ variable "audit_logs_bucket" {
 
 variable "ferpa_audit_bucket" {
   type        = string
-  description = "GCS bucket name for FERPA audit logs (7-year retention, CMEK). If empty, this module creates aistudio-<env>-ferpa-audit."
+  description = "GCS bucket name for FERPA audit logs (7-year retention, CMEK). If empty, this module creates {name_prefix}-{environment}-ferpa-audit."
   default     = ""
 }
 
@@ -88,6 +88,12 @@ variable "ferpa_audit_kms_key" {
   type        = string
   description = "CMEK KMS key resource name for the FERPA audit bucket. Required if ferpa_audit_bucket is empty (i.e., this module creates the bucket)."
   default     = ""
+}
+
+variable "name_prefix" {
+  type        = string
+  description = "Bucket name prefix for the FERPA audit bucket (default 'aistudio'). GCS bucket names are GLOBALLY unique across all of GCS, so callers MUST override this with an org-namespaced prefix (e.g. 'ssd201-aistudio') to avoid collisions. Only used when this module creates the bucket (ferpa_audit_bucket = \"\"). Default exists only for upstream / test fixtures."
+  default     = "aistudio"
 }
 
 variable "budget_alert_threshold" {

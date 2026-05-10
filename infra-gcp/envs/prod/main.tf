@@ -446,6 +446,7 @@ module "observability" {
   project_id  = var.env_project_id
   environment = var.environment
   region      = var.region
+  name_prefix = "ssd201-aistudio" # FERPA audit GCS bucket — global namespace
 
   audit_logs_bucket   = module.storage.buckets["audit-logs"].name
   ferpa_audit_kms_key = module.kms.key_ids["audit-logs"]

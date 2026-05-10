@@ -431,7 +431,10 @@ resource "google_storage_bucket_iam_member" "ferpa_audit_sink_writer" {
 resource "google_storage_bucket" "ferpa_audit" {
   count    = var.ferpa_audit_bucket == "" ? 1 : 0
   project  = var.project_id
-  name     = "aistudio-${var.environment}-ferpa-audit"
+  # Naming: {name_prefix}-{env}-ferpa-audit — name_prefix MUST be org-namespaced
+  # by the caller (e.g. "ssd201-aistudio"); GCS bucket names are global, see
+  # var.name_prefix docstring + the same pattern in modules/storage.
+  name     = "${var.name_prefix}-${var.environment}-ferpa-audit"
   location = var.region
 
   uniform_bucket_level_access = true
