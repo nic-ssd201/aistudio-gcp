@@ -97,25 +97,34 @@ const ERROR_PATTERNS: Array<{ patterns: string[]; code: UploadErrorCode; message
     status: 408
   },
   {
-    // GCS-shaped storage errors. Tokens deliberately narrow:
-    // - 'storage.googleapis.com' / 'upload to gcs' / 'gcs permission denied' — specific to GCS errors
-    // - 'storage service' / 'bucket' — generic but only a small set of GCS-shape contexts use them
-    // Bare 'gcs', bare 'permission denied', and 'accessdenied' (S3-shape, GCS uses
-    // "Permission denied" / "does not have ... access") were rejected — they either match too widely
-    // (file paths, Postgres errors) or never fire under GCS at all.
-    patterns: ['upload to gcs', 'storage service', 'bucket', 'storage.googleapis.com', 'gcs permission denied'],
+    // GCS-shaped storage errors. Tokens chosen to match real `lib/gcp/gcs-client.ts` throws:
+    // - 'failed to upload' / 'gcs documents bucket' — match createError() messages from the GCS client
+    // - 'storage.googleapis.com' / 'gcs permission denied' — match GCS SDK / HTTP-translated errors
+    // - 'storage service' — generic catchall for proxy/SDK error wrappers
+    // Bare 'gcs' / 'permission denied' / 'accessdenied' / 'bucket' / 'upload to gcs' were rejected:
+    // either too wide (match Postgres errors, file paths, stack traces) or too narrow (don't actually
+    // appear in any real error string the codebase produces).
+    patterns: ['failed to upload', 'gcs documents bucket', 'storage.googleapis.com', 'gcs permission denied', 'storage service'],
     code: 'STORAGE_UNAVAILABLE',
     message: 'Storage service temporarily unavailable - please try again',
     status: 503
   },
   {
-    // Cloud Tasks dispatcher failures (replaces SQS patterns; jobs themselves now live in
-    // Postgres so DynamoDB-shape patterns were removed — Postgres errors fall through to
-    // UPLOAD_FAILED rather than masquerading as queue failures).
-    patterns: ['cloud tasks', 'cloudtasks.googleapis.com', 'processing_queue_name'],
+    // Cloud Tasks transient dispatcher failures (5xx from googleapis.com, network errors etc.).
+    // Replaces SQS patterns; jobs themselves live in Postgres so DynamoDB-shape patterns were
+    // removed — Postgres errors fall through to UPLOAD_FAILED rather than masquerading as queue failures.
+    patterns: ['cloud tasks', 'cloudtasks.googleapis.com'],
     code: 'QUEUE_UNAVAILABLE',
     message: 'Document processing queue temporarily unavailable - please try again',
     status: 503
+  },
+  {
+    // Deployment misconfig (missing env vars, etc.) — explicitly NOT a transient outage. Reporting
+    // these as 503 would encourage clients to retry against a permanently-broken deploy.
+    patterns: ['processing_queue_name', 'environment variable is required'],
+    code: 'CONFIG_ERROR',
+    message: 'Service configuration error',
+    status: 500
   }
 ];
 

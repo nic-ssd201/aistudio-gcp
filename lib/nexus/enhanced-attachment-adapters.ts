@@ -50,7 +50,6 @@ export class HybridDocumentAdapter implements AttachmentAdapter {
     UPLOAD_TIMEOUT: 'Upload timed out.',
     INVALID_FORMAT: 'Invalid file format.',
     FILE_TOO_LARGE: 'File size exceeds the allowed limit.',
-    JOB_SERVICE_UNAVAILABLE: 'Document processing service temporarily unavailable.',
     QUEUE_UNAVAILABLE: 'Processing queue temporarily unavailable.',
     CONFIG_ERROR: 'Service configuration error.',
     UPLOAD_FAILED: 'Upload failed.',
