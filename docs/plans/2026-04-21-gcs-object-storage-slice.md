@@ -2,7 +2,9 @@
 
 **Date:** 2026-04-21
 **Scope:** Rip out S3 + DynamoDB from the document and attachment paths, replace with GCS + Firestore. SSD201 deployment is GCP-only — no dual-provider abstraction.
-**Status:** Design, pre-implementation
+**Status:** Implemented (2026-05-09) with two material deviations:
+  - **Job tracking on Postgres, not Firestore** (PR #19) — see PR for the deviation rationale (one fewer GCP service / SDK / IAM surface; workload fits Postgres easily; reuses Drizzle/migration patterns).
+  - **E3 multipart→resumable upload was DELETED, not REWRITTEN** (PR #22). Survey of actual call sites found the `initiate-upload` / `confirm-upload` / `complete-multipart` trio had zero callers — the only client-facing upload path is the server-proxy route (`/api/documents/v2/upload`) per the school-firewall constraint documented in that route's header. Rather than rewrite routes nobody uses, the trio was reaped. If a future deployment needs direct-browser uploads (non-school context), build the resumable flow then.
 **Companion:** [2026-04-19 GCP migration workbreakdown](./2026-04-19-gcp-migration-workbreakdown.md), [ADR-007](../architecture/adr/ADR-007-gcp-migration.md)
 
 ---

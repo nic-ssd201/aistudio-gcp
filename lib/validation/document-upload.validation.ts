@@ -1,8 +1,9 @@
 import { z } from 'zod';
 
 /**
- * Shared Zod schema for document upload validation.
- * Ensures consistent validation across initiate-upload and direct-upload endpoints.
+ * Shared Zod schema for document upload validation. Used by the v2 server-proxy
+ * upload route (the only client-facing upload endpoint after PR C reaped the
+ * unused initiate/confirm/complete-multipart trio).
  */
 export const UploadRequestSchema = z.object({
   fileName: z.string().min(1).max(255),

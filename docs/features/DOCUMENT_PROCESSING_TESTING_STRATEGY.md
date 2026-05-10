@@ -18,9 +18,13 @@ After 8+ hours of implementing image uploads and the unified document processing
 
 Based on commit analysis and code review:
 
-1. **Core Infrastructure**
-   - Document Processing Stack with DynamoDB, S3, SQS, Lambda
-   - API routes: initiate-upload, jobs/[jobId], confirm-upload, complete-multipart
+1. **Core Infrastructure** (post-GCP-migration as of 2026-05-09)
+   - Document processing pipeline: AlloyDB (job tracking, PR #19) +
+     Cloud Tasks queue + Cloud Run worker (PR #20)
+   - Live API routes: `upload` (server-proxy upload, the only client-facing
+     path per the school-firewall constraint) and `jobs/[jobId]` (status
+     polling). The `initiate-upload` / `confirm-upload` / `complete-multipart`
+     trio was deleted in PR #22 — they had zero callers in this fork.
    - Hybrid attachment adapters with client/server routing
    - Multi-strategy document processors (PDF, Office, Text)
    - Progress tracking and polling system

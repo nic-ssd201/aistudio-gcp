@@ -7,9 +7,9 @@
  * the receiver verifies before doing any work.
  *
  * Per the SSD201 GCP migration sequencing (PR B in the document-pipeline
- * restoration), this replaces the previous no-op stub. The call sites in
- * /api/documents/v2/{confirm-upload,complete-multipart,upload} did not
- * change shape — they still call `sendToProcessingQueue(message)`.
+ * restoration), this replaces the previous no-op stub. After PR C reaped
+ * the unused initiate/confirm/complete-multipart trio, the only call site
+ * is /api/documents/v2/upload (the server-proxy upload route).
  *
  * Required env vars (set per-env via Terraform):
  *   PROCESSING_QUEUE_NAME       Fully-qualified Cloud Tasks queue resource:
