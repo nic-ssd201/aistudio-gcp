@@ -1,6 +1,6 @@
 variable "host_project_id" {
   type        = string
-  description = "Pre-created aistudio-shared project ID. Must exist before first apply — see PRE-CREATION REQUIREMENT in main.tf."
+  description = "Pre-created shared (host) project ID — e.g. ssd201-aistudio-shared. Must exist before first apply — see PRE-CREATION REQUIREMENT in main.tf."
 }
 
 variable "org_id" {

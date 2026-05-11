@@ -3,13 +3,13 @@
 #
 # Apply with:
 #   terraform init \
-#     -backend-config="bucket=aistudio-tfstate-shared" \
+#     -backend-config="bucket=ssd201-aistudio-tfstate-shared" \
 #     -backend-config="prefix=bootstrap/dev"
 #   terraform apply -var-file=dev.tfvars
 
 env             = "dev"
-host_project_id = "aistudio-shared"
-env_project_id  = "aistudio-dev"
+host_project_id = "ssd201-aistudio-shared"
+env_project_id  = "ssd201-aistudio-dev"
 
 # GCP org / billing (from: gcloud organizations list, gcloud billing accounts list)
 org_id          = "123456789012"
@@ -18,7 +18,7 @@ billing_account = "XXXXXX-XXXXXX-XXXXXX"
 region = "us-west1"
 
 # GitHub repo for WIF subject claim
-github_repo = "psd401/aistudio"
+github_repo = "nic-ssd201/aistudio-gcp"
 
 # Breakglass email — receives budget alerts immediately, before observability channels exist.
 # Use a shared mailbox that the IT team monitors; do not use a personal address.

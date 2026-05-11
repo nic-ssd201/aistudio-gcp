@@ -5,7 +5,7 @@
 
 variable "env_project_id" {
   type        = string
-  description = "aistudio-staging GCP project ID (pre-created manually)"
+  description = "Env GCP project ID — e.g. ssd201-aistudio-staging (pre-created manually)"
 }
 
 variable "region" {

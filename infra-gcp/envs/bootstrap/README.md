@@ -2,7 +2,7 @@
 
 This Terraform root owns the **project-level primitives** that must exist before any other env root can apply:
 
-- The `aistudio-shared` project (adopted via data source — never created/destroyed)
+- The shared project (default `ssd201-aistudio-shared`; adopted via data source — never created/destroyed)
 - GCS state bucket + CMEK KMS key ring
 - Artifact Registry Docker repo
 - Workload Identity Federation pool + providers (GitHub Actions, OpenClaw)
@@ -27,19 +27,19 @@ This root is parameterised by `var.env`. Supply values via a per-env tfvars file
 ```bash
 # Dev
 terraform init \
-  -backend-config="bucket=aistudio-tfstate-shared" \
+  -backend-config="bucket=ssd201-aistudio-tfstate-shared" \
   -backend-config="prefix=bootstrap/dev"
 terraform apply -var-file=dev.tfvars
 
 # Staging
 terraform init \
-  -backend-config="bucket=aistudio-tfstate-shared" \
+  -backend-config="bucket=ssd201-aistudio-tfstate-shared" \
   -backend-config="prefix=bootstrap/staging"
 terraform apply -var-file=staging.tfvars
 
 # Prod
 terraform init \
-  -backend-config="bucket=aistudio-tfstate-shared" \
+  -backend-config="bucket=ssd201-aistudio-tfstate-shared" \
   -backend-config="prefix=bootstrap/prod"
 terraform apply -var-file=prod.tfvars
 ```
@@ -73,7 +73,7 @@ Downstream env roots reference this root's state with:
 data "terraform_remote_state" "bootstrap" {
   backend = "gcs"
   config = {
-    bucket = "aistudio-tfstate-shared"
+    bucket = "ssd201-aistudio-tfstate-shared"
     prefix = "bootstrap/<env>"
   }
 }

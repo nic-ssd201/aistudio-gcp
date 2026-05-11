@@ -50,9 +50,9 @@ locals {
 #    - status = enforced config (only populated when enforce_mode = true)
 #
 # FERPA-REVIEW: The perimeter wraps all project_numbers. If multiple projects
-# are included (e.g., aistudio-prod + aistudio-shared), confirm that cross-
-# project service calls (e.g., Cloud Run → Secret Manager in shared project)
-# are covered by ingress rules, not silently broken.
+# are included (e.g., ssd201-aistudio-prod + ssd201-aistudio-shared), confirm
+# that cross-project service calls (e.g., Cloud Run → Secret Manager in shared
+# project) are covered by ingress rules, not silently broken.
 ###############################################################################
 resource "google_access_context_manager_service_perimeter" "this" {
   parent = "accessPolicies/${var.access_policy_name}"

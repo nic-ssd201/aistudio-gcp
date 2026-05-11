@@ -27,8 +27,11 @@ resource "google_storage_bucket" "buckets" {
   for_each = var.buckets
 
   project = var.project_id
-  # Naming: aistudio-{env}-{name_suffix} — globally unique via project prefix.
-  name     = "aistudio-${var.environment}-${each.value.name_suffix}"
+  # Naming: {name_prefix}-{env}-{name_suffix} — name_prefix MUST be org-namespaced
+  # by the caller (e.g. "ssd201-aistudio"); GCS bucket names are globally unique
+  # across all of GCS, so the bare "aistudio-" prefix would collide with other
+  # deployments. See modules/storage/variables.tf "name_prefix" docstring.
+  name     = "${var.name_prefix}-${var.environment}-${each.value.name_suffix}"
   location = each.value.location
 
   # UBLA: disables per-object ACLs — all access via IAM only.

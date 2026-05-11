@@ -12,7 +12,7 @@
 data "terraform_remote_state" "bootstrap" {
   backend = "gcs"
   config = {
-    bucket = "aistudio-tfstate-shared"
+    bucket = "ssd201-aistudio-tfstate-shared"
     prefix = "bootstrap/prod"
   }
 }
@@ -181,6 +181,7 @@ module "storage" {
   project_id  = var.env_project_id
   environment = var.environment
   kms_key     = module.kms.key_ids["storage"]
+  name_prefix = "ssd201-aistudio" # GCS bucket names are global; org-namespace required
 
   # audit-logs bucket: is_locked = false on first apply.
   # Flip to true only with district records officer signoff (Vault review gate §6.5).
@@ -445,6 +446,7 @@ module "observability" {
   project_id  = var.env_project_id
   environment = var.environment
   region      = var.region
+  name_prefix = "ssd201-aistudio" # FERPA audit GCS bucket — global namespace
 
   audit_logs_bucket   = module.storage.buckets["audit-logs"].name
   ferpa_audit_kms_key = module.kms.key_ids["audit-logs"]

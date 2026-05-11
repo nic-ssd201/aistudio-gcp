@@ -6,7 +6,7 @@
 #
 # Usage:
 #   terraform init \
-#     -backend-config="bucket=aistudio-tfstate-shared" \
+#     -backend-config="bucket=ssd201-aistudio-tfstate-shared" \
 #     -backend-config="prefix=bootstrap/dev"
 #   terraform apply -var-file=dev.tfvars
 #

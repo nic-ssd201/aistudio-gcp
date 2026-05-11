@@ -1,12 +1,12 @@
 # Outputs consumed by downstream env roots via data "terraform_remote_state" "bootstrap"
 
 output "shared_project_id" {
-  description = "aistudio-shared project ID"
+  description = "Shared (host) project ID — e.g. ssd201-aistudio-shared"
   value       = module.bootstrap.shared_project_id
 }
 
 output "shared_project_number" {
-  description = "aistudio-shared project number (needed for WIF principalSet URNs)"
+  description = "Shared project number (needed for WIF principalSet URNs)"
   value       = module.bootstrap.shared_project_number
 }
 

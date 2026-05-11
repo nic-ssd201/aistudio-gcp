@@ -4,7 +4,7 @@
 # §6.6: billing_account, org_id, host_project_id → moved to envs/bootstrap/staging.tfvars
 #        Apply envs/bootstrap first, then this root.
 
-env_project_id = "aistudio-staging"
+env_project_id = "ssd201-aistudio-staging"
 region         = "us-west1"
 environment    = "staging"
 
@@ -12,7 +12,7 @@ environment    = "staging"
 domain_name = "staging-aistudio.sunnysideschools.org"
 
 # Container image
-container_image = "us-west1-docker.pkg.dev/aistudio-shared/aistudio/aistudio-web:staging-latest"
+container_image = "us-west1-docker.pkg.dev/ssd201-aistudio-shared/aistudio/aistudio-web:staging-latest"
 
 # VPC-SC access policy (same org policy as dev)
 vpc_sc_access_policy_name = "1234567890"
