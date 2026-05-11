@@ -72,7 +72,13 @@ resource "google_identity_platform_config" "this" {
 #    must supply the version ref from secrets.outputs.version_refs.
 ###############################################################################
 resource "google_identity_platform_tenant_oauth_idp_config" "oidc" {
-  for_each = { for p in var.oidc_providers : p.display_name => p }
+  # nonsensitive() because var.oidc_providers is marked sensitive (holds
+  # client_secret_value), but the display_name keys we iterate over are not
+  # secret. Terraform's static analysis can't determine that the keys come from
+  # a non-sensitive subset of the value, so we assert it explicitly here. The
+  # sensitive attributes (client_secret) still flow through each.value.* and
+  # remain redacted in plan/state via the provider's own sensitive markers.
+  for_each = nonsensitive({ for p in var.oidc_providers : p.display_name => p })
 
   project = var.project_id
   tenant  = google_identity_platform_tenant.this.name
