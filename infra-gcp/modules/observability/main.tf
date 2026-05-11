@@ -55,7 +55,13 @@ resource "google_project_service" "logging" {
 #    Channel configs passed via var.alert_channels (list of objects).
 ###############################################################################
 resource "google_monitoring_notification_channel" "this" {
-  for_each = { for ch in var.alert_channels : ch.display_name => ch }
+  # nonsensitive() because var.alert_channels is marked sensitive (holds
+  # auth_token / service_key / password in sensitive_labels), but the
+  # display_name keys we iterate over are not secret. Same pattern as
+  # modules/identity-platform/main.tf — sensitive attributes still flow through
+  # each.value.* and remain redacted via the provider's own sensitive markers
+  # (sensitive_labels block).
+  for_each = nonsensitive({ for ch in var.alert_channels : ch.display_name => ch })
 
   project      = var.project_id
   display_name = each.value.display_name
