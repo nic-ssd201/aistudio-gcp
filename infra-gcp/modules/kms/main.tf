@@ -50,7 +50,9 @@ resource "google_kms_crypto_key" "keys" {
   # ENCRYPT_DECRYPT covers all CMEK use-cases; ASYMMETRIC_* is a separate workflow.
   purpose = "ENCRYPT_DECRYPT"
 
-  labels = merge(local.labels, { key-purpose = replace(each.value.purpose, " ", "-") })
+  # GCP label values must be lowercase (regex: [\p{Ll}\p{Lo}\p{N}_-]{0,63}). The
+  # asymmetric_keys block at line ~133 already does lower() — keep this in sync.
+  labels = merge(local.labels, { key-purpose = replace(lower(each.value.purpose), " ", "-") })
 
   lifecycle {
     prevent_destroy = true
