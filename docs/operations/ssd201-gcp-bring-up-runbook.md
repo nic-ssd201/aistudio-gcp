@@ -54,7 +54,7 @@ gcloud beta billing projects link ssd201-aistudio-shared --billing-account=<BILL
 gcloud beta billing projects link ssd201-aistudio-dev    --billing-account=<BILLING_ACCOUNT>
 
 # Verify
-gcloud projects list --filter='project_id:aistudio-*'
+gcloud projects list --filter='project_id:ssd201-aistudio-*'
 gcloud beta billing projects describe ssd201-aistudio-shared
 gcloud beta billing projects describe ssd201-aistudio-dev
 ```
