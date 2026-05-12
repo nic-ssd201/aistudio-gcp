@@ -27,8 +27,18 @@ locals {
 
 # Fetch the initial password from Secret Manager so we never put plaintext in state.
 # The secret is pre-populated by Nic/CI before first apply.
+#
+# `project` arg deliberately omitted — the Google provider extracts it from the
+# secret resource path. Passing it explicitly causes a string-vs-number mismatch:
+# var.project_id is the project ID ("ssd201-aistudio-dev"), but the secret name
+# Google returns embeds the project NUMBER ("projects/627392752189/secrets/..."),
+# and the provider validates them as if they were the same format.
+#
+# Caller may pass either the version_refs-style suffixed string
+# ("projects/N/secrets/M/versions/latest") or the secret_version_refs[...].name
+# clean path ("projects/N/secrets/M"); the provider tolerates both as long as
+# `version` is set explicitly.
 data "google_secret_manager_secret_version" "initial_password" {
-  project = var.project_id
   secret  = var.initial_user_password_secret
   version = "latest"
 }
