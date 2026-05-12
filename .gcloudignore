@@ -1,0 +1,62 @@
+# .gcloudignore — exclusions for `gcloud builds submit` source uploads.
+#
+# `gcloud builds submit` does NOT honor .dockerignore — it uses .gcloudignore,
+# falling back to .gitignore if .gcloudignore is absent. The Dockerfile copies
+# everything under the build context, so without this file gcloud uploads the
+# full repo (including node_modules / .next / .terraform), which on this repo
+# is ~3 GB. Keep this in sync with .dockerignore for the application bits, and
+# add infra/ide/secret exclusions specific to gcloud uploads below.
+
+# ── Dependencies & build output (also in .dockerignore) ─────────────────────
+node_modules
+.next
+.next/cache
+out
+dist
+build
+coverage
+.jest
+
+# ── Logs & lock noise ───────────────────────────────────────────────────────
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# ── Env & secrets (NEVER upload these) ──────────────────────────────────────
+.env
+.env.*
+*.pem
+*.key
+
+# ── VCS & IDE ───────────────────────────────────────────────────────────────
+.git
+.gitignore
+.github
+.husky
+.vscode
+.idea
+.cursor
+*.swp
+*.swo
+*.swn
+.DS_Store
+
+# ── Tests ───────────────────────────────────────────────────────────────────
+.playwright-mcp
+tests
+playwright-report
+playwright.config.ts
+
+# ── Docs ────────────────────────────────────────────────────────────────────
+docs
+
+# ── Infrastructure (huge — Terraform state + provider plugins) ──────────────
+infra
+infra-gcp
+**/.terraform
+**/.terraform.lock.hcl
+**/terraform.tfstate*
+**/.tfplan
+
+# ── Claude / agent worktrees ────────────────────────────────────────────────
+.claude

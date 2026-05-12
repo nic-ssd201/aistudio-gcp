@@ -1,0 +1,56 @@
+# Minimal "build + push image only" Cloud Build pipeline.
+#
+# Use this for the SSD201 bootstrap and any other case where you need a fresh
+# image in Artifact Registry without the full lint/typecheck/deploy pipeline
+# in cloudbuild.yaml. Terraform / a separate cutover step handles the Cloud Run
+# rollout.
+#
+# Required substitutions (override at submit time):
+#   _REGION    Artifact Registry region, e.g. us-west1
+#   _REPO      Artifact Registry repo, e.g. aistudio
+#   _IMAGE     Image name within the repo, e.g. aistudio-web or aistudio-doc-processor
+#   _TAG       Image tag, e.g. dev-latest
+#
+# Example:
+#   gcloud builds submit \
+#     --config cloudbuild.image.yaml \
+#     --project ssd201-aistudio-shared \
+#     --substitutions=_REGION=us-west1,_REPO=aistudio,_IMAGE=aistudio-web,_TAG=dev-latest \
+#     .
+#
+# DOCKER_BUILDKIT=1 is mandatory — the Dockerfile uses BuildKit cache mounts
+# (RUN --mount=type=cache,...), which silently fail under the legacy daemon.
+
+substitutions:
+  _REGION: us-west1
+  _REPO: aistudio
+  _IMAGE: aistudio-web
+  _TAG: dev-latest
+
+options:
+  logging: CLOUD_LOGGING_ONLY
+  machineType: E2_HIGHCPU_8
+
+steps:
+  - name: gcr.io/cloud-builders/docker
+    id: build
+    env:
+      - DOCKER_BUILDKIT=1
+    args:
+      - build
+      - --tag
+      - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/${_IMAGE}:${_TAG}
+      - --build-arg
+      - BUILDKIT_INLINE_CACHE=1
+      - .
+
+  - name: gcr.io/cloud-builders/docker
+    id: push
+    args:
+      - push
+      - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/${_IMAGE}:${_TAG}
+    waitFor:
+      - build
+
+images:
+  - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/${_IMAGE}:${_TAG}
