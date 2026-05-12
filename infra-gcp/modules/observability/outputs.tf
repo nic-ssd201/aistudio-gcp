@@ -12,7 +12,10 @@ output "alert_policy_ids" {
     alloydb_cpu          = google_monitoring_alert_policy.alloydb_cpu.id
     ferpa_tripwire       = google_monitoring_alert_policy.ferpa_tripwire.id
     vertex_quota         = google_monitoring_alert_policy.vertex_quota.id
-    budget_warning       = google_monitoring_alert_policy.budget_warning.id
+    # budget_warning disabled (count=0) — see modules/observability/main.tf docstring.
+    # Returns empty string so downstream consumers (if any) get a stable empty value
+    # rather than a missing key.
+    budget_warning       = length(google_monitoring_alert_policy.budget_warning) > 0 ? google_monitoring_alert_policy.budget_warning[0].id : ""
   }
 }
 

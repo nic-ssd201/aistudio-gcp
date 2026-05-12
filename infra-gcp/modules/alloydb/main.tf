@@ -52,8 +52,14 @@ resource "google_alloydb_cluster" "main" {
   # Attach to VPC via Private Services Access — the PSA range is provisioned by the network module.
   # allocated_ip_range pins AlloyDB to the specific PSA range created by the network module,
   # ensuring IP allocation doesn't drift to a different reserved range if multiple exist.
+  #
+  # AlloyDB rejects the compute self_link URL format
+  # ("https://www.googleapis.com/compute/v1/projects/X/global/networks/Y") and
+  # requires the short relative path ("projects/X/global/networks/Y"). We strip
+  # the URL prefix via regex rather than passing the network name + project
+  # separately so this stays a one-line caller contract change.
   network_config {
-    network            = var.vpc_self_link
+    network            = replace(var.vpc_self_link, "https://www.googleapis.com/compute/v1/", "")
     allocated_ip_range = var.psa_range
   }
 
