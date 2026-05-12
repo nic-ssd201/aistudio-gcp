@@ -39,14 +39,26 @@ COPY . .
 ENV NEXT_TELEMETRY_DISABLED=1
 ENV NODE_ENV=production
 
-# Dummy environment variables required for Next.js build
-# Real values will be injected at runtime by ECS
+# Dummy environment variables required for Next.js build.
+# Real values are injected at runtime by ECS (AWS) or Cloud Run (GCP) — these
+# placeholders only exist so module-load-time validation (e.g. assertGoogleCreds
+# in auth.ts) does not throw during `next build`'s "Collecting page data" phase.
 ENV DOCUMENTS_BUCKET_NAME=build-time-placeholder
 ENV NEXT_PUBLIC_AWS_REGION=us-east-1
 ENV RDS_RESOURCE_ARN=arn:aws:rds:us-east-1:000000000000:cluster:build-placeholder
 # Use ARG for secret ARN to avoid security warning (it's just a build placeholder)
 ARG RDS_SECRET_ARN=arn:aws:secretsmanager:us-east-1:000000000000:secret:build-placeholder
 ENV RDS_SECRET_ARN=${RDS_SECRET_ARN}
+
+# NextAuth Google OIDC credentials — required at module load by auth.ts
+# (createAuth() calls assertGoogleCreds() before Google({...}) is constructed).
+# These placeholders allow `next build` to evaluate app/api/auth/[...nextauth]/
+# route.ts during page-data collection. Real values are injected at runtime
+# from Secret Manager (GCP) / Secrets Manager (AWS) via Cloud Run secret_key_ref
+# / ECS task definition. NEVER bake real credentials into the image.
+ENV AUTH_GOOGLE_ID=build-time-placeholder.apps.googleusercontent.com
+ENV AUTH_GOOGLE_SECRET=build-time-placeholder
+ENV AUTH_SECRET=build-time-placeholder-32-bytes-padding-x
 
 # Build with cache mount for Next.js build artifacts
 # next is invoked directly from node_modules/.bin — bun not needed at build stage
