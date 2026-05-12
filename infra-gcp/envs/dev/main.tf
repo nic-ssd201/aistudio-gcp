@@ -163,7 +163,9 @@ module "secrets" {
     }
     "alloydb-initial-password" = {
       description        = "AlloyDB postgres initial user password (set via gcloud secrets versions add)"
-      accessor_sa_emails = []
+      # Cloud Run web + doc-processor services inject DB_PASSWORD from this secret
+      # at startup via secret_key_ref; both SAs need secretAccessor on the secret.
+      accessor_sa_emails = [module.sa_web.email, module.sa_doc_proc.email]
     }
     "aistudio-mcp-token-encryption-key" = {
       description        = "DEK seed for MCP per-user OAuth token field-level encryption (consumed by lib/crypto/token-encryption.ts)"
