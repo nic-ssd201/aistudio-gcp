@@ -51,6 +51,13 @@ resource "google_identity_platform_config" "this" {
 
   authorized_domains = var.authorized_domains
 
+  # Multi-tenancy must be enabled at the project config level for tenant
+  # resources (google_identity_platform_tenant) to be creatable. Without
+  # this block, attempting to create a tenant returns "INVALID_PROJECT_ID".
+  multi_tenant {
+    allow_tenants = true
+  }
+
   # Block anonymous sign-in at the project config level too.
   sign_in {
     anonymous {
