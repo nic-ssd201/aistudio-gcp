@@ -199,7 +199,12 @@ module "alloydb" {
   kms_key                      = module.kms.key_ids["alloydb"]
   cpu_count                    = 2
   enable_read_pool             = false # dev: no read pool — cost saving
-  initial_user_password_secret = module.secrets.version_refs["alloydb-initial-password"]
+  # secret_version_refs[...].name is the clean secret resource path
+  # (projects/N/secrets/M, no /versions/* suffix). The alloydb module's data
+  # source appends `version = "latest"` itself, so passing the version-suffixed
+  # version_refs[...] string here causes path-doubling (404 with
+  # ".../versions/latest/versions/latest").
+  initial_user_password_secret = module.secrets.secret_version_refs["alloydb-initial-password"].name
 
   labels = { environment = var.environment, managed_by = "terraform" }
 }
