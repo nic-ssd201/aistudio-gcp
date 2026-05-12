@@ -3,6 +3,12 @@ variable "project_id" {
   description = "GCP project ID"
 }
 
+variable "deletion_protection" {
+  type        = bool
+  description = "Terraform-side deletion protection. Default true (matches Google provider default) — set false in dev envs so failed revisions can be destroyed + recreated via `terraform apply` without manual gcloud intervention."
+  default     = true
+}
+
 variable "environment" {
   type        = string
   description = "Deployment environment (dev|staging|prod)"
