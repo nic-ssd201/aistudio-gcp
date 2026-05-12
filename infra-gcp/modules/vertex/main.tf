@@ -60,26 +60,32 @@ resource "google_model_armor_template" "this" {
   labels = local.module_labels
 
   filter_config {
-    # Malicious URI detection
+    # RAI (Responsible AI) filters — the only valid filter_type enum values for
+    # rai_settings.rai_filters[] are the 4 harm categories below. Confidence
+    # levels: LOW_AND_ABOVE, MEDIUM_AND_ABOVE, HIGH (no HIGH_AND_ABOVE).
+    #
+    # Previously this block tried to set MALICIOUS_URLS / SENSITIVE_DATA /
+    # JAILBREAK / PROMPT_INJECTION as rai_filters[] entries — those are NOT
+    # RAI harm categories; the Model Armor API splits them into separate filter
+    # blocks (malicious_uri_filter_settings, sdp_settings,
+    # pi_and_jailbreak_filter_settings). Adding those is a separate follow-up
+    # once we confirm the v1beta schema; for now we have RAI coverage only.
     rai_settings {
       rai_filters {
-        filter_type      = "MALICIOUS_URLS"
-        confidence_level = "HIGH_AND_ABOVE"
+        filter_type      = "DANGEROUS"
+        confidence_level = "HIGH"
       }
-      # PII detection
       rai_filters {
-        filter_type      = "SENSITIVE_DATA"
-        confidence_level = "HIGH_AND_ABOVE"
+        filter_type      = "HATE_SPEECH"
+        confidence_level = "HIGH"
       }
-      # Jailbreak attempt detection
       rai_filters {
-        filter_type      = "JAILBREAK"
-        confidence_level = "HIGH_AND_ABOVE"
+        filter_type      = "SEXUALLY_EXPLICIT"
+        confidence_level = "HIGH"
       }
-      # Prompt injection detection
       rai_filters {
-        filter_type      = "PROMPT_INJECTION"
-        confidence_level = "HIGH_AND_ABOVE"
+        filter_type      = "HARASSMENT"
+        confidence_level = "HIGH"
       }
     }
   }

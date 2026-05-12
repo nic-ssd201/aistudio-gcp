@@ -139,16 +139,20 @@ resource "google_monitoring_alert_policy" "cloud_run_error_rate" {
   enabled      = true
 
   conditions {
-    display_name = "Cloud Run request error rate > 5%"
+    display_name = "Cloud Run 5xx errors > 5 / minute"
     condition_threshold {
       filter          = "resource.type=\"cloud_run_revision\" AND metric.type=\"run.googleapis.com/request_count\" AND metric.labels.response_code_class=\"5xx\""
       duration        = "300s"
       comparison      = "COMPARISON_GT"
-      threshold_value = 0.05
+      # 5xx count >5 per minute (sustained 5 min). REDUCE_FRACTION_TRUE was
+      # rejected by the API: it only works on BOOL metrics, request_count is
+      # DOUBLE. Absolute-count threshold is the supported alternative without
+      # creating a paired log-based-metric for the ratio.
+      threshold_value = 5
       aggregations {
         alignment_period     = "60s"
         per_series_aligner   = "ALIGN_RATE"
-        cross_series_reducer = "REDUCE_FRACTION_TRUE"
+        cross_series_reducer = "REDUCE_SUM"
         group_by_fields      = ["resource.labels.service_name"]
       }
     }
@@ -277,6 +281,14 @@ resource "google_monitoring_alert_policy" "vertex_quota" {
 #
 # Thresholds per spec: dev=$5k, staging=$10k, prod=$20k (var.budget_alert_threshold).
 resource "google_monitoring_alert_policy" "budget_warning" {
+  # DISABLED: this resource was a placeholder for log-based budget detection,
+  # but the alert policy API rejects its filter ("The lefthand side of each
+  # expression must be prefixed with one of {group, metadata, metric, project,
+  # resource}" — logName= is not valid). The real budget alert is the
+  # google_billing_budget resource provisioned in envs/bootstrap, which is
+  # functionally complete. Keeping the resource declaration but disabled so we
+  # don't break callers depending on its name.
+  count        = 0
   project      = var.project_id
   display_name = "aistudio-${var.environment}-budget-warning"
   combiner     = "OR"
@@ -285,9 +297,7 @@ resource "google_monitoring_alert_policy" "budget_warning" {
   conditions {
     display_name = "Project spend approaching budget (log-based proxy)"
     condition_threshold {
-      # This filter is a best-effort log-based proxy.
-      # True budget alerts require google_billing_budget resource — see FERPA-REVIEW note above.
-      filter          = "resource.type=\"global\" AND logName=\"projects/${var.project_id}/logs/cloudaudit.googleapis.com%2Factivity\" AND protoPayload.methodName=\"BudgetAlert\""
+      filter          = "metric.type=\"logging.googleapis.com/user/aistudio_budget_alerts\""
       duration        = "0s"
       comparison      = "COMPARISON_GT"
       threshold_value = 0
@@ -480,6 +490,9 @@ resource "google_monitoring_dashboard" "unified" {
   dashboard_json = var.custom_dashboard_json != "" ? var.custom_dashboard_json : jsonencode({
     displayName = "AI Studio — ${title(var.environment)} Unified"
     mosaicLayout = {
+      # columns required by the API (default would be 0 → "must be in range (1,48)").
+      # 12-column grid matches Cloud Console's default mosaic dashboards.
+      columns = 12
       tiles = [
         {
           width  = 6
