@@ -282,8 +282,17 @@ export async function executeWithRetry<T>(
   }
   
   let lastError: Error | null = null
-  
-  for (let attempt = 1; attempt <= opts.maxRetries; attempt++) {
+
+  // Loop bound is `Math.max(1, opts.maxRetries)` rather than `opts.maxRetries`
+  // so that callers passing `maxRetries: 0` (meaning "try once, no retries" —
+  // the convention used by validateConnection() in drizzle-client.ts for
+  // fast-fail health probes) actually make one attempt. Without this guard
+  // the loop never ran for maxRetries: 0, and the function threw
+  // `Operation failed after 0 attempts` without ever touching the database —
+  // silently failing every Cloud Run startup-probe health check.
+  const totalAttempts = Math.max(1, opts.maxRetries)
+
+  for (let attempt = 1; attempt <= totalAttempts; attempt++) {
     try {
       log.debug("Attempting operation", { 
         attempt, 
@@ -357,7 +366,7 @@ export async function executeWithRetry<T>(
   }
   
   // All retries exhausted
-  throw lastError || new Error(`Operation failed after ${opts.maxRetries} attempts`)
+  throw lastError || new Error(`Operation failed after ${totalAttempts} attempts`)
 }
 
 /**
