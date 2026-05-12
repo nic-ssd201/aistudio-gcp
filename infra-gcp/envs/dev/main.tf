@@ -218,7 +218,11 @@ module "identity_platform" {
 
   project_id          = var.env_project_id
   environment         = var.environment
-  tenant_display_name = "SSD Staff - Dev"
+  # Identity Platform tenant display_name validation:
+  # - 4-20 chars
+  # - Must start with a letter
+  # - Letters, digits, and hyphens only (no spaces, no other punctuation)
+  tenant_display_name = "ssd-staff-dev"
   authorized_domains  = [var.domain_name]
 
   oidc_providers = [{

@@ -217,7 +217,7 @@ module "identity_platform" {
 
   project_id          = var.env_project_id
   environment         = var.environment
-  tenant_display_name = "SSD Staff - Staging"
+  tenant_display_name = "ssd-staff-staging" # 4-20 chars, letters/digits/hyphens, starts with letter
   authorized_domains  = [var.domain_name]
 
   oidc_providers = [{
