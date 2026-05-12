@@ -20,7 +20,25 @@ const nextConfig = {
   reactStrictMode: true,
   output: 'standalone',
   transpilePackages: ['recharts'],
-  serverExternalPackages: ['winston', 'logform', '@colors/colors', 'argon2', 'postgres', 'mammoth', 'pdf-parse', 'oidc-provider', 'ws'],
+  serverExternalPackages: [
+    'winston', 'logform', '@colors/colors',
+    'argon2', 'postgres', 'mammoth', 'pdf-parse', 'oidc-provider', 'ws',
+    // @google-cloud/* client libraries (and the shared google-gax / google-auth-library
+    // layer they all sit on) load runtime config JSON via `require(pathStr)`. Webpack
+    // can't statically trace those dynamic require() calls, so the JSON files end up
+    // missing from the bundle and page-data collection fails with:
+    //   "Cannot find module '@google-cloud/tasks/build/esm/src/v2/cloud_tasks_client_config.json'"
+    // Marking them external leaves the require() calls alone and resolves them from
+    // node_modules at runtime — which is what we want for these libs regardless
+    // (they're large and have native bindings via grpc-js).
+    '@google-cloud/kms',
+    '@google-cloud/pubsub',
+    '@google-cloud/secret-manager',
+    '@google-cloud/storage',
+    '@google-cloud/tasks',
+    'google-gax',
+    'google-auth-library',
+  ],
   outputFileTracingIncludes: {
     '/**': [
       './node_modules/argon2/**/*',
