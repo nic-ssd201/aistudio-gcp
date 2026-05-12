@@ -36,7 +36,8 @@ resource "google_cloud_run_v2_service" "worker" {
   # (Cloud Tasks, Cloud Scheduler). No public internet, no LB.
   ingress = "INGRESS_TRAFFIC_INTERNAL_ONLY"
 
-  labels = local.labels
+  labels              = local.labels
+  deletion_protection = var.deletion_protection
 
   template {
     service_account = var.service_account_email

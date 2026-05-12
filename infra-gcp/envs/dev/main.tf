@@ -285,6 +285,7 @@ module "cloud_run_web" {
   max_instances        = var.cloud_run_max_instances # dev default: 5
   cpu_always_allocated = false                       # dev: no always-on CPU (cost saving)
   concurrency          = 80
+  deletion_protection  = false                       # dev: allow Terraform to destroy + recreate failed revisions
 
   # §6.4: first apply = latest-100 for all envs; blue/green is a post-first-apply pipeline op.
   # traffic_revision left empty → module routes 100% to latest revision.
@@ -348,6 +349,7 @@ module "doc_processor_worker" {
   request_timeout_seconds = 1800
   memory                  = "2Gi"
   cpu                     = "2"
+  deletion_protection     = false # dev: allow Terraform to destroy + recreate failed revisions
 
   secret_refs = {
     DB_PASSWORD = module.secrets.version_refs["alloydb-initial-password"]

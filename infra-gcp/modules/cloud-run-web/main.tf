@@ -48,7 +48,8 @@ resource "google_cloud_run_v2_service" "web" {
   # traffic here. IAP and internal services can also reach this if needed.
   ingress = "INGRESS_TRAFFIC_INTERNAL_LOAD_BALANCER"
 
-  labels = local.labels
+  labels              = local.labels
+  deletion_protection = var.deletion_protection
 
   template {
     service_account = var.service_account_email
