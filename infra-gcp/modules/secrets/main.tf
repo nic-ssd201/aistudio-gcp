@@ -83,12 +83,17 @@ resource "google_secret_manager_secret_iam_member" "accessor" {
   role      = "roles/secretmanager.secretAccessor"
   member    = "serviceAccount:${each.value.email}"
 
-  # Tag-conditioned binding: SA can only access secrets tagged aistudio/environment={env}.
-  # This blocks a dev SA from accidentally accessing a prod secret even if it somehow
-  # obtained the resource name.
-  condition {
-    title       = "env-match-${var.environment}"
-    description = "Restrict access to secrets tagged with environment=${var.environment}"
-    expression  = "resource.matchTag('aistudio/environment', '${var.environment}')"
-  }
+  # NOTE: The tag-conditioned binding (resource.matchTag('aistudio/environment',
+  # '${var.environment}')) was removed because no google_tags_tag_binding
+  # resources actually exist to bind the 'aistudio/environment' tag to these
+  # secrets — the condition was always false, blocking ALL access (including
+  # legitimate Cloud Run secret_key_ref reads).
+  #
+  # Environment isolation is already enforced at the project level: each env
+  # has its own GCP project, its own SAs, and its own secrets. Cross-env access
+  # would require both project-level IAM grants AND service-account impersonation
+  # — neither of which this module sets up.
+  #
+  # If/when we wire up google_tags_tag_binding (FERPA §3.4 defense-in-depth),
+  # restore this condition. Track as a follow-up.
 }
