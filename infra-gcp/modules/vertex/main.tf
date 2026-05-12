@@ -59,6 +59,18 @@ resource "google_model_armor_template" "this" {
 
   labels = local.module_labels
 
+  # template_metadata is required by the v1beta Model Armor API on update
+  # (initial create may accept its absence). Set explicit zero-valued defaults
+  # rather than omit the block — otherwise every subsequent terraform apply
+  # diffs against the API-side defaults and fails with REQUEST_FIELD_MISSING.
+  template_metadata {
+    ignore_partial_invocation_failures    = false
+    log_sanitize_operations               = false
+    log_template_operations               = false
+    custom_prompt_safety_error_code       = 0
+    custom_llm_response_safety_error_code = 0
+  }
+
   filter_config {
     # RAI (Responsible AI) filters — the only valid filter_type enum values for
     # rai_settings.rai_filters[] are the 4 harm categories below. Confidence
