@@ -200,7 +200,10 @@ module "alloydb" {
   kms_key                      = module.kms.key_ids["alloydb"]
   cpu_count                    = 2
   enable_read_pool             = false # staging: no read pool (spec table: HA yes, but read pool not required)
-  initial_user_password_secret = module.secrets.version_refs["alloydb-initial-password"]
+  # secret_version_refs[...].name is the clean secret resource path; the alloydb
+  # module's data source appends `version = "latest"` itself. See envs/dev/main.tf
+  # for the explanation.
+  initial_user_password_secret = module.secrets.secret_version_refs["alloydb-initial-password"].name
 
   labels = { environment = var.environment, managed_by = "terraform" }
 }
