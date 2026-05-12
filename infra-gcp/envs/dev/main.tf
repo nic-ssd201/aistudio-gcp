@@ -292,21 +292,58 @@ module "cloud_run_web" {
   traffic_revision = ""
 
   secret_refs = {
-    NEXTAUTH_SECRET    = module.secrets.version_refs["aistudio-nextauth-secret"]
-    AISTUDIO_MCP_TOKEN = module.secrets.version_refs["aistudio-mcp-token"]
-    DB_PASSWORD        = module.secrets.version_refs["alloydb-initial-password"]
+    # NextAuth v5 renamed NEXTAUTH_SECRET → AUTH_SECRET. The Secret Manager
+    # resource keeps its historical name (`aistudio-nextauth-secret`) — only
+    # the injected env var name needs to match what the app reads
+    # (lib/env-validation.ts:25).
+    AUTH_SECRET              = module.secrets.version_refs["aistudio-nextauth-secret"]
+    AISTUDIO_MCP_TOKEN       = module.secrets.version_refs["aistudio-mcp-token"]
+    MCP_TOKEN_ENCRYPTION_KEY = module.secrets.version_refs["aistudio-mcp-token-encryption-key"]
+    DB_PASSWORD              = module.secrets.version_refs["alloydb-initial-password"]
   }
 
   env = {
-    DB_HOST                     = module.alloydb.primary_private_ip
-    DB_USER                     = "postgres"
-    DB_NAME                     = "aistudio"
+    DB_HOST = module.alloydb.primary_private_ip
+    DB_USER = "postgres"
+    DB_NAME = "aistudio"
+    # AlloyDB requires SSL for direct connections. drizzle-client defaults to
+    # true when DB_SSL is unset, but be explicit for clarity.
+    DB_SSL                      = "true"
     IDP_TENANT_ID               = module.identity_platform.tenant_id
     VERTEX_MODEL_ARMOR_TEMPLATE = module.vertex.model_armor_template_names["aistudio-default"]
     NODE_ENV                    = "development"
     GOOGLE_CLOUD_PROJECT        = var.env_project_id
     GCP_PROJECT_ID              = var.env_project_id
     ENVIRONMENT                 = var.environment
+
+    # ── NextAuth v5 ───────────────────────────────────────────────────────────
+    # AUTH_URL: the canonical public URL the app is served from. NextAuth uses
+    # it to construct OAuth redirect URIs and absolute callback URLs.
+    AUTH_URL = "https://${var.domain_name}"
+    # AUTH_TRUST_HOST: required on Cloud Run. The platform sends startup probes
+    # with `Host: 127.0.0.1`, which NextAuth otherwise rejects with
+    # `UntrustedHost: Host must be trusted` and 503s the probe. Setting this
+    # tells NextAuth to trust the forwarded host header rather than enforcing
+    # an exact AUTH_URL match — safe here because all real traffic enters
+    # through the Global HTTPS LB (the service is INGRESS_TRAFFIC_INTERNAL_LOAD_BALANCER).
+    AUTH_TRUST_HOST = "true"
+    # Google OIDC client credentials. Same OAuth client used by Identity
+    # Platform tenant OIDC config — both flows authenticate through the
+    # `workspace_oidc_client_*` values supplied in tfvars. In prod these
+    # should move to Secret Manager; dev tfvars is gitignored and acceptable
+    # for first bring-up. Tracked in ssd201-gcp-bring-up-runbook.md §5.
+    AUTH_GOOGLE_ID     = var.workspace_oidc_client_id
+    AUTH_GOOGLE_SECRET = var.workspace_oidc_client_secret
+    # Workspace domain restriction: Google rejects accounts outside this
+    # domain before the OAuth code exchange. Set to "OPEN" to allow any
+    # Google account (open deployments).
+    AUTH_GOOGLE_HD = "sunnysideschools.org"
+
+    # ── Storage ────────────────────────────────────────────────────────────────
+    # GCS_BUCKET: primary document-repository bucket. Used by document upload,
+    # repository indexing, and attachment ingestion paths.
+    GCS_BUCKET = module.storage.bucket_names["repository-documents"]
+
     # Active KMS key version for OAuth2/OIDC JWT signing. KMS does NOT auto-rotate
     # asymmetric keys; when rotation is needed, create a new version with
     # `gcloud kms keys versions create` and bump this path to cryptoKeyVersions/N.
