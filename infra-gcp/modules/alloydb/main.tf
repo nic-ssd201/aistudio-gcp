@@ -125,11 +125,12 @@ resource "google_alloydb_instance" "primary" {
     cpu_count = var.cpu_count
   }
 
-  # pgvector is a database-level extension installed via CREATE EXTENSION — no cluster flag needed.
-  # We do set the flag to allow it. AlloyDB ships pgvector built-in; this confirms it's enabled.
-  database_flags = {
-    "alloydb.enable_pgvector" = "on"
-  }
+  # pgvector is a database-level extension installed via CREATE EXTENSION — no
+  # cluster-level flag needed. AlloyDB ships pgvector built-in and AlloyDB Omni
+  # also supports it without any database flag. Setting `alloydb.enable_pgvector`
+  # explicitly returns "DB flag with name 'alloydb.enable_pgvector' does not exist"
+  # because that flag is not part of the AlloyDB instance configuration API.
+  # To use pgvector after the cluster is up: `CREATE EXTENSION IF NOT EXISTS vector;`
 
   labels = local.labels
 

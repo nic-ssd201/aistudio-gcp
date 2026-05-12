@@ -595,8 +595,9 @@ resource "google_monitoring_dashboard" "unified" {
                 }
               }
               thresholds = [{
-                value = 1
-                color = "RED"
+                value     = 1
+                color     = "RED"
+                direction = "ABOVE" # required by the dashboard API
               }]
             }
           }
@@ -619,8 +620,9 @@ resource "google_monitoring_dashboard" "unified" {
                 }
               }
               thresholds = [{
-                value = 1
-                color = "YELLOW"
+                value     = 1
+                color     = "YELLOW"
+                direction = "ABOVE" # required by the dashboard API
               }]
             }
           }
