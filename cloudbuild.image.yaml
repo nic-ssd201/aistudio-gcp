@@ -6,19 +6,29 @@
 # rollout.
 #
 # Required substitutions (override at submit time):
-#   _REGION    Artifact Registry region, e.g. us-west1
-#   _REPO      Artifact Registry repo, e.g. aistudio
-#   _IMAGE     Image name within the repo, e.g. aistudio-web or aistudio-doc-processor
-#   _TAG       Image tag, e.g. dev-latest
+#   _REGION      Artifact Registry region, e.g. us-west1
+#   _REPO        Artifact Registry repo, e.g. aistudio
+#   _IMAGE       Image name within the repo, e.g. aistudio-web or aistudio-migrate
+#   _TAG         Image tag, e.g. dev-latest
+#   _DOCKERFILE  Dockerfile path (default ./Dockerfile). Override to ./Dockerfile.migrate
+#                to build the migration-runner image used by Cloud Run Jobs.
 #
-# Example:
+# Examples:
+#   # Web app image
 #   gcloud builds submit \
 #     --config cloudbuild.image.yaml \
 #     --project ssd201-aistudio-shared \
 #     --substitutions=_REGION=us-west1,_REPO=aistudio,_IMAGE=aistudio-web,_TAG=dev-latest \
 #     .
 #
-# DOCKER_BUILDKIT=1 is mandatory — the Dockerfile uses BuildKit cache mounts
+#   # Migration-runner image
+#   gcloud builds submit \
+#     --config cloudbuild.image.yaml \
+#     --project ssd201-aistudio-shared \
+#     --substitutions=_REGION=us-west1,_REPO=aistudio,_IMAGE=aistudio-migrate,_TAG=dev-latest,_DOCKERFILE=Dockerfile.migrate \
+#     .
+#
+# DOCKER_BUILDKIT=1 is mandatory — the Dockerfiles use BuildKit cache mounts
 # (RUN --mount=type=cache,...), which silently fail under the legacy daemon.
 
 substitutions:
@@ -26,6 +36,7 @@ substitutions:
   _REPO: aistudio
   _IMAGE: aistudio-web
   _TAG: dev-latest
+  _DOCKERFILE: Dockerfile
 
 options:
   logging: CLOUD_LOGGING_ONLY
@@ -38,6 +49,8 @@ steps:
       - DOCKER_BUILDKIT=1
     args:
       - build
+      - --file
+      - ${_DOCKERFILE}
       - --tag
       - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/${_IMAGE}:${_TAG}
       - --build-arg

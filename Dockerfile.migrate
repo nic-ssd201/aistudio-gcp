@@ -1,0 +1,48 @@
+# syntax=docker.io/docker/dockerfile:1
+# ==============================================================================
+# Dockerfile.migrate — one-shot migration runner image.
+#
+# Used by the `aistudio-<env>-migrate` Cloud Run Job to apply database
+# migrations against AlloyDB from inside the VPC (since AlloyDB only exposes a
+# private IP). Built independently from the main app image so we keep the
+# runtime image lean (no bun, no scripts/, no schema/ in production).
+#
+# Image contents:
+#   - bun runtime  (so the existing scripts/db/run-migrations.ts works as-is)
+#   - production deps from node_modules (postgres.js, drizzle-orm, …)
+#   - scripts/db/  (the migration runner + manifest)
+#   - infra/database/schema/  (the SQL migration files)
+#   - lib/db/, lib/logger, lib/utils  (transitive imports of the runner)
+#   - tsconfig.json  (TS resolution + path aliases the runner relies on)
+#
+# Notes:
+#   - We deliberately do NOT use --production on `bun install`. The migration
+#     runner imports from lib/db, which transitively pulls in dev-only types
+#     (e.g. drizzle-kit type augmentation). Stripping devDependencies has bit
+#     us before; the size win isn't worth the breakage risk.
+#   - --mount=type=cache speeds repeat builds; same pattern as the main image.
+# ==============================================================================
+
+FROM oven/bun:1.3-alpine AS migrate
+WORKDIR /app
+
+# libc6-compat: same Alpine quirk as the main image — some native bindings
+# (argon2, bcrypt) expect glibc symbols.
+RUN apk add --no-cache libc6-compat
+
+# Install dependencies first so the layer caches when only source changes.
+COPY package.json bun.lock ./
+COPY patches/ ./patches/
+RUN --mount=type=cache,target=/root/.bun/install/cache \
+    bun install --frozen-lockfile
+
+# Source files the migration runner needs.
+# Keep this list minimal — every COPY busts cache on changes.
+COPY scripts/db/ ./scripts/db/
+COPY infra/database/schema/ ./infra/database/schema/
+COPY lib/ ./lib/
+COPY tsconfig.json ./
+
+# Default entrypoint — Cloud Run Job's `--command` / `--args` overrides this if
+# we ever need to run something else with the same image (e.g. seed scripts).
+CMD ["bun", "scripts/db/run-migrations.ts"]
