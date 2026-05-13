@@ -51,8 +51,16 @@ playwright.config.ts
 docs
 
 # ── Infrastructure (huge — Terraform state + provider plugins) ──────────────
-infra
-infra-gcp
+# Exclude all of infra/ and infra-gcp/ by default, EXCEPT infra/database/schema/
+# which the migration-runner image (Dockerfile.migrate) needs as build context.
+# Pattern: exclude infra/**, then re-include the specific directories along the
+# path so gitignore-style traversal can reach the leaf files.
+infra/**
+infra-gcp/**
+!infra/
+!infra/database/
+!infra/database/schema/
+!infra/database/schema/**
 **/.terraform
 **/.terraform.lock.hcl
 **/terraform.tfstate*
