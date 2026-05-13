@@ -11,7 +11,12 @@
  *   tsx scripts/db/run-migrations.ts  # Direct execution
  *
  * Environment Variables:
- *   DATABASE_URL - PostgreSQL connection string (default: local docker)
+ *   DATABASE_URL - PostgreSQL connection string (preferred when set)
+ *   DB_HOST / DB_PORT / DB_USER / DB_PASSWORD / DB_NAME - Fallback when
+ *     DATABASE_URL is not set. Matches the env shape Cloud Run wires up
+ *     for the web service so the same secret_key_ref + env block can be
+ *     reused by the migration Cloud Run Job without a shell wrapper to
+ *     hand-craft a URL.
  *   DB_SSL - Set to 'false' for local development without SSL
  */
 
@@ -21,9 +26,31 @@ import postgres from "postgres";
 import { scriptLogger as log } from "./script-logger";
 import { MIGRATION_FILES, SCHEMA_DIR } from "./migration-manifest";
 
-// Default to local PostgreSQL connection
+/**
+ * Build a postgres connection URL from individual DB_* env vars, URL-encoding
+ * each component so passwords with special characters (`:`, `@`, `/`, `?`, …)
+ * don't break URL parsing. Returns null if the required pieces aren't set.
+ */
+function buildUrlFromDbEnv(): string | null {
+  const host = process.env.DB_HOST;
+  const user = process.env.DB_USER;
+  const password = process.env.DB_PASSWORD;
+  if (!host || !user || !password) return null;
+  const port = process.env.DB_PORT || "5432";
+  const database = process.env.DB_NAME || "aistudio";
+  return (
+    `postgresql://${encodeURIComponent(user)}:${encodeURIComponent(password)}` +
+    `@${host}:${port}/${encodeURIComponent(database)}`
+  );
+}
+
+// Resolution order:
+//   1. DATABASE_URL (explicit override — used by local dev & CI).
+//   2. DB_HOST/DB_USER/DB_PASSWORD/[DB_PORT]/[DB_NAME] (Cloud Run shape).
+//   3. Local docker default — only viable when developing against db:up.
 const DATABASE_URL =
   process.env.DATABASE_URL ||
+  buildUrlFromDbEnv() ||
   "postgresql://postgres:postgres@localhost:5432/aistudio";
 const sslEnabled = process.env.DB_SSL !== "false";
 
