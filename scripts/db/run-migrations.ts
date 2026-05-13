@@ -27,46 +27,81 @@ import { scriptLogger as log } from "./script-logger";
 import { MIGRATION_FILES, SCHEMA_DIR } from "./migration-manifest";
 
 /**
- * Build a postgres connection URL from individual DB_* env vars, URL-encoding
- * each component so passwords with special characters (`:`, `@`, `/`, `?`, …)
- * don't break URL parsing. Returns null if the required pieces aren't set.
+ * Build a postgres.js connection config object from individual DB_* env vars.
+ * Returns null if the required pieces aren't set, leaving the caller to fall
+ * back to DATABASE_URL or the local-dev default.
+ *
+ * Why an object instead of constructing a postgresql:// URL string and parsing
+ * it back? postgres.js running under bun in a Cloud Run container rejected our
+ * URL with "cannot be parsed as a URL" even when Node's URL constructor (and
+ * the postgres.js parser locally) accepted the same string. Avoiding URL
+ * parsing entirely sidesteps any whitespace / encoding / parser-strictness
+ * gotchas in the Secret Manager → env var → postgres.js handoff.
  */
-function buildUrlFromDbEnv(): string | null {
+function buildPostgresOptionsFromDbEnv(): Record<string, unknown> | null {
   const host = process.env.DB_HOST;
   const user = process.env.DB_USER;
   const password = process.env.DB_PASSWORD;
   if (!host || !user || !password) return null;
-  const port = process.env.DB_PORT || "5432";
-  const database = process.env.DB_NAME || "aistudio";
-  return (
-    `postgresql://${encodeURIComponent(user)}:${encodeURIComponent(password)}` +
-    `@${host}:${port}/${encodeURIComponent(database)}`
-  );
+  return {
+    host,
+    port: Number.parseInt(process.env.DB_PORT || "5432", 10),
+    user,
+    password,
+    database: process.env.DB_NAME || "aistudio",
+  };
 }
 
 // Resolution order:
 //   1. DATABASE_URL (explicit override — used by local dev & CI).
 //   2. DB_HOST/DB_USER/DB_PASSWORD/[DB_PORT]/[DB_NAME] (Cloud Run shape).
 //   3. Local docker default — only viable when developing against db:up.
+const dbOptionsFromEnv = buildPostgresOptionsFromDbEnv();
 const DATABASE_URL =
   process.env.DATABASE_URL ||
-  buildUrlFromDbEnv() ||
-  "postgresql://postgres:postgres@localhost:5432/aistudio";
+  (dbOptionsFromEnv ? null : "postgresql://postgres:postgres@localhost:5432/aistudio");
 const sslEnabled = process.env.DB_SSL !== "false";
 
 const schemaPath = path.join(process.cwd(), SCHEMA_DIR);
 
 async function main(): Promise<void> {
   log.section("AI Studio - Database Migration Runner");
-  log.info("Database", { url: DATABASE_URL.replace(/:\/\/.*@/, "://*****@") });
-  log.info("SSL", { enabled: sslEnabled });
 
-  const sql = postgres(DATABASE_URL, {
-    ssl: sslEnabled ? "require" : false,
+  // Common pool/SSL options applied regardless of which connection mode wins.
+  const commonOpts = {
+    ssl: sslEnabled ? ("require" as const) : (false as const),
     max: 1,
     idle_timeout: 20,
     connect_timeout: 10,
-  });
+  };
+
+  // Pick connection mode by precedence:
+  //   1. dbOptionsFromEnv (DB_HOST/USER/PASSWORD/...) — preferred in Cloud Run.
+  //   2. DATABASE_URL string — local dev & CI.
+  // Object form skips URL parsing entirely, which we need because postgres.js
+  // under bun rejected our URL with "cannot be parsed as a URL" even when the
+  // same string parsed cleanly with Node's URL constructor locally.
+  let sql: ReturnType<typeof postgres>;
+  if (dbOptionsFromEnv) {
+    log.info("Database (object mode)", {
+      host: String(dbOptionsFromEnv.host),
+      port: String(dbOptionsFromEnv.port),
+      user: String(dbOptionsFromEnv.user),
+      database: String(dbOptionsFromEnv.database),
+    });
+    log.info("SSL", { enabled: sslEnabled });
+    sql = postgres({ ...dbOptionsFromEnv, ...commonOpts });
+  } else if (DATABASE_URL) {
+    log.info("Database (URL mode)", {
+      url: DATABASE_URL.replace(/:\/\/.*@/, "://*****@"),
+    });
+    log.info("SSL", { enabled: sslEnabled });
+    sql = postgres(DATABASE_URL, commonOpts);
+  } else {
+    throw new Error(
+      "No database connection configured. Set DATABASE_URL or DB_HOST/DB_USER/DB_PASSWORD."
+    );
+  }
 
   try {
     // Test connection
