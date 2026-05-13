@@ -1,4 +1,14 @@
-"use server"
+// This module is a SERVER-ONLY helper, not a Server Action endpoint.
+//
+// `"use server"` (the directive form) marks every export as a client-callable
+// RPC, which under Next.js 16+ requires every export to be an async function —
+// the synchronous `resetServerAuthForTests` test helper below violates that.
+//
+// `import 'server-only'` enforces the right thing here: prevents this module
+// from being bundled into client code, without forcing the Server-Action
+// async constraint. `getServerSession()` is called by server components and
+// server actions as a helper; it is never wired up as a form action.
+import "server-only";
 
 import { createAuth } from "@/auth";
 import logger from "@/lib/logger";

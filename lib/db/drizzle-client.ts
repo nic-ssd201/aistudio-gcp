@@ -704,14 +704,49 @@ export async function validateDatabaseConnection(): Promise<{
 
     throw new Error("Unexpected test query result");
   } catch (error) {
-    const errorMessage = error instanceof Error ? error.message : "Unknown error";
-    log.error("Database validation failed", { error: errorMessage });
+    // Capture the full error shape — postgres.js wraps the underlying network
+    // error and the useful diagnostic info (code, errno, syscall, address, port,
+    // cause chain) lives on properties beyond `.message`. Logging just `.message`
+    // gave us "Failed query: SELECT 1 as test\nparams: " with no actual error,
+    // which made first-deploy debugging on Cloud Run essentially impossible.
+    const e = error as {
+      message?: string;
+      name?: string;
+      code?: string;
+      errno?: number;
+      syscall?: string;
+      address?: string;
+      port?: number;
+      severity?: string;
+      detail?: string;
+      hint?: string;
+      cause?: unknown;
+      stack?: string;
+    };
+    const errorDetails = {
+      message: e.message ?? "Unknown error",
+      name: e.name,
+      code: e.code,
+      errno: e.errno,
+      syscall: e.syscall,
+      address: e.address,
+      port: e.port,
+      severity: e.severity,
+      detail: e.detail,
+      hint: e.hint,
+      cause:
+        e.cause instanceof Error
+          ? { message: e.cause.message, name: e.cause.name }
+          : e.cause,
+      stack: e.stack?.split("\n").slice(0, 5).join("\n"),
+    };
+    log.error("Database validation failed", { error: errorDetails });
 
     return {
       success: false,
       message: "Database connection validation failed",
       config,
-      error: errorMessage,
+      error: e.message ?? "Unknown error",
     };
   }
 }
