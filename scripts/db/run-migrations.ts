@@ -229,58 +229,134 @@ async function main(): Promise<void> {
 }
 
 /**
- * Split SQL content into individual statements
- * Handles multi-line statements and preserves function/type definitions
+ * Split SQL content into individual statements.
+ *
+ * Honors PostgreSQL syntax that the previous heuristic splitter (line-based,
+ * "is this a CREATE FUNCTION line?") got wrong:
+ *   - dollar-quoted strings:  $$ … $$  and  $tag$ … $tag$
+ *   - single-quoted strings:  '…' (with '' escape)
+ *   - line comments:          -- to end of line
+ *   - block comments:         /* … *​/
+ *
+ * Inside any of those, a `;` is literal text, not a statement terminator.
+ * We previously failed on 017-add-user-roles-updated-at.sql because the
+ * runner saw `BEGIN; … END;` inside a `DO $$ … $$;` block and chopped the
+ * function body in half.
+ *
+ * Implementation: a small character-by-character scanner. Not a full SQL
+ * parser, but covers the lexical features that affect statement boundaries.
  */
 function splitSqlStatements(sqlContent: string): string[] {
-  // Remove comments
-  const withoutComments = sqlContent
-    .split("\n")
-    .filter((line) => !line.trim().startsWith("--"))
-    .join("\n");
-
   const statements: string[] = [];
-  let currentStatement = "";
-  let inBlock = false;
+  let buf = "";
+  let i = 0;
 
-  const lines = withoutComments.split("\n");
+  // Mutually exclusive states (only one is true at a time):
+  let inLineComment = false;        // -- … \n
+  let inBlockComment = false;       // /* … */
+  let inSingleQuote = false;        // '…'  (PG escapes '' as literal ')
+  let dollarTag: string | null = null; // $tag$ … $tag$  (null when not inside)
 
-  for (const line of lines) {
-    const trimmedLine = line.trim().toUpperCase();
+  const len = sqlContent.length;
+  while (i < len) {
+    const c = sqlContent[i];
+    const next = i + 1 < len ? sqlContent[i + 1] : "";
 
-    // Check if entering a block
-    if (
-      trimmedLine.startsWith("CREATE TYPE") ||
-      trimmedLine.startsWith("CREATE FUNCTION") ||
-      trimmedLine.startsWith("CREATE OR REPLACE FUNCTION") ||
-      trimmedLine.startsWith("DROP TYPE")
-    ) {
-      inBlock = true;
+    if (inLineComment) {
+      if (c === "\n") inLineComment = false;
+      buf += c;
+      i++;
+      continue;
     }
 
-    currentStatement += line + "\n";
-
-    // Check if line ends with semicolon
-    if (line.trim().endsWith(";")) {
-      if (
-        inBlock &&
-        (trimmedLine === ");" ||
-          trimmedLine.endsWith(");") ||
-          trimmedLine.endsWith("' LANGUAGE PLPGSQL;"))
-      ) {
-        inBlock = false;
+    if (inBlockComment) {
+      if (c === "*" && next === "/") {
+        buf += "*/";
+        inBlockComment = false;
+        i += 2;
+        continue;
       }
+      buf += c;
+      i++;
+      continue;
+    }
 
-      if (!inBlock) {
-        statements.push(currentStatement.trim());
-        currentStatement = "";
+    if (dollarTag !== null) {
+      // Inside a dollar-quoted string: look for the matching closing tag.
+      const close = `$${dollarTag}$`;
+      if (sqlContent.startsWith(close, i)) {
+        buf += close;
+        dollarTag = null;
+        i += close.length;
+        continue;
+      }
+      buf += c;
+      i++;
+      continue;
+    }
+
+    if (inSingleQuote) {
+      // PG escapes '' as a literal apostrophe inside the same string.
+      if (c === "'" && next === "'") {
+        buf += "''";
+        i += 2;
+        continue;
+      }
+      if (c === "'") {
+        buf += "'";
+        inSingleQuote = false;
+        i++;
+        continue;
+      }
+      buf += c;
+      i++;
+      continue;
+    }
+
+    // Outside any string/comment — look for state transitions or `;`.
+    if (c === "-" && next === "-") {
+      inLineComment = true;
+      buf += "--";
+      i += 2;
+      continue;
+    }
+    if (c === "/" && next === "*") {
+      inBlockComment = true;
+      buf += "/*";
+      i += 2;
+      continue;
+    }
+    if (c === "'") {
+      inSingleQuote = true;
+      buf += "'";
+      i++;
+      continue;
+    }
+    if (c === "$") {
+      // Try to match $tag$ where tag is empty or [A-Za-z_][A-Za-z0-9_]*.
+      const m = /^\$([A-Za-z_][A-Za-z0-9_]*)?\$/.exec(sqlContent.slice(i));
+      if (m) {
+        dollarTag = m[1] ?? "";
+        buf += m[0];
+        i += m[0].length;
+        continue;
       }
     }
+    if (c === ";") {
+      buf += ";";
+      const stmt = buf.trim();
+      if (stmt && stmt !== ";") statements.push(stmt);
+      buf = "";
+      i++;
+      continue;
+    }
+
+    buf += c;
+    i++;
   }
 
-  if (currentStatement.trim()) {
-    statements.push(currentStatement.trim());
-  }
+  const tail = buf.trim();
+  if (tail) statements.push(tail);
 
   return statements;
 }
