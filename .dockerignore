@@ -46,7 +46,15 @@ docs
 .husky
 
 # Infrastructure
-infra
+# Exclude all of infra/, EXCEPT the SQL migrations under infra/database/schema/
+# which the migration-runner image (Dockerfile.migrate) needs in its build
+# context. The web Dockerfile's runner stage doesn't COPY anything from infra/,
+# so re-including the schema files here doesn't bloat production images.
+infra/**
+!infra/
+!infra/database/
+!infra/database/schema/
+!infra/database/schema/**
 
 # Playwright
 .playwright-mcp
