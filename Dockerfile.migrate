@@ -40,6 +40,11 @@ RUN --mount=type=cache,target=/root/.bun/install/cache \
 # Keep this list minimal — every COPY busts cache on changes.
 COPY scripts/db/ ./scripts/db/
 COPY infra/database/schema/ ./infra/database/schema/
+# migrations.json is the manifest declaring which schema files to apply and
+# in which order. scripts/db/migration-manifest.ts imports it via a relative
+# path (../../infra/database/migrations.json), so it must live next to the
+# schema/ directory at the same relative depth.
+COPY infra/database/migrations.json ./infra/database/migrations.json
 COPY lib/ ./lib/
 COPY tsconfig.json ./
 

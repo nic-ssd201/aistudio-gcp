@@ -59,6 +59,7 @@ infra/**
 infra-gcp/**
 !infra/
 !infra/database/
+!infra/database/migrations.json
 !infra/database/schema/
 !infra/database/schema/**
 **/.terraform

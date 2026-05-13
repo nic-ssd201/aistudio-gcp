@@ -53,6 +53,7 @@ docs
 infra/**
 !infra/
 !infra/database/
+!infra/database/migrations.json
 !infra/database/schema/
 !infra/database/schema/**
 
