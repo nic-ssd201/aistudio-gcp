@@ -24,7 +24,11 @@ import fs from "node:fs";
 import path from "node:path";
 import postgres from "postgres";
 import { scriptLogger as log } from "./script-logger";
-import { MIGRATION_FILES, SCHEMA_DIR } from "./migration-manifest";
+import {
+  INITIAL_SETUP_FILES,
+  MIGRATION_FILES,
+  SCHEMA_DIR,
+} from "./migration-manifest";
 
 /**
  * Build a postgres.js connection config object from individual DB_* env vars.
@@ -134,7 +138,16 @@ async function main(): Promise<void> {
     let skipCount = 0;
     let failCount = 0;
 
-    for (const migrationFile of MIGRATION_FILES) {
+    // Apply INITIAL_SETUP_FILES (001-005, the immutable baseline schema)
+    // before incremental migrations (010+). The AWS Lambda migrator did this
+    // via a separate db-init-handler; this Node-side runner had been skipping
+    // it, which left a fresh DB unable to apply 010-knowledge-repositories.sql
+    // because it references the `users` table created in 002-tables.sql.
+    //
+    // Both lists go through the same loop so the migration_log dedup applies
+    // uniformly — re-running on an already-set-up DB is a no-op.
+    const allFiles = [...INITIAL_SETUP_FILES, ...MIGRATION_FILES];
+    for (const migrationFile of allFiles) {
       if (completedSet.has(migrationFile)) {
         log.debug(`SKIP: ${migrationFile} (already run)`);
         skipCount++;
@@ -208,7 +221,7 @@ async function main(): Promise<void> {
       run: runCount,
       skipped: skipCount,
       failed: failCount,
-      total: MIGRATION_FILES.length,
+      total: INITIAL_SETUP_FILES.length + MIGRATION_FILES.length,
     });
   } finally {
     await sql.end();
